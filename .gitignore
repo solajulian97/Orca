@@ -1,0 +1,27 @@
+# Build artifacts
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+
+# User-specific files
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+
+# IDE folders
+.vs/
+.idea/
+.vscode/
+
+# Compiled files
+*.dll
+*.pdb
+*.exe
+
+# Others
+*.bak
+*.tmp
+otm_il.txt
+BuildLogs/
