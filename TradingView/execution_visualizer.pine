@@ -4,7 +4,7 @@ strategy("NinjaTrader Automated Executions v6", overlay=true, calc_on_every_tick
 // --- Settings ---
 group_main = "Visual Settings"
 show_labels     = input.bool(true, "Show Labels", group=group_main)
-show_boxes      = input.bool(true, "Show Shaded PnL Boxes (Experimental)", group=group_main)
+show_boxes      = input.bool(false, "Show Shaded PnL Boxes (Experimental)", group=group_main)
 box_opacity     = input.int(10, "Box Opacity (0-100)", minval=0, maxval=100, group=group_main)
 
 // --- Colors ---
@@ -16,8 +16,6 @@ color_short = color.new(#FF4444, 0)
 // TradingView strategies follow FIFO for closed trades by default.
 
 if barstate.islast
-    // Clear previous drawings if needed, though they usually persist correctly
-    // or we can just draw them once on the last bar across the whole history.
     for i = 0 to strategy.closedtrades - 1
         float entry_p = strategy.closedtrades.entry_price(i)
         float exit_p  = strategy.closedtrades.exit_price(i)
@@ -41,16 +39,10 @@ if barstate.islast
             
         // 4. Labels
         if show_labels
-            string label_text = "Trade #" + str.tostring(i + 1) + "\n" +
-                                "PnL: " + str.tostring(pnl, "#.##")
-            label.new(exit_t, exit_p, label_text, xloc=xloc.bar_time, yloc=yloc.price, 
-                      textcolor=color.white, color=color.new(color.black, 40), style=label.style_label_left, size=size.small, textalign=text.align_left)
+            string label_text = "Trade #" + str.tostring(i + 1) + "\nPnL: " + str.tostring(pnl, "#.##")
+            label.new(exit_t, exit_p, label_text, xloc=xloc.bar_time, yloc=yloc.price, textcolor=color.white, color=color.new(color.black, 40), style=label.style_label_left, size=size.small, textalign=text.align_left)
 
-// --- How to use this for "Auto" executions ---
-// To see these lines, you just need to ensure your Strategy script is making entries.
-// If you are trading manually and want the script to "see" your trades, 
-// you can add these simple order buttons or link it to your setup:
-
+// --- Order Buttons (for Testing/Auto-Plotting) ---
 group_test = "Manual Order Buttons (for Testing/Auto-Plotting)"
 if input.bool(false, "Trigger Buy Order NOW", group=group_test)
     strategy.entry("Long", strategy.long)
