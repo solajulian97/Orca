@@ -1,0 +1,94 @@
+//@version=5
+indicator("NinjaTrader Style Executions", overlay=true)
+
+// --- Settings ---
+group_main = "General Settings"
+show_executions = input.bool(true, "Show Past Executions", group=group_main)
+show_labels     = input.bool(true, "Show Labels", group=group_main)
+show_boxes      = input.bool(true, "Show Shaded PnL Boxes", group=group_main)
+box_opacity     = input.int(10, "Box Opacity (0-100)", minval=0, maxval=100, group=group_main)
+
+// --- Colors ---
+color_long  = color.new(#0088FF, 0)
+color_short = color.new(#FF4444, 0)
+color_entry = color.new(color.green, 20)
+color_exit  = color.new(color.red, 20)
+
+// --- Trade Logic Function ---
+draw_trade(id, active, side, entry_time, entry_price, exit_time, exit_price, stop_loss) =>
+    if active and show_executions
+        bool is_long = (side == "Long")
+        color dir_color = is_long ? color_long : color_short
+        
+        // 1. Draw Execution Line
+        line.new(entry_time, entry_price, exit_time, exit_price, xloc=xloc.bar_time, color=dir_color, width=2, style=line.style_solid)
+        
+        // 2. Draw Markers
+        label.new(entry_time, entry_price, "", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.green, 10), style=label.style_triangleup, size=size.tiny)
+        label.new(exit_time, exit_price, "", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.red, 10), style=label.style_triangledown, size=size.tiny)
+        
+        // 3. Draw Shaded Box
+        if show_boxes
+            box.new(entry_time, entry_price, exit_time, exit_price, xloc=xloc.bar_time, bgcolor=color.new(dir_color, 100 - box_opacity), border_style=line.style_none)
+            
+        // 4. Calculate Stats
+        float pnl = (exit_price - entry_price) * (is_long ? 1 : -1)
+        float rr = math.abs(pnl) / math.max(0.00001, math.abs(entry_price - stop_loss))
+        
+        // 5. Labels
+        if show_labels
+            string label_text = "Trade #" + str.tostring(id) + "\n" +
+                                "Side: " + side + "\n" +
+                                "PnL: " + str.tostring(pnl, "#.##") + "\n" +
+                                "R/R: " + str.tostring(rr, "#.##")
+            label.new(exit_time, exit_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, 
+                      textcolor=color.white, color=color.new(color.black, 40), style=label.style_label_left, size=size.small, textalign=text.align_left)
+
+// --- Manual Inputs for 5 Trades (Expandable) ---
+// Note: Entry/Exit Time must be in millisecond timestamps. 
+// Use "Copy Price" and "Copy Time" in TradingView's right-click menu.
+
+t1_active = input.bool(false, "Trade 1 Active", group="Trade 1")
+t1_side   = input.string("Long", "Side", options=["Long", "Short"], group="Trade 1")
+t1_entry_t = input.time(0, "Entry Time", group="Trade 1")
+t1_entry_p = input.float(0.0, "Entry Price", group="Trade 1")
+t1_exit_t  = input.time(0, "Exit Time", group="Trade 1")
+t1_exit_p  = input.float(0.0, "Exit Price", group="Trade 1")
+t1_sl      = input.float(0.0, "Stop Loss (for RR)", group="Trade 1")
+draw_trade(1, t1_active, t1_side, t1_entry_t, t1_entry_p, t1_exit_t, t1_exit_p, t1_sl)
+
+t2_active = input.bool(false, "Trade 2 Active", group="Trade 2")
+t2_side   = input.string("Long", "Side", options=["Long", "Short"], group="Trade 2")
+t2_entry_t = input.time(0, "Entry Time", group="Trade 2")
+t2_entry_p = input.float(0.0, "Entry Price", group="Trade 2")
+t2_exit_t  = input.time(0, "Exit Time", group="Trade 2")
+t2_exit_p  = input.float(0.0, "Exit Price", group="Trade 2")
+t2_sl      = input.float(0.0, "Stop Loss (for RR)", group="Trade 2")
+draw_trade(2, t2_active, t2_side, t2_entry_t, t2_entry_p, t2_exit_t, t2_exit_p, t2_sl)
+
+t3_active = input.bool(false, "Trade 3 Active", group="Trade 3")
+t3_side   = input.string("Long", "Side", options=["Long", "Short"], group="Trade 3")
+t3_entry_t = input.time(0, "Entry Time", group="Trade 3")
+t3_entry_p = input.float(0.0, "Entry Price", group="Trade 3")
+t3_exit_t  = input.time(0, "Exit Time", group="Trade 3")
+t3_exit_p  = input.float(0.0, "Exit Price", group="Trade 3")
+t3_sl      = input.float(0.0, "Stop Loss (for RR)", group="Trade 3")
+draw_trade(3, t3_active, t3_side, t3_entry_t, t3_entry_p, t3_exit_t, t3_exit_p, t3_sl)
+
+t4_active = input.bool(false, "Trade 4 Active", group="Trade 4")
+t4_side   = input.string("Long", "Side", options=["Long", "Short"], group="Trade 4")
+t4_entry_t = input.time(0, "Entry Time", group="Trade 4")
+t4_entry_p = input.float(0.0, "Entry Price", group="Trade 4")
+t4_exit_t  = input.time(0, "Exit Time", group="Trade 4")
+t4_exit_p  = input.float(0.0, "Exit Price", group="Trade 4")
+t4_sl      = input.float(0.0, "Stop Loss (for RR)", group="Trade 4")
+draw_trade(4, t4_active, t4_side, t4_entry_t, t4_entry_p, t4_exit_t, t4_exit_p, t4_sl)
+
+t5_active = input.bool(false, "Trade 5 Active", group="Trade 5")
+t5_side   = input.string("Long", "Side", options=["Long", "Short"], group="Trade 5")
+t5_entry_t = input.time(0, "Entry Time", group="Trade 5")
+t5_entry_p = input.float(0.0, "Entry Price", group="Trade 5")
+t5_exit_t  = input.time(0, "Exit Time", group="Trade 5")
+t5_exit_p  = input.float(0.0, "Exit Price", group="Trade 5")
+t5_sl      = input.float(0.0, "Stop Loss (for RR)", group="Trade 5")
+draw_trade(5, t5_active, t5_side, t5_entry_t, t5_entry_p, t5_exit_t, t5_exit_p, t5_sl)
