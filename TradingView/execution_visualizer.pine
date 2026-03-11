@@ -25,9 +25,9 @@ draw_trade(id, active, side, entry_time, entry_price, exit_time, exit_price, sto
         label.new(entry_time, entry_price, "", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.green, 10), style=label.style_triangleup, size=size.tiny)
         label.new(exit_time, exit_price, "", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.red, 10), style=label.style_triangledown, size=size.tiny)
         
-        // 3. Draw Shaded Box
+        // 3. Draw Shaded Box (Fixed Border)
         if show_boxes
-            box.new(entry_time, entry_price, exit_time, exit_price, xloc=xloc.bar_time, bgcolor=color.new(dir_color, 100 - box_opacity), border_style=line.style_none)
+            box.new(entry_time, entry_price, exit_time, exit_price, xloc=xloc.bar_time, bgcolor=color.new(dir_color, 100 - box_opacity), border_color=color.new(color.black, 100))
             
         // 4. Calculate Stats
         float pnl = (exit_price - entry_price) * (is_long ? 1 : -1)
