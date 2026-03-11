@@ -1,5 +1,5 @@
-//@version=5
-indicator("NinjaTrader Style Executions", overlay=true)
+//@version=6
+indicator("NinjaTrader Style Executions v6", overlay=true)
 
 // --- Settings ---
 group_main = "General Settings"
@@ -11,8 +11,6 @@ box_opacity     = input.int(10, "Box Opacity (0-100)", minval=0, maxval=100, gro
 // --- Colors ---
 color_long  = color.new(#0088FF, 0)
 color_short = color.new(#FF4444, 0)
-color_entry = color.new(color.green, 20)
-color_exit  = color.new(color.red, 20)
 
 // --- Trade Logic Function ---
 draw_trade(id, active, side, entry_time, entry_price, exit_time, exit_price, stop_loss) =>
@@ -37,17 +35,11 @@ draw_trade(id, active, side, entry_time, entry_price, exit_time, exit_price, sto
         
         // 5. Labels
         if show_labels
-            string label_text = "Trade #" + str.tostring(id) + "\n" +
-                                "Side: " + side + "\n" +
-                                "PnL: " + str.tostring(pnl, "#.##") + "\n" +
-                                "R/R: " + str.tostring(rr, "#.##")
+            string label_text = "Trade #" + str.tostring(id) + "\nSide: " + side + "\nPnL: " + str.tostring(pnl, "#.##") + "\nR/R: " + str.tostring(rr, "#.##")
             label.new(exit_time, exit_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, 
                       textcolor=color.white, color=color.new(color.black, 40), style=label.style_label_left, size=size.small, textalign=text.align_left)
 
-// --- Manual Inputs for 5 Trades (Expandable) ---
-// Note: Entry/Exit Time must be in millisecond timestamps. 
-// Use "Copy Price" and "Copy Time" in TradingView's right-click menu.
-
+// --- Manual Inputs for 5 Trades ---
 t1_active = input.bool(false, "Trade 1 Active", group="Trade 1")
 t1_side   = input.string("Long", "Side", options=["Long", "Short"], group="Trade 1")
 t1_entry_t = input.time(0, "Entry Time", group="Trade 1")
