@@ -872,3 +872,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#endregion
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaCandleVolumeProfile[] cacheOrcaCandleVolumeProfile;
+		public OrcaCandleVolumeProfile OrcaCandleVolumeProfile(int tickCompression, int candleWidthPx, int profileWidthPx, bool dynamicProfileWidth, int candleProfileGapPx, int profileBarSpacingPx, int wickWidthPx, bool showPOC, bool showDelta, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		{
+			return OrcaCandleVolumeProfile(Input, tickCompression, candleWidthPx, profileWidthPx, dynamicProfileWidth, candleProfileGapPx, profileBarSpacingPx, wickWidthPx, showPOC, showDelta, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+		}
+
+		public OrcaCandleVolumeProfile OrcaCandleVolumeProfile(ISeries<double> input, int tickCompression, int candleWidthPx, int profileWidthPx, bool dynamicProfileWidth, int candleProfileGapPx, int profileBarSpacingPx, int wickWidthPx, bool showPOC, bool showDelta, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		{
+			if (cacheOrcaCandleVolumeProfile != null)
+				for (int idx = 0; idx < cacheOrcaCandleVolumeProfile.Length; idx++)
+					if (cacheOrcaCandleVolumeProfile[idx] != null && cacheOrcaCandleVolumeProfile[idx].TickCompression == tickCompression && cacheOrcaCandleVolumeProfile[idx].CandleWidthPx == candleWidthPx && cacheOrcaCandleVolumeProfile[idx].ProfileWidthPx == profileWidthPx && cacheOrcaCandleVolumeProfile[idx].DynamicProfileWidth == dynamicProfileWidth && cacheOrcaCandleVolumeProfile[idx].CandleProfileGapPx == candleProfileGapPx && cacheOrcaCandleVolumeProfile[idx].ProfileBarSpacingPx == profileBarSpacingPx && cacheOrcaCandleVolumeProfile[idx].WickWidthPx == wickWidthPx && cacheOrcaCandleVolumeProfile[idx].ShowPOC == showPOC && cacheOrcaCandleVolumeProfile[idx].ShowDelta == showDelta && cacheOrcaCandleVolumeProfile[idx].UseGradient == useGradient && cacheOrcaCandleVolumeProfile[idx].GradientSteps == gradientSteps && cacheOrcaCandleVolumeProfile[idx].ShowValueArea == showValueArea && cacheOrcaCandleVolumeProfile[idx].ShowVAColor == showVAColor && cacheOrcaCandleVolumeProfile[idx].ShowVALines == showVALines && cacheOrcaCandleVolumeProfile[idx].ValueAreaPercent == valueAreaPercent && cacheOrcaCandleVolumeProfile[idx].VALineThickness == vALineThickness && cacheOrcaCandleVolumeProfile[idx].VALineStyle == vALineStyle && cacheOrcaCandleVolumeProfile[idx].MinBrightness == minBrightness && cacheOrcaCandleVolumeProfile[idx].VolumeOpacity == volumeOpacity && cacheOrcaCandleVolumeProfile[idx].DeltaOpacity == deltaOpacity && cacheOrcaCandleVolumeProfile[idx].EqualsInput(input))
+						return cacheOrcaCandleVolumeProfile[idx];
+			return CacheIndicator<OrcaCandleVolumeProfile>(new OrcaCandleVolumeProfile(){ TickCompression = tickCompression, CandleWidthPx = candleWidthPx, ProfileWidthPx = profileWidthPx, DynamicProfileWidth = dynamicProfileWidth, CandleProfileGapPx = candleProfileGapPx, ProfileBarSpacingPx = profileBarSpacingPx, WickWidthPx = wickWidthPx, ShowPOC = showPOC, ShowDelta = showDelta, UseGradient = useGradient, GradientSteps = gradientSteps, ShowValueArea = showValueArea, ShowVAColor = showVAColor, ShowVALines = showVALines, ValueAreaPercent = valueAreaPercent, VALineThickness = vALineThickness, VALineStyle = vALineStyle, MinBrightness = minBrightness, VolumeOpacity = volumeOpacity, DeltaOpacity = deltaOpacity }, input, ref cacheOrcaCandleVolumeProfile);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaCandleVolumeProfile OrcaCandleVolumeProfile(int tickCompression, int candleWidthPx, int profileWidthPx, bool dynamicProfileWidth, int candleProfileGapPx, int profileBarSpacingPx, int wickWidthPx, bool showPOC, bool showDelta, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		{
+			return indicator.OrcaCandleVolumeProfile(Input, tickCompression, candleWidthPx, profileWidthPx, dynamicProfileWidth, candleProfileGapPx, profileBarSpacingPx, wickWidthPx, showPOC, showDelta, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+		}
+
+		public Indicators.OrcaCandleVolumeProfile OrcaCandleVolumeProfile(ISeries<double> input , int tickCompression, int candleWidthPx, int profileWidthPx, bool dynamicProfileWidth, int candleProfileGapPx, int profileBarSpacingPx, int wickWidthPx, bool showPOC, bool showDelta, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		{
+			return indicator.OrcaCandleVolumeProfile(input, tickCompression, candleWidthPx, profileWidthPx, dynamicProfileWidth, candleProfileGapPx, profileBarSpacingPx, wickWidthPx, showPOC, showDelta, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaCandleVolumeProfile OrcaCandleVolumeProfile(int tickCompression, int candleWidthPx, int profileWidthPx, bool dynamicProfileWidth, int candleProfileGapPx, int profileBarSpacingPx, int wickWidthPx, bool showPOC, bool showDelta, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		{
+			return indicator.OrcaCandleVolumeProfile(Input, tickCompression, candleWidthPx, profileWidthPx, dynamicProfileWidth, candleProfileGapPx, profileBarSpacingPx, wickWidthPx, showPOC, showDelta, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+		}
+
+		public Indicators.OrcaCandleVolumeProfile OrcaCandleVolumeProfile(ISeries<double> input , int tickCompression, int candleWidthPx, int profileWidthPx, bool dynamicProfileWidth, int candleProfileGapPx, int profileBarSpacingPx, int wickWidthPx, bool showPOC, bool showDelta, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		{
+			return indicator.OrcaCandleVolumeProfile(input, tickCompression, candleWidthPx, profileWidthPx, dynamicProfileWidth, candleProfileGapPx, profileBarSpacingPx, wickWidthPx, showPOC, showDelta, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+		}
+	}
+}
+
+#endregion

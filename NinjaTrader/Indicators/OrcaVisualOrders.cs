@@ -590,3 +590,60 @@ public class OrcaVisualOrders : Indicator
 		return Color.Gray;
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaVisualOrders[] cacheOrcaVisualOrders;
+		public OrcaVisualOrders OrcaVisualOrders(int tagOffsetRight, int orderLabelOffsetRight)
+		{
+			return OrcaVisualOrders(Input, tagOffsetRight, orderLabelOffsetRight);
+		}
+
+		public OrcaVisualOrders OrcaVisualOrders(ISeries<double> input, int tagOffsetRight, int orderLabelOffsetRight)
+		{
+			if (cacheOrcaVisualOrders != null)
+				for (int idx = 0; idx < cacheOrcaVisualOrders.Length; idx++)
+					if (cacheOrcaVisualOrders[idx] != null && cacheOrcaVisualOrders[idx].TagOffsetRight == tagOffsetRight && cacheOrcaVisualOrders[idx].OrderLabelOffsetRight == orderLabelOffsetRight && cacheOrcaVisualOrders[idx].EqualsInput(input))
+						return cacheOrcaVisualOrders[idx];
+			return CacheIndicator<OrcaVisualOrders>(new OrcaVisualOrders(){ TagOffsetRight = tagOffsetRight, OrderLabelOffsetRight = orderLabelOffsetRight }, input, ref cacheOrcaVisualOrders);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(int tagOffsetRight, int orderLabelOffsetRight)
+		{
+			return indicator.OrcaVisualOrders(Input, tagOffsetRight, orderLabelOffsetRight);
+		}
+
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(ISeries<double> input , int tagOffsetRight, int orderLabelOffsetRight)
+		{
+			return indicator.OrcaVisualOrders(input, tagOffsetRight, orderLabelOffsetRight);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(int tagOffsetRight, int orderLabelOffsetRight)
+		{
+			return indicator.OrcaVisualOrders(Input, tagOffsetRight, orderLabelOffsetRight);
+		}
+
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(ISeries<double> input , int tagOffsetRight, int orderLabelOffsetRight)
+		{
+			return indicator.OrcaVisualOrders(input, tagOffsetRight, orderLabelOffsetRight);
+		}
+	}
+}
+
+#endregion

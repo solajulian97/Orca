@@ -1,329 +1,344 @@
+#region Using declarations
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 using System.Windows.Media;
 using System.Xml.Serialization;
-using NinjaTrader.Core;
+
+using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.NinjaScript;
+#endregion
 
-namespace NinjaTrader.NinjaScript.Indicators;
-
-public class OrcaAbsorptionCandles : Indicator
+namespace NinjaTrader.NinjaScript.Indicators
 {
-	private double lastBid;
-
-	private double lastAsk;
-
-	private double prevLast;
-
-	private int lastDirection;
-
-	private List<double> barTickDelta;
-
-	private List<bool> barHasData;
-
-	private List<double> barSyntheticDelta;
-
-	private Brush[] positiveBrushes;
-
-	private Brush[] negativeBrushes;
-
-	private const int NUM_BRUSHES = 20;
-
-	[XmlIgnore]
-	[Display(Name = "1. Positive Delta Color", Order = 1, GroupName = "1. Visuals")]
-	public Brush PositiveColor { get; set; }
-
-	[Browsable(false)]
-	public string PositiveColorSerialize
+	public enum DeltaCalculationMode
 	{
-		get
-		{
-			return Serialize.BrushToString(PositiveColor);
-		}
-		set
-		{
-			PositiveColor = Serialize.StringToBrush(value);
-		}
+		BidAsk,
+		UpDownTick
 	}
 
-	[XmlIgnore]
-	[Display(Name = "2. Negative Delta Color", Order = 2, GroupName = "1. Visuals")]
-	public Brush NegativeColor { get; set; }
-
-	[Browsable(false)]
-	public string NegativeColorSerialize
+	public class OrcaAbsorptionCandles : Indicator
 	{
-		get
-		{
-			return Serialize.BrushToString(NegativeColor);
-		}
-		set
-		{
-			NegativeColor = Serialize.StringToBrush(value);
-		}
-	}
+		private double	lastBid;
+		private double	lastAsk;
+		private double	prevLast;
+		private int		lastDirection;
 
-	[Range(0.0, 1.0)]
-	[Display(Name = "3. Base Opacity", Order = 3, GroupName = "1. Visuals", Description = "Minimum opacity for lowest intensity values.")]
-	public double BaseOpacity { get; set; }
+		private List<double>	barTickDelta;
+		private List<bool>		barHasData;
+		private List<double>	barSyntheticDelta; // OHLC-derived fallback for historical bars
 
-	[Range(1, int.MaxValue)]
-	[Display(Name = "1. Intensity Lookback", Order = 1, GroupName = "2. Parameters", Description = "Number of bars to look back for calculating max delta intensity.")]
-	public int IntensityLookback { get; set; }
+		private Brush[] positiveBrushes;
+		private Brush[] negativeBrushes;
+		private const int NUM_BRUSHES = 20;
 
-	[Display(Name = "2. Delta Calculation Mode", Order = 2, GroupName = "2. Parameters", Description = "Choose whether delta calculates via real Bid/Ask spread hits, or simple Up/Down tick direction.")]
-	public DeltaCalculationMode DeltaMode { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "3. Show Historical Color", Order = 3, GroupName = "2. Parameters", Description = "Paint historical bars using synthetic delta ((Close-Open)/Range × Volume) when real tick data is unavailable.")]
-	public bool ShowHistoricalColor { get; set; }
-
-	protected override void OnStateChange()
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0007: Invalid comparison between Unknown and I4
-		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Invalid comparison between Unknown and I4
-		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009e: Invalid comparison between Unknown and I4
-		if ((int)((NinjaScript)this).State == 1)
+		protected override void OnStateChange()
 		{
-			((NinjaScriptBase)this).Name = "OrcaAbsorptionCandles";
-			((NinjaScript)this).Description = "Paints standard candlesticks based on volume delta intensity (absorption).";
-			((NinjaScriptBase)this).Calculate = (Calculate)1;
-			((NinjaScriptBase)this).IsOverlay = true;
-			((NinjaScriptBase)this).DisplayInDataBox = false;
-			((IndicatorBase)this).IsSuspendedWhileInactive = true;
-			((NinjaScriptBase)this).BarsRequiredToPlot = 0;
-			((IndicatorBase)this).PaintPriceMarkers = false;
-			PositiveColor = Brushes.DodgerBlue;
-			NegativeColor = Brushes.Crimson;
-			BaseOpacity = 0.45;
-			IntensityLookback = 50;
-			DeltaMode = DeltaCalculationMode.BidAsk;
-			ShowHistoricalColor = true;
-		}
-		else if ((int)((NinjaScript)this).State == 2)
-		{
-			((NinjaScriptBase)this).AddDataSeries((BarsPeriodType)0, 1);
-		}
-		else if ((int)((NinjaScript)this).State == 4)
-		{
-			barTickDelta = new List<double>(4096);
-			barHasData = new List<bool>(4096);
-			barSyntheticDelta = new List<double>(4096);
-			lastBid = double.NaN;
-			lastAsk = double.NaN;
-			prevLast = double.NaN;
-			lastDirection = 0;
-			InitializeBrushes();
-		}
-	}
-
-	private void InitializeBrushes()
-	{
-		positiveBrushes = new Brush[20];
-		negativeBrushes = new Brush[20];
-		Color color = ((SolidColorBrush)PositiveColor).Color;
-		Color color2 = ((SolidColorBrush)NegativeColor).Color;
-		for (int i = 0; i < 20; i++)
-		{
-			double num = (double)i / 19.0;
-			double num2 = BaseOpacity + (1.0 - BaseOpacity) * num;
-			byte a = (byte)(num2 * (double)(int)color.A);
-			byte a2 = (byte)(num2 * (double)(int)color2.A);
-			SolidColorBrush solidColorBrush = new SolidColorBrush(Color.FromArgb(a, color.R, color.G, color.B));
-			solidColorBrush.Freeze();
-			positiveBrushes[i] = solidColorBrush;
-			SolidColorBrush solidColorBrush2 = new SolidColorBrush(Color.FromArgb(a2, color2.R, color2.G, color2.B));
-			solidColorBrush2.Freeze();
-			negativeBrushes[i] = solidColorBrush2;
-		}
-	}
-
-	private void EnsureBarLists(int idx)
-	{
-		while (barTickDelta.Count <= idx)
-		{
-			barTickDelta.Add(0.0);
-			barHasData.Add(item: false);
-			barSyntheticDelta.Add(double.NaN);
-		}
-	}
-
-	/// <summary>
-	/// Computes synthetic delta for a historical bar using OHLC.
-	/// Formula: (Close - Open) / Range * Volume — directional and magnitude-scaled.
-	/// Returns 0 if the bar has zero range.
-	/// </summary>
-	private double ComputeSyntheticDelta(int barIdx)
-	{
-		if (double.IsNaN(barSyntheticDelta[barIdx]))
-		{
-			double valueAt = ((NinjaScriptBase)this).Open.GetValueAt(barIdx);
-			double valueAt2 = ((NinjaScriptBase)this).Close.GetValueAt(barIdx);
-			double valueAt3 = ((NinjaScriptBase)this).High.GetValueAt(barIdx);
-			double valueAt4 = ((NinjaScriptBase)this).Low.GetValueAt(barIdx);
-			double num = valueAt3 - valueAt4;
-			long num2 = (long)((NinjaScriptBase)this).Volume.GetValueAt(barIdx);
-			if (num2 <= 0)
+			if (State == State.SetDefaults)
 			{
-				num2 = 1L;
+				Name						= "OrcaAbsorptionCandles";
+				Description					= "Paints standard candlesticks based on volume delta intensity (absorption).";
+				Calculate					= Calculate.OnEachTick;
+				IsOverlay					= true;
+				DisplayInDataBox			= false;
+				IsSuspendedWhileInactive	= true;
+				BarsRequiredToPlot			= 0;
+				PaintPriceMarkers			= false;
+
+				PositiveColor               = Brushes.DodgerBlue;
+				NegativeColor               = Brushes.Crimson;
+				BaseOpacity                 = 0.45;
+				IntensityLookback           = 50;
+				DeltaMode                   = DeltaCalculationMode.BidAsk;
+				ShowHistoricalColor         = true;
 			}
-			double num3 = ((num > 0.0) ? ((valueAt2 - valueAt) / num) : ((valueAt2 >= valueAt) ? 1.0 : (-1.0)));
-			barSyntheticDelta[barIdx] = num3 * (double)num2;
-		}
-		return barSyntheticDelta[barIdx];
-	}
-
-	protected override void OnMarketData(MarketDataEventArgs e)
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0012: Invalid comparison between Unknown and I4
-		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003d: Invalid comparison between Unknown and I4
-		if (DeltaMode != DeltaCalculationMode.BidAsk)
-		{
-			return;
-		}
-		if ((int)e.MarketDataType == 1)
-		{
-			lastBid = e.Price;
-		}
-		else if ((int)e.MarketDataType == 0)
-		{
-			lastAsk = e.Price;
-		}
-		else if ((int)e.MarketDataType == 2)
-		{
-			if (e.Ask > 0.0 && !double.IsNaN(e.Ask))
+			else if (State == State.Configure)
 			{
-				lastAsk = e.Ask;
+				AddDataSeries(BarsPeriodType.Tick, 1);
 			}
-			if (e.Bid > 0.0 && !double.IsNaN(e.Bid))
+			else if (State == State.DataLoaded)
 			{
-				lastBid = e.Bid;
+				barTickDelta      = new List<double>(4096);
+				barHasData        = new List<bool>(4096);
+				barSyntheticDelta = new List<double>(4096);
+
+				lastBid        = double.NaN;
+				lastAsk        = double.NaN;
+				prevLast       = double.NaN;
+				lastDirection  = 0;
+
+				InitializeBrushes();
 			}
 		}
-	}
 
-	protected override void OnBarUpdate()
-	{
-		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Invalid comparison between Unknown and I4
-		if (((NinjaScriptBase)this).BarsInProgress == 1)
+		private void InitializeBrushes()
 		{
-			double num = ((NinjaScriptBase)this).Close[0];
-			long num2 = (long)((NinjaScriptBase)this).Volume[0];
-			if (num2 <= 0)
+			positiveBrushes = new Brush[NUM_BRUSHES];
+			negativeBrushes = new Brush[NUM_BRUSHES];
+
+			Color posColor = ((SolidColorBrush)PositiveColor).Color;
+			Color negColor = ((SolidColorBrush)NegativeColor).Color;
+
+			for (int i = 0; i < NUM_BRUSHES; i++)
 			{
-				return;
+				double intensity = (double)i / (NUM_BRUSHES - 1); // 0.0 to 1.0
+				double opacity = BaseOpacity + (1.0 - BaseOpacity) * intensity;
+				
+				byte posA = (byte)(opacity * posColor.A);
+				byte negA = (byte)(opacity * negColor.A);
+
+				SolidColorBrush pBrush = new SolidColorBrush(Color.FromArgb(posA, posColor.R, posColor.G, posColor.B));
+				pBrush.Freeze();
+				positiveBrushes[i] = pBrush;
+
+				SolidColorBrush nBrush = new SolidColorBrush(Color.FromArgb(negA, negColor.R, negColor.G, negColor.B));
+				nBrush.Freeze();
+				negativeBrushes[i] = nBrush;
 			}
-			if ((int)((NinjaScriptBase)this).Instrument.MasterInstrument.InstrumentType == 7)
+		}
+
+		private void EnsureBarLists(int idx)
+		{
+			while (barTickDelta.Count <= idx)
 			{
-				num2 = (long)Globals.ToCryptocurrencyVolume(num2);
+				barTickDelta.Add(0);
+				barHasData.Add(false);
+				barSyntheticDelta.Add(double.NaN);
 			}
-			long num3 = 0L;
-			if (DeltaMode == DeltaCalculationMode.BidAsk && !double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0.0 && lastBid > 0.0 && lastAsk >= lastBid)
+		}
+
+		/// <summary>
+		/// Computes synthetic delta for a historical bar using OHLC.
+		/// Formula: (Close - Open) / Range * Volume — directional and magnitude-scaled.
+		/// Returns 0 if the bar has zero range.
+		/// </summary>
+		private double ComputeSyntheticDelta(int barIdx)
+		{
+			if (double.IsNaN(barSyntheticDelta[barIdx]))
 			{
-				if (num >= lastAsk)
+				double o = Open.GetValueAt(barIdx);
+				double c = Close.GetValueAt(barIdx);
+				double h = High.GetValueAt(barIdx);
+				double l = Low.GetValueAt(barIdx);
+				double range = h - l;
+				long vol = (long)Volume.GetValueAt(barIdx);
+				if (vol <= 0) vol = 1;
+				// Normalize: ratio of -1 to +1, scaled by volume
+				double ratio = (range > 0) ? ((c - o) / range) : (c >= o ? 1.0 : -1.0);
+				barSyntheticDelta[barIdx] = ratio * vol;
+			}
+			return barSyntheticDelta[barIdx];
+		}
+
+		protected override void OnMarketData(MarketDataEventArgs e)
+		{
+			if (DeltaMode == DeltaCalculationMode.BidAsk)
+			{
+				if (e.MarketDataType == MarketDataType.Bid) lastBid = e.Price;
+				else if (e.MarketDataType == MarketDataType.Ask) lastAsk = e.Price;
+				else if (e.MarketDataType == MarketDataType.Last)
 				{
-					num3 = num2;
+					if (e.Ask > 0 && !double.IsNaN(e.Ask)) lastAsk = e.Ask;
+					if (e.Bid > 0 && !double.IsNaN(e.Bid)) lastBid = e.Bid;
 				}
-				else if (num <= lastBid)
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{
+			// ============================================
+			// BarsInProgress == 1 : hidden tick processing
+			// ============================================
+			if (BarsInProgress == 1)
+			{
+				double price = Close[0];
+				long vol = (long)Volume[0];
+				if (vol <= 0) return;
+
+				if (Instrument.MasterInstrument.InstrumentType == InstrumentType.CryptoCurrency)
+					vol = (long)Core.Globals.ToCryptocurrencyVolume(vol);
+
+				long signed = 0;
+				
+				if (DeltaMode == DeltaCalculationMode.BidAsk && !double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
 				{
-					num3 = -num2;
+					if (price >= lastAsk) signed = vol;
+					else if (price <= lastBid) signed = -vol;
+					else if (!double.IsNaN(prevLast))
+					{
+						if (price > prevLast) signed = vol;
+						else if (price < prevLast) signed = -vol;
+						else signed = lastDirection * vol;
+					}
 				}
 				else if (!double.IsNaN(prevLast))
 				{
-					num3 = ((num > prevLast) ? num2 : ((!(num < prevLast)) ? (lastDirection * num2) : (-num2)));
+					// UpDownTick fallback or explicitly chosen calculation mode
+					if (price > prevLast) signed = vol;
+					else if (price < prevLast) signed = -vol;
+					else signed = lastDirection * vol;
 				}
-			}
-			else if (!double.IsNaN(prevLast))
-			{
-				num3 = ((num > prevLast) ? num2 : ((!(num < prevLast)) ? (lastDirection * num2) : (-num2)));
-			}
-			if (num3 > 0)
-			{
-				lastDirection = 1;
-			}
-			else if (num3 < 0)
-			{
-				lastDirection = -1;
-			}
-			prevLast = num;
-			if (num3 != 0L)
-			{
-				int num4 = ((NinjaScriptBase)this).CurrentBars[0];
-				if (num4 >= 0)
+
+				if (signed > 0) lastDirection = 1;
+				else if (signed < 0) lastDirection = -1;
+
+				prevLast = price;
+				
+				if (signed == 0) return;
+
+				int primaryIdx = CurrentBars[0];
+				if (primaryIdx >= 0)
 				{
-					EnsureBarLists(num4);
-					barTickDelta[num4] += num3;
-					barHasData[num4] = true;
+					EnsureBarLists(primaryIdx);
+					barTickDelta[primaryIdx] += signed;
+					barHasData[primaryIdx] = true;
+				}
+				return;
+			}
+
+			// ============================================
+			// BarsInProgress == 0 : primary bar painting
+			// ============================================
+			if (BarsInProgress == 0)
+			{
+				EnsureBarLists(CurrentBar);
+				
+				if (Bars.IsFirstBarOfSession && IsFirstTickOfBar)
+				{
+					lastBid = double.NaN;
+					lastAsk = double.NaN;
+					prevLast = double.NaN;
+				}
+
+				// Determine the delta value to use: real tick data or synthetic OHLC fallback
+				bool hasReal = CurrentBar < barHasData.Count && barHasData[CurrentBar];
+				bool useSynthetic = !hasReal && ShowHistoricalColor;
+
+				if (hasReal || useSynthetic)
+				{
+					double delta = hasReal ? barTickDelta[CurrentBar] : ComputeSyntheticDelta(CurrentBar);
+					
+					// Find max |delta| over lookback window (considers both real and synthetic)
+					double maxDelta = 0;
+					int startIdx = Math.Max(0, CurrentBar - IntensityLookback);
+					
+					for (int i = CurrentBar; i >= startIdx; i--)
+					{
+						double absD;
+						if (i < barHasData.Count && barHasData[i])
+							absD = Math.Abs(barTickDelta[i]);
+						else if (ShowHistoricalColor && i < barSyntheticDelta.Count)
+							absD = Math.Abs(ComputeSyntheticDelta(i));
+						else
+							continue;
+						if (absD > maxDelta) maxDelta = absD;
+					}
+
+					if (maxDelta == 0) maxDelta = 1;
+
+					double intensity = Math.Abs(delta) / maxDelta;
+					int brushIdx = (int)Math.Round(intensity * (NUM_BRUSHES - 1));
+					if (brushIdx < 0) brushIdx = 0;
+					if (brushIdx >= NUM_BRUSHES) brushIdx = NUM_BRUSHES - 1;
+
+					Brush b = delta >= 0 ? positiveBrushes[brushIdx] : negativeBrushes[brushIdx];
+
+					BarBrush = b;
+					CandleOutlineBrush = b;
 				}
 			}
 		}
-		else
+
+		#region Properties
+		[XmlIgnore]
+		[Display(Name = "1. Positive Delta Color", Order = 1, GroupName = "1. Visuals")]
+		public System.Windows.Media.Brush PositiveColor { get; set; }
+		[Browsable(false)]
+		public string PositiveColorSerialize { get { return Serialize.BrushToString(PositiveColor); } set { PositiveColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "2. Negative Delta Color", Order = 2, GroupName = "1. Visuals")]
+		public System.Windows.Media.Brush NegativeColor { get; set; }
+		[Browsable(false)]
+		public string NegativeColorSerialize { get { return Serialize.BrushToString(NegativeColor); } set { NegativeColor = Serialize.StringToBrush(value); } }
+
+		[Range(0.0, 1.0)]
+		[Display(Name = "3. Base Opacity", Order = 3, GroupName = "1. Visuals", Description = "Minimum opacity for lowest intensity values.")]
+		public double BaseOpacity { get; set; }
+
+		[Range(1, int.MaxValue)]
+		[Display(Name = "1. Intensity Lookback", Order = 1, GroupName = "2. Parameters", Description = "Number of bars to look back for calculating max delta intensity.")]
+		public int IntensityLookback { get; set; }
+
+		[Display(Name = "2. Delta Calculation Mode", Order = 2, GroupName = "2. Parameters", Description = "Choose whether delta calculates via real Bid/Ask spread hits, or simple Up/Down tick direction.")]
+		public DeltaCalculationMode DeltaMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "3. Show Historical Color", Order = 3, GroupName = "2. Parameters",
+			Description = "Paint historical bars using synthetic delta ((Close-Open)/Range × Volume) when real tick data is unavailable.")]
+		public bool ShowHistoricalColor { get; set; }
+		#endregion
+	}
+}
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaAbsorptionCandles[] cacheOrcaAbsorptionCandles;
+		public OrcaAbsorptionCandles OrcaAbsorptionCandles(bool showHistoricalColor)
 		{
-			if (((NinjaScriptBase)this).BarsInProgress != 0)
-			{
-				return;
-			}
-			EnsureBarLists(((NinjaScriptBase)this).CurrentBar);
-			if (((NinjaScriptBase)this).Bars.IsFirstBarOfSession && ((NinjaScriptBase)this).IsFirstTickOfBar)
-			{
-				lastBid = double.NaN;
-				lastAsk = double.NaN;
-				prevLast = double.NaN;
-			}
-			bool flag = ((NinjaScriptBase)this).CurrentBar < barHasData.Count && barHasData[((NinjaScriptBase)this).CurrentBar];
-			bool flag2 = !flag && ShowHistoricalColor;
-			if (!(flag || flag2))
-			{
-				return;
-			}
-			double num5 = (flag ? barTickDelta[((NinjaScriptBase)this).CurrentBar] : ComputeSyntheticDelta(((NinjaScriptBase)this).CurrentBar));
-			double num6 = 0.0;
-			int num7 = Math.Max(0, ((NinjaScriptBase)this).CurrentBar - IntensityLookback);
-			for (int num8 = ((NinjaScriptBase)this).CurrentBar; num8 >= num7; num8--)
-			{
-				double num9;
-				if (num8 < barHasData.Count && barHasData[num8])
-				{
-					num9 = Math.Abs(barTickDelta[num8]);
-				}
-				else
-				{
-					if (!ShowHistoricalColor || num8 >= barSyntheticDelta.Count)
-					{
-						continue;
-					}
-					num9 = Math.Abs(ComputeSyntheticDelta(num8));
-				}
-				if (num9 > num6)
-				{
-					num6 = num9;
-				}
-			}
-			if (num6 == 0.0)
-			{
-				num6 = 1.0;
-			}
-			int num10 = (int)Math.Round(Math.Abs(num5) / num6 * 19.0);
-			if (num10 < 0)
-			{
-				num10 = 0;
-			}
-			if (num10 >= 20)
-			{
-				num10 = 19;
-			}
-			Brush candleOutlineBrush = (((NinjaScriptBase)this).BarBrush = ((num5 >= 0.0) ? positiveBrushes[num10] : negativeBrushes[num10]));
-			((NinjaScriptBase)this).CandleOutlineBrush = candleOutlineBrush;
+			return OrcaAbsorptionCandles(Input, showHistoricalColor);
+		}
+
+		public OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input, bool showHistoricalColor)
+		{
+			if (cacheOrcaAbsorptionCandles != null)
+				for (int idx = 0; idx < cacheOrcaAbsorptionCandles.Length; idx++)
+					if (cacheOrcaAbsorptionCandles[idx] != null && cacheOrcaAbsorptionCandles[idx].ShowHistoricalColor == showHistoricalColor && cacheOrcaAbsorptionCandles[idx].EqualsInput(input))
+						return cacheOrcaAbsorptionCandles[idx];
+			return CacheIndicator<OrcaAbsorptionCandles>(new OrcaAbsorptionCandles(){ ShowHistoricalColor = showHistoricalColor }, input, ref cacheOrcaAbsorptionCandles);
 		}
 	}
 }
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(bool showHistoricalColor)
+		{
+			return indicator.OrcaAbsorptionCandles(Input, showHistoricalColor);
+		}
+
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input , bool showHistoricalColor)
+		{
+			return indicator.OrcaAbsorptionCandles(input, showHistoricalColor);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(bool showHistoricalColor)
+		{
+			return indicator.OrcaAbsorptionCandles(Input, showHistoricalColor);
+		}
+
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input , bool showHistoricalColor)
+		{
+			return indicator.OrcaAbsorptionCandles(input, showHistoricalColor);
+		}
+	}
+}
+
+#endregion

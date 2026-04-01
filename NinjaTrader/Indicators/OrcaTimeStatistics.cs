@@ -1,680 +1,551 @@
+#region Using declarations
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using System.Xml.Serialization;
-using NinjaTrader.Core;
+
+using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.Gui;
 using NinjaTrader.Gui.Chart;
-using NinjaTrader.Gui.NinjaScript;
+using NinjaTrader.NinjaScript;
+
 using SharpDX;
 using SharpDX.Direct2D1;
 using SharpDX.DirectWrite;
+#endregion
 
-namespace NinjaTrader.NinjaScript.Indicators;
-
-public class OrcaTimeStatistics : Indicator
+namespace NinjaTrader.NinjaScript.Indicators
 {
-	private double lastBid;
-
-	private double lastAsk;
-
-	private double prevLast;
-
-	private int lastDirection;
-
-	private List<double> barTickDelta;
-
-	private List<bool> barHasData;
-
-	private Brush dxVolumeBrush;
-
-	private Brush dxPositiveBrush;
-
-	private Brush dxNegativeBrush;
-
-	private Brush dxEffPosBrush;
-
-	private Brush dxEffNegBrush;
-
-	private Brush dxTextBrush;
-
-	private TextFormat dxTextFormat;
-
-	private Factory dwFactory;
-
-	[Display(Name = "Show Volume", Order = 1, GroupName = "Rows")]
-	public bool ShowVolume { get; set; }
-
-	[Display(Name = "Show Delta", Order = 2, GroupName = "Rows")]
-	public bool ShowDelta { get; set; }
-
-	[Display(Name = "Show Delta Efficiency", Order = 3, GroupName = "Rows", Description = "Delta / Range (ticks). Measures net delta per tick of price range.")]
-	public bool ShowDeltaEfficiency { get; set; }
-
-	[XmlIgnore]
-	[Display(Name = "1. Volume Color", Order = 1, GroupName = "Visual")]
-	public Brush VolumeColor { get; set; }
-
-	[Browsable(false)]
-	public string VolumeColorSerialize
+	public class OrcaTimeStatistics : Indicator
 	{
-		get
-		{
-			return Serialize.BrushToString(VolumeColor);
-		}
-		set
-		{
-			VolumeColor = Serialize.StringToBrush(value);
-		}
-	}
+		#region Private Fields
+		private double	lastBid;
+		private double	lastAsk;
+		private double	prevLast;
+		private int		lastDirection;
 
-	[XmlIgnore]
-	[Display(Name = "2. Positive Delta Color", Order = 2, GroupName = "Visual")]
-	public Brush PositiveDeltaColor { get; set; }
+		private List<double>	barTickDelta;
+		private List<bool>		barHasData;
 
-	[Browsable(false)]
-	public string PositiveDeltaColorSerialize
-	{
-		get
-		{
-			return Serialize.BrushToString(PositiveDeltaColor);
-		}
-		set
-		{
-			PositiveDeltaColor = Serialize.StringToBrush(value);
-		}
-	}
+		// DX Resources
+		private SharpDX.Direct2D1.Brush	dxVolumeBrush;
+		private SharpDX.Direct2D1.Brush	dxPositiveBrush;
+		private SharpDX.Direct2D1.Brush	dxNegativeBrush;
+		private SharpDX.Direct2D1.Brush	dxEffPosBrush;
+		private SharpDX.Direct2D1.Brush	dxEffNegBrush;
+		private SharpDX.Direct2D1.Brush	dxTextBrush;
+		private TextFormat				dxTextFormat;
+		private SharpDX.DirectWrite.Factory dwFactory;
+		#endregion
 
-	[XmlIgnore]
-	[Display(Name = "3. Negative Delta Color", Order = 3, GroupName = "Visual")]
-	public Brush NegativeDeltaColor { get; set; }
-
-	[Browsable(false)]
-	public string NegativeDeltaColorSerialize
-	{
-		get
+		protected override void OnStateChange()
 		{
-			return Serialize.BrushToString(NegativeDeltaColor);
-		}
-		set
-		{
-			NegativeDeltaColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[XmlIgnore]
-	[Display(Name = "4. Efficiency (+) Color", Order = 4, GroupName = "Visual", Description = "Color for bullish Delta Efficiency bars.")]
-	public Brush EfficiencyPosColor { get; set; }
-
-	[Browsable(false)]
-	public string EfficiencyPosColorSerialize
-	{
-		get
-		{
-			return Serialize.BrushToString(EfficiencyPosColor);
-		}
-		set
-		{
-			EfficiencyPosColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[XmlIgnore]
-	[Display(Name = "5. Efficiency (-) Color", Order = 5, GroupName = "Visual", Description = "Color for bearish Delta Efficiency bars.")]
-	public Brush EfficiencyNegColor { get; set; }
-
-	[Browsable(false)]
-	public string EfficiencyNegColorSerialize
-	{
-		get
-		{
-			return Serialize.BrushToString(EfficiencyNegColor);
-		}
-		set
-		{
-			EfficiencyNegColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[XmlIgnore]
-	[Display(Name = "6. Text Color", Order = 6, GroupName = "Visual")]
-	public Brush TextColor { get; set; }
-
-	[Browsable(false)]
-	public string TextColorSerialize
-	{
-		get
-		{
-			return Serialize.BrushToString(TextColor);
-		}
-		set
-		{
-			TextColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[Range(0.0, 1.0)]
-	[Display(Name = "7. Base Opacity", Order = 7, GroupName = "Visual", Description = "Minimum opacity for lowest-intensity values.")]
-	public double BaseOpacity { get; set; }
-
-	[Range(6, 24)]
-	[Display(Name = "8. Font Size", Order = 8, GroupName = "Visual")]
-	public int FontSize { get; set; }
-
-	protected override void OnStateChange()
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0007: Invalid comparison between Unknown and I4
-		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d6: Invalid comparison between Unknown and I4
-		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ce: Expected O, but got Unknown
-		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00df: Invalid comparison between Unknown and I4
-		//IL_0137: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013d: Invalid comparison between Unknown and I4
-		if ((int)((NinjaScript)this).State == 1)
-		{
-			((NinjaScriptBase)this).Name = "OrcaTimeStatistics";
-			((NinjaScript)this).Description = "Displays Time Statistics (Volume, Delta, Delta Efficiency) at the bottom of the chart.";
-			((NinjaScriptBase)this).Calculate = (Calculate)1;
-			((NinjaScriptBase)this).IsOverlay = false;
-			((NinjaScriptBase)this).DisplayInDataBox = true;
-			((IndicatorBase)this).IsSuspendedWhileInactive = true;
-			((NinjaScriptBase)this).BarsRequiredToPlot = 0;
-			VolumeColor = Brushes.SkyBlue;
-			PositiveDeltaColor = Brushes.LimeGreen;
-			NegativeDeltaColor = Brushes.Crimson;
-			EfficiencyPosColor = Brushes.MediumOrchid;
-			EfficiencyNegColor = Brushes.OrangeRed;
-			TextColor = Brushes.WhiteSmoke;
-			BaseOpacity = 0.25;
-			FontSize = 11;
-			ShowVolume = true;
-			ShowDelta = true;
-			ShowDeltaEfficiency = true;
-			((NinjaScriptBase)this).AddPlot(new Stroke((Brush)Brushes.Transparent, 1f), (PlotStyle)6, "TimeStatsDummy");
-		}
-		else if ((int)((NinjaScript)this).State != 2)
-		{
-			if ((int)((NinjaScript)this).State == 4)
+			if (State == State.SetDefaults)
 			{
-				barTickDelta = new List<double>(4096);
-				barHasData = new List<bool>(4096);
-				lastBid = double.NaN;
-				lastAsk = double.NaN;
-				prevLast = double.NaN;
-				lastDirection = 0;
+				Name						= "OrcaTimeStatistics";
+				Description					= "Displays Time Statistics (Volume, Delta, Delta Efficiency) at the bottom of the chart.";
+				Calculate					= Calculate.OnEachTick;
+				IsOverlay					= false;
+				DisplayInDataBox			= true;
+				IsSuspendedWhileInactive	= true;
+				BarsRequiredToPlot			= 0;
+
+				VolumeColor          = Brushes.SkyBlue;
+				PositiveDeltaColor   = Brushes.LimeGreen;
+				NegativeDeltaColor   = Brushes.Crimson;
+				EfficiencyPosColor   = Brushes.MediumOrchid;
+				EfficiencyNegColor   = Brushes.OrangeRed;
+				TextColor            = Brushes.Black;
+				BaseOpacity          = 0.25;
+				FontSize             = 11;
+
+				ShowVolume           = true;
+				ShowDelta            = true;
+				ShowDeltaEfficiency  = true;
+
+				AddPlot(new Stroke(Brushes.Transparent, 1), PlotStyle.Line, "TimeStatsDummy");
 			}
-			else if ((int)((NinjaScript)this).State == 8)
+			else if (State == State.Configure)
+			{
+			}
+			else if (State == State.DataLoaded)
+			{
+				barTickDelta   = new List<double>(4096);
+				barHasData     = new List<bool>(4096);
+
+				lastBid        = double.NaN;
+				lastAsk        = double.NaN;
+				prevLast       = double.NaN;
+				lastDirection  = 0;
+			}
+			else if (State == State.Terminated)
 			{
 				DisposeDxResources();
 			}
 		}
-	}
 
-	private void EnsureBarLists(int idx)
-	{
-		while (barTickDelta.Count <= idx)
+		private void EnsureBarLists(int idx)
 		{
-			barTickDelta.Add(0.0);
-			barHasData.Add(item: false);
+			while (barTickDelta.Count <= idx)
+			{
+				barTickDelta.Add(0);
+				barHasData.Add(false);
+			}
 		}
-	}
 
-	protected override void OnMarketData(MarketDataEventArgs e)
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0007: Invalid comparison between Unknown and I4
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Invalid comparison between Unknown and I4
-		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a3: Invalid comparison between Unknown and I4
-		if ((int)e.MarketDataType == 1)
+		protected override void OnMarketData(MarketDataEventArgs e)
 		{
-			lastBid = e.Price;
-		}
-		else if ((int)e.MarketDataType == 0)
-		{
-			lastAsk = e.Price;
-		}
-		else
-		{
-			if ((int)e.MarketDataType != 2)
+			if (e.MarketDataType == MarketDataType.Bid)
+				lastBid = e.Price;
+			else if (e.MarketDataType == MarketDataType.Ask)
+				lastAsk = e.Price;
+			else if (e.MarketDataType == MarketDataType.Last)
 			{
-				return;
-			}
-			if (e.Ask > 0.0 && !double.IsNaN(e.Ask))
-			{
-				lastAsk = e.Ask;
-			}
-			if (e.Bid > 0.0 && !double.IsNaN(e.Bid))
-			{
-				lastBid = e.Bid;
-			}
-			long num = e.Volume;
-			if ((int)((NinjaScriptBase)this).Instrument.MasterInstrument.InstrumentType == 7)
-			{
-				num = (long)Globals.ToCryptocurrencyVolume(num);
-			}
-			long num2 = 0L;
-			if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0.0 && lastBid > 0.0 && lastAsk >= lastBid)
-			{
-				if (e.Price >= lastAsk)
+				if (e.Ask > 0 && !double.IsNaN(e.Ask)) lastAsk = e.Ask;
+				if (e.Bid > 0 && !double.IsNaN(e.Bid)) lastBid = e.Bid;
+
+				long vol = e.Volume;
+				if (Instrument.MasterInstrument.InstrumentType == InstrumentType.CryptoCurrency)
+					vol = (long)Core.Globals.ToCryptocurrencyVolume(vol);
+
+				long signed = 0;
+				if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
 				{
-					num2 = num;
-				}
-				else if (e.Price <= lastBid)
-				{
-					num2 = -num;
+					if (e.Price >= lastAsk) signed = vol;
+					else if (e.Price <= lastBid) signed = -vol;
+					else if (!double.IsNaN(prevLast))
+					{
+						if (e.Price > prevLast) signed = vol;
+						else if (e.Price < prevLast) signed = -vol;
+						else signed = lastDirection * vol;
+					}
 				}
 				else if (!double.IsNaN(prevLast))
 				{
-					num2 = ((e.Price > prevLast) ? num : ((!(e.Price < prevLast)) ? (lastDirection * num) : (-num)));
+					if (e.Price > prevLast) signed = vol;
+					else if (e.Price < prevLast) signed = -vol;
+					else signed = lastDirection * vol;
 				}
-			}
-			else if (!double.IsNaN(prevLast))
-			{
-				num2 = ((e.Price > prevLast) ? num : ((!(e.Price < prevLast)) ? (lastDirection * num) : (-num)));
-			}
-			if (num2 > 0)
-			{
-				lastDirection = 1;
-			}
-			else if (num2 < 0)
-			{
-				lastDirection = -1;
-			}
-			prevLast = e.Price;
-			if (num2 != 0L && ((NinjaScriptBase)this).BarsArray[0].Count > 0)
-			{
-				int bar = ((NinjaScriptBase)this).BarsArray[0].GetBar(e.Time);
-				if (bar >= 0)
+
+				if (signed > 0) lastDirection = 1;
+				else if (signed < 0) lastDirection = -1;
+
+				prevLast = e.Price;
+
+				if (signed != 0 && BarsArray[0].Count > 0)
 				{
-					EnsureBarLists(bar);
-					barTickDelta[bar] += num2;
-					barHasData[bar] = true;
+					int primaryIdx = BarsArray[0].GetBar(e.Time);
+					if (primaryIdx >= 0)
+					{
+						EnsureBarLists(primaryIdx);
+						barTickDelta[primaryIdx] += signed;
+						barHasData[primaryIdx] = true;
+					}
 				}
 			}
 		}
-	}
 
-	protected override void OnBarUpdate()
-	{
-		if (((NinjaScriptBase)this).BarsInProgress == 0)
+		protected override void OnBarUpdate()
 		{
-			EnsureBarLists(((NinjaScriptBase)this).CurrentBar);
-			if (((NinjaScriptBase)this).Bars.IsFirstBarOfSession)
+			if (BarsInProgress == 0)
 			{
-				lastBid = double.NaN;
-				lastAsk = double.NaN;
-				prevLast = double.NaN;
+				EnsureBarLists(CurrentBar);
+
+				if (Bars.IsFirstBarOfSession)
+				{
+					lastBid = double.NaN;
+					lastAsk = double.NaN;
+					prevLast = double.NaN;
+				}
+
+				if (CurrentBar < barHasData.Count && barHasData[CurrentBar])
+					Value[0] = barTickDelta[CurrentBar];
+				else
+					Value[0] = double.NaN;
 			}
-			if (((NinjaScriptBase)this).CurrentBar < barHasData.Count && barHasData[((NinjaScriptBase)this).CurrentBar])
+		}
+
+		#region Drawing & Rendering
+		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
+		{
+			if (chartControl == null || chartScale == null || Bars == null || ChartBars == null)
+				return;
+
+			// Count how many rows are active
+			int rowCount = 0;
+			if (ShowVolume)           rowCount++;
+			if (ShowDelta)            rowCount++;
+			if (ShowDeltaEfficiency)  rowCount++;
+			if (rowCount == 0) return;
+
+			int fromIdx = ChartBars.FromIndex;
+			int toIdx   = ChartBars.ToIndex;
+			if (fromIdx < 0 || toIdx < 0 || fromIdx > toIdx)
+				return;
+
+			EnsureDxResources();
+			if (dxVolumeBrush == null) return;
+
+			float panelX = ChartPanel.X;
+			float panelW = ChartPanel.W;
+			float panelY = ChartPanel.Y;
+			float panelH = ChartPanel.H;
+
+			float rowH = panelH / rowCount;
+
+			// Build ordered list of active rows  (kind: 0=vol, 1=delta, 2=eff)
+			var rows = new List<(string label, int kind)>();
+			if (ShowVolume)           rows.Add(("Volume",       0));
+			if (ShowDelta)            rows.Add(("Delta",        1));
+			if (ShowDeltaEfficiency)  rows.Add(("Δ Efficiency", 2));
+
+			// Find per-row maximums over visible bars
+			double maxVol = 0, maxDel = 0, maxEff = 0;
+			double tickSize = Instrument.MasterInstrument.TickSize;
+			if (tickSize <= 0) tickSize = 0.25;
+
+			for (int i = fromIdx; i <= toIdx; i++)
 			{
-				((NinjaScriptBase)this).Value[0] = barTickDelta[((NinjaScriptBase)this).CurrentBar];
+				if (i >= Bars.Count) continue;
+
+				if (ShowVolume)
+				{
+					double v = Bars.GetVolume(i);
+					if (v > maxVol) maxVol = v;
+				}
+
+				if (i < barTickDelta.Count && barHasData[i])
+				{
+					if (ShowDelta)
+					{
+						double d = Math.Abs(barTickDelta[i]);
+						if (d > maxDel) maxDel = d;
+					}
+
+					if (ShowDeltaEfficiency)
+					{
+						double bdel  = barTickDelta[i];
+						double range = (Bars.GetHigh(i) - Bars.GetLow(i)) / tickSize;
+						if (range > 0)
+						{
+							double eff = Math.Abs(bdel) / range;
+							if (eff > maxEff) maxEff = eff;
+						}
+					}
+				}
 			}
+
+			if (maxVol == 0) maxVol = 1;
+			if (maxDel == 0) maxDel = 1;
+			if (maxEff == 0) maxEff = 1;
+
+			AntialiasMode oldAA = RenderTarget.AntialiasMode;
+			RenderTarget.AntialiasMode = AntialiasMode.Aliased;
+			var oldTAA = RenderTarget.TextAntialiasMode;
+			RenderTarget.TextAntialiasMode = SharpDX.Direct2D1.TextAntialiasMode.Cleartype;
+
+			for (int i = fromIdx; i <= toIdx; i++)
+			{
+				if (i >= Bars.Count) continue;
+
+				bool hasDelta = (i < barTickDelta.Count && barHasData[i]);
+
+				float x          = chartControl.GetXByBarIndex(ChartBars, i);
+				float barSpacing = GetBarSpacing(chartControl, i, fromIdx, toIdx);
+				float boxW       = barSpacing * 0.9f;
+				if (boxW < 2f) boxW = 2f;
+
+				double vol   = Bars.GetVolume(i);
+				double del   = hasDelta ? barTickDelta[i] : 0;
+				double range = (Bars.GetHigh(i) - Bars.GetLow(i)) / tickSize;
+				double eff   = (hasDelta && range > 0) ? del / range : 0;
+
+				for (int r = 0; r < rows.Count; r++)
+				{
+					float rowY = panelY + r * rowH;
+					int   kind = rows[r].kind;
+
+					switch (kind)
+					{
+						case 0: // Volume
+						{
+							double intens  = vol / maxVol;
+							float  opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * intens);
+							dxVolumeBrush.Opacity = opacity;
+							var rect = new RectangleF(x - boxW / 2, rowY + 1f, boxW, rowH - 2f);
+							RenderTarget.FillRectangle(rect, dxVolumeBrush);
+							if (boxW >= 20) DrawCenteredText(FormatVolume(vol), rect);
+							break;
+						}
+						case 1: // Delta
+						{
+							if (!hasDelta) break;
+							double intens  = Math.Abs(del) / maxDel;
+							float  opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * intens);
+							var dBrush = del >= 0 ? dxPositiveBrush : dxNegativeBrush;
+							dBrush.Opacity = opacity;
+							var rect = new RectangleF(x - boxW / 2, rowY + 1f, boxW, rowH - 2f);
+							RenderTarget.FillRectangle(rect, dBrush);
+							if (boxW >= 20) DrawCenteredText(FormatDelta(del), rect);
+							break;
+						}
+						case 2: // Delta Efficiency
+						{
+							if (!hasDelta || range <= 0) break;
+							double absEff  = Math.Abs(eff);
+							double intens  = absEff / maxEff;
+							float  opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * intens);
+							var eBrush = eff >= 0 ? dxEffPosBrush : dxEffNegBrush;
+							eBrush.Opacity = opacity;
+							var rect = new RectangleF(x - boxW / 2, rowY + 1f, boxW, rowH - 2f);
+							RenderTarget.FillRectangle(rect, eBrush);
+							if (boxW >= 20) DrawCenteredText(FormatEfficiency(eff), rect);
+							break;
+						}
+					}
+				}
+			}
+
+			// Row labels on the right edge
+			for (int r = 0; r < rows.Count; r++)
+				DrawRightLabel(rows[r].label, panelX + panelW - 5f, panelY + r * rowH, rowH);
+
+			RenderTarget.AntialiasMode     = oldAA;
+			RenderTarget.TextAntialiasMode = oldTAA;
+		}
+
+		private float GetBarSpacing(ChartControl chartControl, int barIdx, int fromIdx, int toIdx)
+		{
+			float barX = chartControl.GetXByBarIndex(ChartBars, barIdx);
+			if (barIdx < toIdx)
+				return chartControl.GetXByBarIndex(ChartBars, barIdx + 1) - barX;
+			else if (barIdx > fromIdx)
+				return barX - chartControl.GetXByBarIndex(ChartBars, barIdx - 1);
 			else
+				return (float)chartControl.BarWidth;
+		}
+
+		private string FormatVolume(double vol)
+		{
+			if (vol >= 1000)
+				return (vol / 1000.0).ToString("0.##") + "K";
+			return vol.ToString("0.##");
+		}
+
+		private string FormatDelta(double delta)
+		{
+			return delta.ToString("#,##0");
+		}
+
+		// No need to scale by 100 anymore since it's now Delta per tick of range.
+		private string FormatEfficiency(double eff)
+		{
+			return eff.ToString("+0.00;-0.00;0.00");
+		}
+
+		private void DrawCenteredText(string text, RectangleF rect)
+		{
+			if (dxTextFormat == null || dxTextBrush == null) return;
+			using (var layout = new TextLayout(dwFactory, text, dxTextFormat, rect.Width, rect.Height))
 			{
-				((NinjaScriptBase)this).Value[0] = double.NaN;
+				layout.TextAlignment      = TextAlignment.Center;
+				layout.ParagraphAlignment = ParagraphAlignment.Center;
+				RenderTarget.DrawTextLayout(new Vector2(rect.X, rect.Y), layout, dxTextBrush);
 			}
 		}
-	}
 
-	protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
-	{
-		//IL_028b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0290: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02a4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02a9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_061e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_062b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_042d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_044f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04db: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04f9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0595: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05b0: Unknown result type (might be due to invalid IL or missing references)
-		if (chartControl == null || chartScale == null || ((NinjaScriptBase)this).Bars == null || ((IndicatorRenderBase)this).ChartBars == null)
+		private void DrawRightLabel(string text, float x, float y, float h)
 		{
-			return;
-		}
-		int num = 0;
-		if (ShowVolume)
-		{
-			num++;
-		}
-		if (ShowDelta)
-		{
-			num++;
-		}
-		if (ShowDeltaEfficiency)
-		{
-			num++;
-		}
-		if (num == 0)
-		{
-			return;
-		}
-		int fromIndex = ((IndicatorRenderBase)this).ChartBars.FromIndex;
-		int toIndex = ((IndicatorRenderBase)this).ChartBars.ToIndex;
-		if (fromIndex < 0 || toIndex < 0 || fromIndex > toIndex)
-		{
-			return;
-		}
-		EnsureDxResources();
-		if (dxVolumeBrush == null)
-		{
-			return;
-		}
-		float num2 = ((IndicatorRenderBase)this).ChartPanel.X;
-		float num3 = ((IndicatorRenderBase)this).ChartPanel.W;
-		float num4 = ((IndicatorRenderBase)this).ChartPanel.Y;
-		float num5 = (float)((IndicatorRenderBase)this).ChartPanel.H / (float)num;
-		List<(string, int)> list = new List<(string, int)>();
-		if (ShowVolume)
-		{
-			list.Add(("Volume", 0));
-		}
-		if (ShowDelta)
-		{
-			list.Add(("Delta", 1));
-		}
-		if (ShowDeltaEfficiency)
-		{
-			list.Add(("Δ Efficiency", 2));
-		}
-		double num6 = 0.0;
-		double num7 = 0.0;
-		double num8 = 0.0;
-		double num9 = ((NinjaScriptBase)this).Instrument.MasterInstrument.TickSize;
-		if (num9 <= 0.0)
-		{
-			num9 = 0.25;
-		}
-		for (int i = fromIndex; i <= toIndex; i++)
-		{
-			if (i >= ((NinjaScriptBase)this).Bars.Count)
+			if (dxTextFormat == null || dxTextBrush == null) return;
+			using (var layout = new TextLayout(dwFactory, text, dxTextFormat, 100, h))
 			{
-				continue;
-			}
-			if (ShowVolume)
-			{
-				double num10 = ((NinjaScriptBase)this).Bars.GetVolume(i);
-				if (num10 > num6)
-				{
-					num6 = num10;
-				}
-			}
-			if (i >= barTickDelta.Count || !barHasData[i])
-			{
-				continue;
-			}
-			if (ShowDelta)
-			{
-				double num11 = Math.Abs(barTickDelta[i]);
-				if (num11 > num7)
-				{
-					num7 = num11;
-				}
-			}
-			if (!ShowDeltaEfficiency)
-			{
-				continue;
-			}
-			double value = barTickDelta[i];
-			double num12 = (((NinjaScriptBase)this).Bars.GetHigh(i) - ((NinjaScriptBase)this).Bars.GetLow(i)) / num9;
-			if (num12 > 0.0)
-			{
-				double num13 = Math.Abs(value) / num12;
-				if (num13 > num8)
-				{
-					num8 = num13;
-				}
+				layout.TextAlignment      = TextAlignment.Trailing;
+				layout.ParagraphAlignment = ParagraphAlignment.Center;
+				RenderTarget.DrawTextLayout(new Vector2(x - 100, y), layout, dxTextBrush);
 			}
 		}
-		if (num6 == 0.0)
-		{
-			num6 = 1.0;
-		}
-		if (num7 == 0.0)
-		{
-			num7 = 1.0;
-		}
-		if (num8 == 0.0)
-		{
-			num8 = 1.0;
-		}
-		AntialiasMode antialiasMode = ((IndicatorRenderBase)this).RenderTarget.AntialiasMode;
-		((IndicatorRenderBase)this).RenderTarget.AntialiasMode = (AntialiasMode)1;
-		TextAntialiasMode textAntialiasMode = ((IndicatorRenderBase)this).RenderTarget.TextAntialiasMode;
-		((IndicatorRenderBase)this).RenderTarget.TextAntialiasMode = (TextAntialiasMode)1;
-		RectangleF val3 = default(RectangleF);
-		RectangleF val5 = default(RectangleF);
-		RectangleF val2 = default(RectangleF);
-		for (int j = fromIndex; j <= toIndex; j++)
-		{
-			if (j >= ((NinjaScriptBase)this).Bars.Count)
-			{
-				continue;
-			}
-			bool flag = j < barTickDelta.Count && barHasData[j];
-			float num14 = chartControl.GetXByBarIndex(((IndicatorRenderBase)this).ChartBars, j);
-			float num15 = GetBarSpacing(chartControl, j, fromIndex, toIndex) * 0.9f;
-			if (num15 < 2f)
-			{
-				num15 = 2f;
-			}
-			double num16 = ((NinjaScriptBase)this).Bars.GetVolume(j);
-			double num17 = (flag ? barTickDelta[j] : 0.0);
-			double num18 = (((NinjaScriptBase)this).Bars.GetHigh(j) - ((NinjaScriptBase)this).Bars.GetLow(j)) / num9;
-			double num19 = ((flag && num18 > 0.0) ? (num17 / num18) : 0.0);
-			for (int k = 0; k < list.Count; k++)
-			{
-				float num20 = num4 + (float)k * num5;
-				switch (list[k].Item2)
-				{
-				case 0:
-				{
-					double num22 = num16 / num6;
-					float opacity2 = (float)(BaseOpacity + (1.0 - BaseOpacity) * num22);
-					dxVolumeBrush.Opacity = opacity2;
-					((RectangleF)(ref val3))._002Ector(num14 - num15 / 2f, num20 + 1f, num15, num5 - 2f);
-					((IndicatorRenderBase)this).RenderTarget.FillRectangle(val3, dxVolumeBrush);
-					if (num15 >= 20f)
-					{
-						DrawCenteredText(FormatVolume(num16), val3);
-					}
-					break;
-				}
-				case 1:
-					if (flag)
-					{
-						double num23 = Math.Abs(num17) / num7;
-						float opacity3 = (float)(BaseOpacity + (1.0 - BaseOpacity) * num23);
-						Brush val4 = ((num17 >= 0.0) ? dxPositiveBrush : dxNegativeBrush);
-						val4.Opacity = opacity3;
-						((RectangleF)(ref val5))._002Ector(num14 - num15 / 2f, num20 + 1f, num15, num5 - 2f);
-						((IndicatorRenderBase)this).RenderTarget.FillRectangle(val5, val4);
-						if (num15 >= 20f)
-						{
-							DrawCenteredText(FormatDelta(num17), val5);
-						}
-					}
-					break;
-				case 2:
-					if (flag && !(num18 <= 0.0))
-					{
-						double num21 = Math.Abs(num19) / num8;
-						float opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * num21);
-						Brush val = ((num19 >= 0.0) ? dxEffPosBrush : dxEffNegBrush);
-						val.Opacity = opacity;
-						((RectangleF)(ref val2))._002Ector(num14 - num15 / 2f, num20 + 1f, num15, num5 - 2f);
-						((IndicatorRenderBase)this).RenderTarget.FillRectangle(val2, val);
-						if (num15 >= 20f)
-						{
-							DrawCenteredText(FormatEfficiency(num19), val2);
-						}
-					}
-					break;
-				}
-			}
-		}
-		for (int l = 0; l < list.Count; l++)
-		{
-			DrawRightLabel(list[l].Item1, num2 + num3 - 5f, num4 + (float)l * num5, num5);
-		}
-		((IndicatorRenderBase)this).RenderTarget.AntialiasMode = antialiasMode;
-		((IndicatorRenderBase)this).RenderTarget.TextAntialiasMode = textAntialiasMode;
-	}
+		#endregion
 
-	private float GetBarSpacing(ChartControl chartControl, int barIdx, int fromIdx, int toIdx)
-	{
-		float num = chartControl.GetXByBarIndex(((IndicatorRenderBase)this).ChartBars, barIdx);
-		if (barIdx < toIdx)
+		#region DX Resources
+		private void EnsureDxResources()
 		{
-			return (float)chartControl.GetXByBarIndex(((IndicatorRenderBase)this).ChartBars, barIdx + 1) - num;
-		}
-		if (barIdx > fromIdx)
-		{
-			return num - (float)chartControl.GetXByBarIndex(((IndicatorRenderBase)this).ChartBars, barIdx - 1);
-		}
-		return (float)chartControl.BarWidth;
-	}
+			if (RenderTarget == null) return;
+			if (dxVolumeBrush != null) return;
 
-	private string FormatVolume(double vol)
-	{
-		if (vol >= 1000.0)
-		{
-			return (vol / 1000.0).ToString("0.##") + "K";
-		}
-		return vol.ToString("0.##");
-	}
+			dxVolumeBrush   = VolumeColor.ToDxBrush(RenderTarget);
+			dxPositiveBrush = PositiveDeltaColor.ToDxBrush(RenderTarget);
+			dxNegativeBrush = NegativeDeltaColor.ToDxBrush(RenderTarget);
+			dxEffPosBrush   = EfficiencyPosColor.ToDxBrush(RenderTarget);
+			dxEffNegBrush   = EfficiencyNegColor.ToDxBrush(RenderTarget);
+			dxTextBrush     = TextColor.ToDxBrush(RenderTarget);
 
-	private string FormatDelta(double delta)
-	{
-		return delta.ToString("#,##0");
-	}
+			dwFactory    = new SharpDX.DirectWrite.Factory();
+			dxTextFormat = new TextFormat(dwFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold,
+			                              SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
+		}
 
-	private string FormatEfficiency(double eff)
-	{
-		return eff.ToString("+0.00;-0.00;0.00");
-	}
+		private void DisposeDxResources()
+		{
+			if (dxVolumeBrush   != null) { dxVolumeBrush.Dispose();   dxVolumeBrush   = null; }
+			if (dxPositiveBrush != null) { dxPositiveBrush.Dispose(); dxPositiveBrush = null; }
+			if (dxNegativeBrush != null) { dxNegativeBrush.Dispose(); dxNegativeBrush = null; }
+			if (dxEffPosBrush   != null) { dxEffPosBrush.Dispose();   dxEffPosBrush   = null; }
+			if (dxEffNegBrush   != null) { dxEffNegBrush.Dispose();   dxEffNegBrush   = null; }
+			if (dxTextBrush     != null) { dxTextBrush.Dispose();     dxTextBrush     = null; }
+			if (dxTextFormat    != null) { dxTextFormat.Dispose();    dxTextFormat    = null; }
+			if (dwFactory       != null) { dwFactory.Dispose();       dwFactory       = null; }
+		}
 
-	private void DrawCenteredText(string text, RectangleF rect)
-	{
-		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Expected O, but got Unknown
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		if (dxTextFormat == null || dxTextBrush == null)
+		public override void OnRenderTargetChanged()
 		{
-			return;
+			DisposeDxResources();
+			base.OnRenderTargetChanged();
 		}
-		TextLayout val = new TextLayout(dwFactory, text, dxTextFormat, ((RectangleF)(ref rect)).Width, ((RectangleF)(ref rect)).Height);
-		try
-		{
-			((TextFormat)val).TextAlignment = (TextAlignment)2;
-			((TextFormat)val).ParagraphAlignment = (ParagraphAlignment)2;
-			((IndicatorRenderBase)this).RenderTarget.DrawTextLayout(new Vector2(((RectangleF)(ref rect)).X, ((RectangleF)(ref rect)).Y), val, dxTextBrush);
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
+		#endregion
 
-	private void DrawRightLabel(string text, float x, float y, float h)
-	{
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Expected O, but got Unknown
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		if (dxTextFormat == null || dxTextBrush == null)
-		{
-			return;
-		}
-		TextLayout val = new TextLayout(dwFactory, text, dxTextFormat, 100f, h);
-		try
-		{
-			((TextFormat)val).TextAlignment = (TextAlignment)1;
-			((TextFormat)val).ParagraphAlignment = (ParagraphAlignment)2;
-			((IndicatorRenderBase)this).RenderTarget.DrawTextLayout(new Vector2(x - 100f, y), val, dxTextBrush);
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
+		#region Properties
+		// ── Visibility Toggles ────────────────────────────────────────────────
+		[Display(Name = "Show Volume", Order = 1, GroupName = "Rows")]
+		public bool ShowVolume { get; set; }
 
-	private void EnsureDxResources()
-	{
-		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a7: Expected O, but got Unknown
-		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ca: Expected O, but got Unknown
-		if (((IndicatorRenderBase)this).RenderTarget != null && dxVolumeBrush == null)
-		{
-			dxVolumeBrush = DxExtensions.ToDxBrush(VolumeColor, ((IndicatorRenderBase)this).RenderTarget);
-			dxPositiveBrush = DxExtensions.ToDxBrush(PositiveDeltaColor, ((IndicatorRenderBase)this).RenderTarget);
-			dxNegativeBrush = DxExtensions.ToDxBrush(NegativeDeltaColor, ((IndicatorRenderBase)this).RenderTarget);
-			dxEffPosBrush = DxExtensions.ToDxBrush(EfficiencyPosColor, ((IndicatorRenderBase)this).RenderTarget);
-			dxEffNegBrush = DxExtensions.ToDxBrush(EfficiencyNegColor, ((IndicatorRenderBase)this).RenderTarget);
-			dxTextBrush = DxExtensions.ToDxBrush(TextColor, ((IndicatorRenderBase)this).RenderTarget);
-			dwFactory = new Factory();
-			dxTextFormat = new TextFormat(dwFactory, "Segoe UI", (FontWeight)700, (FontStyle)0, (float)FontSize);
-		}
-	}
+		[Display(Name = "Show Delta", Order = 2, GroupName = "Rows")]
+		public bool ShowDelta { get; set; }
 
-	private void DisposeDxResources()
-	{
-		if (dxVolumeBrush != null)
-		{
-			((DisposeBase)dxVolumeBrush).Dispose();
-			dxVolumeBrush = null;
-		}
-		if (dxPositiveBrush != null)
-		{
-			((DisposeBase)dxPositiveBrush).Dispose();
-			dxPositiveBrush = null;
-		}
-		if (dxNegativeBrush != null)
-		{
-			((DisposeBase)dxNegativeBrush).Dispose();
-			dxNegativeBrush = null;
-		}
-		if (dxEffPosBrush != null)
-		{
-			((DisposeBase)dxEffPosBrush).Dispose();
-			dxEffPosBrush = null;
-		}
-		if (dxEffNegBrush != null)
-		{
-			((DisposeBase)dxEffNegBrush).Dispose();
-			dxEffNegBrush = null;
-		}
-		if (dxTextBrush != null)
-		{
-			((DisposeBase)dxTextBrush).Dispose();
-			dxTextBrush = null;
-		}
-		if (dxTextFormat != null)
-		{
-			((DisposeBase)dxTextFormat).Dispose();
-			dxTextFormat = null;
-		}
-		if (dwFactory != null)
-		{
-			((DisposeBase)dwFactory).Dispose();
-			dwFactory = null;
-		}
-	}
+		[Display(Name = "Show Delta Efficiency", Order = 3, GroupName = "Rows",
+			Description = "Delta / Range (ticks). Measures net delta per tick of price range.")]
+		public bool ShowDeltaEfficiency { get; set; }
 
-	public override void OnRenderTargetChanged()
-	{
-		DisposeDxResources();
-		((IndicatorRenderBase)this).OnRenderTargetChanged();
+		// ── Colors ────────────────────────────────────────────────────────────
+		[XmlIgnore]
+		[Display(Name = "1. Volume Color", Order = 1, GroupName = "Visual")]
+		public System.Windows.Media.Brush VolumeColor { get; set; }
+		[Browsable(false)]
+		public string VolumeColorSerialize
+		{
+			get { return Serialize.BrushToString(VolumeColor); }
+			set { VolumeColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "2. Positive Delta Color", Order = 2, GroupName = "Visual")]
+		public System.Windows.Media.Brush PositiveDeltaColor { get; set; }
+		[Browsable(false)]
+		public string PositiveDeltaColorSerialize
+		{
+			get { return Serialize.BrushToString(PositiveDeltaColor); }
+			set { PositiveDeltaColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "3. Negative Delta Color", Order = 3, GroupName = "Visual")]
+		public System.Windows.Media.Brush NegativeDeltaColor { get; set; }
+		[Browsable(false)]
+		public string NegativeDeltaColorSerialize
+		{
+			get { return Serialize.BrushToString(NegativeDeltaColor); }
+			set { NegativeDeltaColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "4. Efficiency (+) Color", Order = 4, GroupName = "Visual",
+			Description = "Color for bullish Delta Efficiency bars.")]
+		public System.Windows.Media.Brush EfficiencyPosColor { get; set; }
+		[Browsable(false)]
+		public string EfficiencyPosColorSerialize
+		{
+			get { return Serialize.BrushToString(EfficiencyPosColor); }
+			set { EfficiencyPosColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "5. Efficiency (-) Color", Order = 5, GroupName = "Visual",
+			Description = "Color for bearish Delta Efficiency bars.")]
+		public System.Windows.Media.Brush EfficiencyNegColor { get; set; }
+		[Browsable(false)]
+		public string EfficiencyNegColorSerialize
+		{
+			get { return Serialize.BrushToString(EfficiencyNegColor); }
+			set { EfficiencyNegColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "6. Text Color", Order = 6, GroupName = "Visual")]
+		public System.Windows.Media.Brush TextColor { get; set; }
+		[Browsable(false)]
+		public string TextColorSerialize
+		{
+			get { return Serialize.BrushToString(TextColor); }
+			set { TextColor = Serialize.StringToBrush(value); }
+		}
+
+		[Range(0.0, 1.0)]
+		[Display(Name = "7. Base Opacity", Order = 7, GroupName = "Visual",
+			Description = "Minimum opacity for lowest-intensity values.")]
+		public double BaseOpacity { get; set; }
+
+		[Range(6, 24)]
+		[Display(Name = "8. Font Size", Order = 8, GroupName = "Visual")]
+		public int FontSize { get; set; }
+		#endregion
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaTimeStatistics[] cacheOrcaTimeStatistics;
+		public OrcaTimeStatistics OrcaTimeStatistics()
+		{
+			return OrcaTimeStatistics(Input);
+		}
+
+		public OrcaTimeStatistics OrcaTimeStatistics(ISeries<double> input)
+		{
+			if (cacheOrcaTimeStatistics != null)
+				for (int idx = 0; idx < cacheOrcaTimeStatistics.Length; idx++)
+					if (cacheOrcaTimeStatistics[idx] != null &&  cacheOrcaTimeStatistics[idx].EqualsInput(input))
+						return cacheOrcaTimeStatistics[idx];
+			return CacheIndicator<OrcaTimeStatistics>(new OrcaTimeStatistics(), input, ref cacheOrcaTimeStatistics);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaTimeStatistics OrcaTimeStatistics()
+		{
+			return indicator.OrcaTimeStatistics(Input);
+		}
+
+		public Indicators.OrcaTimeStatistics OrcaTimeStatistics(ISeries<double> input )
+		{
+			return indicator.OrcaTimeStatistics(input);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaTimeStatistics OrcaTimeStatistics()
+		{
+			return indicator.OrcaTimeStatistics(Input);
+		}
+
+		public Indicators.OrcaTimeStatistics OrcaTimeStatistics(ISeries<double> input )
+		{
+			return indicator.OrcaTimeStatistics(input);
+		}
+	}
+}
+
+#endregion

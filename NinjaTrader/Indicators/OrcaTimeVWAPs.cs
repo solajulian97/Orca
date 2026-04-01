@@ -35,7 +35,6 @@ public enum RollingVwapPeriod
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-
 	public class OrcaVwapSession 
 	{
 		public double SumVol;
@@ -130,9 +129,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RthFillColor23 = Brushes.Orange;
 				RthFillOpacity23 = 0;
 
-				// Rolling Defaults
+				// === 3. Rolling Defaults ===
 				RollingShowVWAP = true;
 				RollingPeriod = RollingVwapPeriod.Day1;
+				MinutesPerDay = 1380;
 				RollingShowDev1 = true;
 				RollingDev1Mult = 1.0;
 				RollingShowDev2 = true;
@@ -163,7 +163,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				WeeklyFillOpacity23 = 0;
 
 				// === Plots ===
-				// 0 - 6: Globex
 				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Solid, 2), PlotStyle.Line, "Globex VWAP");
 				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1), PlotStyle.Line, "Globex Dev 1 Upper");
 				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1), PlotStyle.Line, "Globex Dev 1 Lower");
@@ -171,7 +170,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dot, 1), PlotStyle.Line, "Globex Dev 2 Lower");
 				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Globex Dev 3 Upper");
 				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Globex Dev 3 Lower");
-				// 7 - 13: Rth
+
 				AddPlot(new Stroke(Brushes.Orange, DashStyleHelper.Solid, 2), PlotStyle.Line, "Rth VWAP");
 				AddPlot(new Stroke(Brushes.Orange, DashStyleHelper.Dash, 1), PlotStyle.Line, "Rth Dev 1 Upper");
 				AddPlot(new Stroke(Brushes.Orange, DashStyleHelper.Dash, 1), PlotStyle.Line, "Rth Dev 1 Lower");
@@ -179,7 +178,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				AddPlot(new Stroke(Brushes.Orange, DashStyleHelper.Dot, 1), PlotStyle.Line, "Rth Dev 2 Lower");
 				AddPlot(new Stroke(Brushes.Orange, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Rth Dev 3 Upper");
 				AddPlot(new Stroke(Brushes.Orange, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Rth Dev 3 Lower");
-				// 14 - 20: Rolling
+
 				AddPlot(new Stroke(Brushes.LimeGreen, DashStyleHelper.Solid, 2), PlotStyle.Line, "Rolling VWAP");
 				AddPlot(new Stroke(Brushes.LimeGreen, DashStyleHelper.Dash, 1), PlotStyle.Line, "Rolling Dev 1 Upper");
 				AddPlot(new Stroke(Brushes.LimeGreen, DashStyleHelper.Dash, 1), PlotStyle.Line, "Rolling Dev 1 Lower");
@@ -187,7 +186,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				AddPlot(new Stroke(Brushes.LimeGreen, DashStyleHelper.Dot, 1), PlotStyle.Line, "Rolling Dev 2 Lower");
 				AddPlot(new Stroke(Brushes.LimeGreen, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Rolling Dev 3 Upper");
 				AddPlot(new Stroke(Brushes.LimeGreen, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Rolling Dev 3 Lower");
-				// 21 - 27: Weekly
+
 				AddPlot(new Stroke(Brushes.Plum, DashStyleHelper.Solid, 2), PlotStyle.Line, "Weekly VWAP");
 				AddPlot(new Stroke(Brushes.Plum, DashStyleHelper.Dash, 1), PlotStyle.Line, "Weekly Dev 1 Upper");
 				AddPlot(new Stroke(Brushes.Plum, DashStyleHelper.Dash, 1), PlotStyle.Line, "Weekly Dev 1 Lower");
@@ -231,12 +230,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (start >= end) return false;
 			
-			// Get Sunday of the end date's week (or previous week if we are early Sunday)
 			int diff = (int)end.DayOfWeek - (int)DayOfWeek.Sunday;
 			if (diff < 0) diff += 7;
 			DateTime sunday = end.Date.AddDays(-diff);
 			
-			// If we are before the target time on Sunday, the weekly anchor is the PREVIOUS Sunday
 			if (end.DayOfWeek == DayOfWeek.Sunday && end.TimeOfDay < target)
 			{
 				sunday = sunday.AddDays(-7);
@@ -255,11 +252,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (CurrentBar != lastBarIndex) 
 			{
-				tickVol = currentVolume; // New bar starts handling the entire accumulated volume
+				tickVol = currentVolume;
 			}
 			else 
 			{
-				tickVol = currentVolume - lastBarVolume; // Intra-bar tick volume
+				tickVol = currentVolume - lastBarVolume;
 			}
 			
 			lastBarVolume = currentVolume;
@@ -271,7 +268,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DateTime time0 = Time[0];
 			DateTime time1 = (CurrentBar > 0) ? Time[1] : time0;
 
-			// --- Globex VWAP ---
 			if (GlobexShowVWAP)
 			{
 				if (CrossedTime(time1, time0, GlobexStartTime)) globexSession.Reset();
@@ -284,7 +280,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (GlobexShowDev1) { Values[1][0] = vwap + sd * GlobexDev1Mult; Values[2][0] = vwap - sd * GlobexDev1Mult; }
 					if (GlobexShowDev2) { Values[3][0] = vwap + sd * GlobexDev2Mult; Values[4][0] = vwap - sd * GlobexDev2Mult; }
 					if (GlobexShowDev3) { Values[5][0] = vwap + sd * GlobexDev3Mult; Values[6][0] = vwap - sd * GlobexDev3Mult; }
-					// Draw Regions
 					if (GlobexFillOpacityCore > 0) {
 						Draw.Region(this, "GlobexR_CoreU", CurrentBar, 0, Values[0], Values[1], null, GlobexFillColorCore, GlobexFillOpacityCore);
 						Draw.Region(this, "GlobexR_CoreD", CurrentBar, 0, Values[0], Values[2], null, GlobexFillColorCore, GlobexFillOpacityCore);
@@ -300,7 +295,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			// --- Rth VWAP ---
 			if (RthShowVWAP)
 			{
 				if (CrossedTime(time1, time0, RthStartTime)) rthSession.Reset();
@@ -313,7 +307,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (RthShowDev1) { Values[8][0] = vwap + sd * RthDev1Mult; Values[9][0] = vwap - sd * RthDev1Mult; }
 					if (RthShowDev2) { Values[10][0] = vwap + sd * RthDev2Mult; Values[11][0] = vwap - sd * RthDev2Mult; }
 					if (RthShowDev3) { Values[12][0] = vwap + sd * RthDev3Mult; Values[13][0] = vwap - sd * RthDev3Mult; }
-					// Draw Regions
 					if (RthFillOpacityCore > 0) {
 						Draw.Region(this, "RthR_CoreU", CurrentBar, 0, Values[7], Values[8], null, RthFillColorCore, RthFillOpacityCore);
 						Draw.Region(this, "RthR_CoreD", CurrentBar, 0, Values[7], Values[9], null, RthFillColorCore, RthFillOpacityCore);
@@ -328,8 +321,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 				}
 			}
-
-			// --- Weekly VWAP ---
 			if (WeeklyShowVWAP)
 			{
 				if (CrossedWeekly(time1, time0, WeeklyStartTime)) weeklySession.Reset();
@@ -342,7 +333,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (WeeklyShowDev1) { Values[22][0] = vwap + sd * WeeklyDev1Mult; Values[23][0] = vwap - sd * WeeklyDev1Mult; }
 					if (WeeklyShowDev2) { Values[24][0] = vwap + sd * WeeklyDev2Mult; Values[25][0] = vwap - sd * WeeklyDev2Mult; }
 					if (WeeklyShowDev3) { Values[26][0] = vwap + sd * WeeklyDev3Mult; Values[27][0] = vwap - sd * WeeklyDev3Mult; }
-					// Draw Regions
 					if (WeeklyFillOpacityCore > 0) {
 						Draw.Region(this, "WeeklyR_CoreU", CurrentBar, 0, Values[21], Values[22], null, WeeklyFillColorCore, WeeklyFillOpacityCore);
 						Draw.Region(this, "WeeklyR_CoreD", CurrentBar, 0, Values[21], Values[23], null, WeeklyFillColorCore, WeeklyFillOpacityCore);
@@ -357,7 +347,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 				}
 			}
-			// --- 3. ROLLING VWAP ---
+
 			if (RollingShowVWAP)
 			{
 				DateTime minuteToken = new DateTime(time0.Year, time0.Month, time0.Day, time0.Hour, time0.Minute, 0);
@@ -367,7 +357,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						rollingHistory.Enqueue(rollingDeveloping);
 						
-						int maxBuckets = (int)RollingPeriod;
+						int maxBuckets;
+						if (RollingPeriod == RollingVwapPeriod.Day1) maxBuckets = MinutesPerDay;
+						else if (RollingPeriod == RollingVwapPeriod.Day5) maxBuckets = MinutesPerDay * 5;
+						else if (RollingPeriod == RollingVwapPeriod.Day20) maxBuckets = MinutesPerDay * 20;
+						else maxBuckets = (int)RollingPeriod;
+						
 						int missedMinutes = (int)(minuteToken - currentMinuteToken).TotalMinutes;
 
 						if (missedMinutes > 1 && missedMinutes <= 720) 
@@ -395,7 +390,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				else if (minuteToken < currentMinuteToken)
 				{
-					// Defensive reset if data reloads or time unexpectedly jumps backward
 					rollingHistory.Clear();
 					rollingDeveloping = new OrcaVwapBucket();
 					rollingTotal.Reset();
@@ -438,6 +432,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		#region Properties
+
 		// ------------------ 1. Globex VWAP ------------------
 		[NinjaScriptProperty]
 		[Display(Name="1. Show VWAP", Order=1, GroupName="1. Globex VWAP")]
@@ -602,31 +597,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public RollingVwapPeriod RollingPeriod { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show Dev 1", Order=3, GroupName="3. Rolling VWAP")]
+		[Range(1, 3000)]
+		[Display(Name="3. Minutes In Trading Day", Order=3, GroupName="3. Rolling VWAP", Description="1380 for Globex, 390 for RTH. Used to calculate Day1, Day5, Day20.")]
+		public int MinutesPerDay { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name="Show Dev 1", Order=4, GroupName="3. Rolling VWAP")]
 		public bool RollingShowDev1 { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Dev 1 Multiplier", Order=4, GroupName="3. Rolling VWAP")]
+		[Display(Name="Dev 1 Multiplier", Order=5, GroupName="3. Rolling VWAP")]
 		public double RollingDev1Mult { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show Dev 2", Order=5, GroupName="3. Rolling VWAP")]
+		[Display(Name="Show Dev 2", Order=6, GroupName="3. Rolling VWAP")]
 		public bool RollingShowDev2 { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Dev 2 Multiplier", Order=6, GroupName="3. Rolling VWAP")]
+		[Display(Name="Dev 2 Multiplier", Order=7, GroupName="3. Rolling VWAP")]
 		public double RollingDev2Mult { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show Dev 3", Order=7, GroupName="3. Rolling VWAP")]
+		[Display(Name="Show Dev 3", Order=8, GroupName="3. Rolling VWAP")]
 		public bool RollingShowDev3 { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Dev 3 Multiplier", Order=8, GroupName="3. Rolling VWAP")]
+		[Display(Name="Dev 3 Multiplier", Order=9, GroupName="3. Rolling VWAP")]
 		public double RollingDev3Mult { get; set; }
 
 		[XmlIgnore]
-		[Display(Name="Core-Dev1 Fill Color", Order=9, GroupName="3. Rolling VWAP")]
+		[Display(Name="Core-Dev1 Fill Color", Order=10, GroupName="3. Rolling VWAP")]
 		public Brush RollingFillColorCore { get; set; }
 		[Browsable(false)]
 		public string RollingFillColorCoreSerializable
@@ -636,11 +636,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Core-Dev1 Fill Opacity (0 = Off)", Order=10, GroupName="3. Rolling VWAP")]
+		[Display(Name="Core-Dev1 Fill Opacity (0 = Off)", Order=11, GroupName="3. Rolling VWAP")]
 		public int RollingFillOpacityCore { get; set; }
 
 		[XmlIgnore]
-		[Display(Name="Dev1-Dev2 Fill Color", Order=11, GroupName="3. Rolling VWAP")]
+		[Display(Name="Dev1-Dev2 Fill Color", Order=12, GroupName="3. Rolling VWAP")]
 		public Brush RollingFillColor12 { get; set; }
 		[Browsable(false)]
 		public string RollingFillColor12Serializable
@@ -650,11 +650,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Dev1-Dev2 Fill Opacity (0 = Off)", Order=12, GroupName="3. Rolling VWAP")]
+		[Display(Name="Dev1-Dev2 Fill Opacity (0 = Off)", Order=13, GroupName="3. Rolling VWAP")]
 		public int RollingFillOpacity12 { get; set; }
 
 		[XmlIgnore]
-		[Display(Name="Dev2-Dev3 Fill Color", Order=13, GroupName="3. Rolling VWAP")]
+		[Display(Name="Dev2-Dev3 Fill Color", Order=14, GroupName="3. Rolling VWAP")]
 		public Brush RollingFillColor23 { get; set; }
 		[Browsable(false)]
 		public string RollingFillColor23Serializable
@@ -664,7 +664,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Dev2-Dev3 Fill Opacity (0 = Off)", Order=14, GroupName="3. Rolling VWAP")]
+		[Display(Name="Dev2-Dev3 Fill Opacity (0 = Off)", Order=15, GroupName="3. Rolling VWAP")]
 		public int RollingFillOpacity23 { get; set; }
 
 
@@ -747,3 +747,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#endregion
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaTimeVWAPs[] cacheOrcaTimeVWAPs;
+		public OrcaTimeVWAPs OrcaTimeVWAPs(bool globexShowVWAP, TimeSpan globexStartTime, bool globexShowDev1, double globexDev1Mult, bool globexShowDev2, double globexDev2Mult, bool globexShowDev3, double globexDev3Mult, int globexFillOpacityCore, int globexFillOpacity12, int globexFillOpacity23, bool rthShowVWAP, TimeSpan rthStartTime, bool rthShowDev1, double rthDev1Mult, bool rthShowDev2, double rthDev2Mult, bool rthShowDev3, double rthDev3Mult, int rthFillOpacityCore, int rthFillOpacity12, int rthFillOpacity23, bool rollingShowVWAP, RollingVwapPeriod rollingPeriod, int minutesPerDay, bool rollingShowDev1, double rollingDev1Mult, bool rollingShowDev2, double rollingDev2Mult, bool rollingShowDev3, double rollingDev3Mult, int rollingFillOpacityCore, int rollingFillOpacity12, int rollingFillOpacity23, bool weeklyShowVWAP, TimeSpan weeklyStartTime, bool weeklyShowDev1, double weeklyDev1Mult, bool weeklyShowDev2, double weeklyDev2Mult, bool weeklyShowDev3, double weeklyDev3Mult, int weeklyFillOpacityCore, int weeklyFillOpacity12, int weeklyFillOpacity23)
+		{
+			return OrcaTimeVWAPs(Input, globexShowVWAP, globexStartTime, globexShowDev1, globexDev1Mult, globexShowDev2, globexDev2Mult, globexShowDev3, globexDev3Mult, globexFillOpacityCore, globexFillOpacity12, globexFillOpacity23, rthShowVWAP, rthStartTime, rthShowDev1, rthDev1Mult, rthShowDev2, rthDev2Mult, rthShowDev3, rthDev3Mult, rthFillOpacityCore, rthFillOpacity12, rthFillOpacity23, rollingShowVWAP, rollingPeriod, minutesPerDay, rollingShowDev1, rollingDev1Mult, rollingShowDev2, rollingDev2Mult, rollingShowDev3, rollingDev3Mult, rollingFillOpacityCore, rollingFillOpacity12, rollingFillOpacity23, weeklyShowVWAP, weeklyStartTime, weeklyShowDev1, weeklyDev1Mult, weeklyShowDev2, weeklyDev2Mult, weeklyShowDev3, weeklyDev3Mult, weeklyFillOpacityCore, weeklyFillOpacity12, weeklyFillOpacity23);
+		}
+
+		public OrcaTimeVWAPs OrcaTimeVWAPs(ISeries<double> input, bool globexShowVWAP, TimeSpan globexStartTime, bool globexShowDev1, double globexDev1Mult, bool globexShowDev2, double globexDev2Mult, bool globexShowDev3, double globexDev3Mult, int globexFillOpacityCore, int globexFillOpacity12, int globexFillOpacity23, bool rthShowVWAP, TimeSpan rthStartTime, bool rthShowDev1, double rthDev1Mult, bool rthShowDev2, double rthDev2Mult, bool rthShowDev3, double rthDev3Mult, int rthFillOpacityCore, int rthFillOpacity12, int rthFillOpacity23, bool rollingShowVWAP, RollingVwapPeriod rollingPeriod, int minutesPerDay, bool rollingShowDev1, double rollingDev1Mult, bool rollingShowDev2, double rollingDev2Mult, bool rollingShowDev3, double rollingDev3Mult, int rollingFillOpacityCore, int rollingFillOpacity12, int rollingFillOpacity23, bool weeklyShowVWAP, TimeSpan weeklyStartTime, bool weeklyShowDev1, double weeklyDev1Mult, bool weeklyShowDev2, double weeklyDev2Mult, bool weeklyShowDev3, double weeklyDev3Mult, int weeklyFillOpacityCore, int weeklyFillOpacity12, int weeklyFillOpacity23)
+		{
+			if (cacheOrcaTimeVWAPs != null)
+				for (int idx = 0; idx < cacheOrcaTimeVWAPs.Length; idx++)
+					if (cacheOrcaTimeVWAPs[idx] != null && cacheOrcaTimeVWAPs[idx].GlobexShowVWAP == globexShowVWAP && cacheOrcaTimeVWAPs[idx].GlobexStartTime == globexStartTime && cacheOrcaTimeVWAPs[idx].GlobexShowDev1 == globexShowDev1 && cacheOrcaTimeVWAPs[idx].GlobexDev1Mult == globexDev1Mult && cacheOrcaTimeVWAPs[idx].GlobexShowDev2 == globexShowDev2 && cacheOrcaTimeVWAPs[idx].GlobexDev2Mult == globexDev2Mult && cacheOrcaTimeVWAPs[idx].GlobexShowDev3 == globexShowDev3 && cacheOrcaTimeVWAPs[idx].GlobexDev3Mult == globexDev3Mult && cacheOrcaTimeVWAPs[idx].GlobexFillOpacityCore == globexFillOpacityCore && cacheOrcaTimeVWAPs[idx].GlobexFillOpacity12 == globexFillOpacity12 && cacheOrcaTimeVWAPs[idx].GlobexFillOpacity23 == globexFillOpacity23 && cacheOrcaTimeVWAPs[idx].RthShowVWAP == rthShowVWAP && cacheOrcaTimeVWAPs[idx].RthStartTime == rthStartTime && cacheOrcaTimeVWAPs[idx].RthShowDev1 == rthShowDev1 && cacheOrcaTimeVWAPs[idx].RthDev1Mult == rthDev1Mult && cacheOrcaTimeVWAPs[idx].RthShowDev2 == rthShowDev2 && cacheOrcaTimeVWAPs[idx].RthDev2Mult == rthDev2Mult && cacheOrcaTimeVWAPs[idx].RthShowDev3 == rthShowDev3 && cacheOrcaTimeVWAPs[idx].RthDev3Mult == rthDev3Mult && cacheOrcaTimeVWAPs[idx].RthFillOpacityCore == rthFillOpacityCore && cacheOrcaTimeVWAPs[idx].RthFillOpacity12 == rthFillOpacity12 && cacheOrcaTimeVWAPs[idx].RthFillOpacity23 == rthFillOpacity23 && cacheOrcaTimeVWAPs[idx].RollingShowVWAP == rollingShowVWAP && cacheOrcaTimeVWAPs[idx].RollingPeriod == rollingPeriod && cacheOrcaTimeVWAPs[idx].MinutesPerDay == minutesPerDay && cacheOrcaTimeVWAPs[idx].RollingShowDev1 == rollingShowDev1 && cacheOrcaTimeVWAPs[idx].RollingDev1Mult == rollingDev1Mult && cacheOrcaTimeVWAPs[idx].RollingShowDev2 == rollingShowDev2 && cacheOrcaTimeVWAPs[idx].RollingDev2Mult == rollingDev2Mult && cacheOrcaTimeVWAPs[idx].RollingShowDev3 == rollingShowDev3 && cacheOrcaTimeVWAPs[idx].RollingDev3Mult == rollingDev3Mult && cacheOrcaTimeVWAPs[idx].RollingFillOpacityCore == rollingFillOpacityCore && cacheOrcaTimeVWAPs[idx].RollingFillOpacity12 == rollingFillOpacity12 && cacheOrcaTimeVWAPs[idx].RollingFillOpacity23 == rollingFillOpacity23 && cacheOrcaTimeVWAPs[idx].WeeklyShowVWAP == weeklyShowVWAP && cacheOrcaTimeVWAPs[idx].WeeklyStartTime == weeklyStartTime && cacheOrcaTimeVWAPs[idx].WeeklyShowDev1 == weeklyShowDev1 && cacheOrcaTimeVWAPs[idx].WeeklyDev1Mult == weeklyDev1Mult && cacheOrcaTimeVWAPs[idx].WeeklyShowDev2 == weeklyShowDev2 && cacheOrcaTimeVWAPs[idx].WeeklyDev2Mult == weeklyDev2Mult && cacheOrcaTimeVWAPs[idx].WeeklyShowDev3 == weeklyShowDev3 && cacheOrcaTimeVWAPs[idx].WeeklyDev3Mult == weeklyDev3Mult && cacheOrcaTimeVWAPs[idx].WeeklyFillOpacityCore == weeklyFillOpacityCore && cacheOrcaTimeVWAPs[idx].WeeklyFillOpacity12 == weeklyFillOpacity12 && cacheOrcaTimeVWAPs[idx].WeeklyFillOpacity23 == weeklyFillOpacity23 && cacheOrcaTimeVWAPs[idx].EqualsInput(input))
+						return cacheOrcaTimeVWAPs[idx];
+			return CacheIndicator<OrcaTimeVWAPs>(new OrcaTimeVWAPs(){ GlobexShowVWAP = globexShowVWAP, GlobexStartTime = globexStartTime, GlobexShowDev1 = globexShowDev1, GlobexDev1Mult = globexDev1Mult, GlobexShowDev2 = globexShowDev2, GlobexDev2Mult = globexDev2Mult, GlobexShowDev3 = globexShowDev3, GlobexDev3Mult = globexDev3Mult, GlobexFillOpacityCore = globexFillOpacityCore, GlobexFillOpacity12 = globexFillOpacity12, GlobexFillOpacity23 = globexFillOpacity23, RthShowVWAP = rthShowVWAP, RthStartTime = rthStartTime, RthShowDev1 = rthShowDev1, RthDev1Mult = rthDev1Mult, RthShowDev2 = rthShowDev2, RthDev2Mult = rthDev2Mult, RthShowDev3 = rthShowDev3, RthDev3Mult = rthDev3Mult, RthFillOpacityCore = rthFillOpacityCore, RthFillOpacity12 = rthFillOpacity12, RthFillOpacity23 = rthFillOpacity23, RollingShowVWAP = rollingShowVWAP, RollingPeriod = rollingPeriod, MinutesPerDay = minutesPerDay, RollingShowDev1 = rollingShowDev1, RollingDev1Mult = rollingDev1Mult, RollingShowDev2 = rollingShowDev2, RollingDev2Mult = rollingDev2Mult, RollingShowDev3 = rollingShowDev3, RollingDev3Mult = rollingDev3Mult, RollingFillOpacityCore = rollingFillOpacityCore, RollingFillOpacity12 = rollingFillOpacity12, RollingFillOpacity23 = rollingFillOpacity23, WeeklyShowVWAP = weeklyShowVWAP, WeeklyStartTime = weeklyStartTime, WeeklyShowDev1 = weeklyShowDev1, WeeklyDev1Mult = weeklyDev1Mult, WeeklyShowDev2 = weeklyShowDev2, WeeklyDev2Mult = weeklyDev2Mult, WeeklyShowDev3 = weeklyShowDev3, WeeklyDev3Mult = weeklyDev3Mult, WeeklyFillOpacityCore = weeklyFillOpacityCore, WeeklyFillOpacity12 = weeklyFillOpacity12, WeeklyFillOpacity23 = weeklyFillOpacity23 }, input, ref cacheOrcaTimeVWAPs);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaTimeVWAPs OrcaTimeVWAPs(bool globexShowVWAP, TimeSpan globexStartTime, bool globexShowDev1, double globexDev1Mult, bool globexShowDev2, double globexDev2Mult, bool globexShowDev3, double globexDev3Mult, int globexFillOpacityCore, int globexFillOpacity12, int globexFillOpacity23, bool rthShowVWAP, TimeSpan rthStartTime, bool rthShowDev1, double rthDev1Mult, bool rthShowDev2, double rthDev2Mult, bool rthShowDev3, double rthDev3Mult, int rthFillOpacityCore, int rthFillOpacity12, int rthFillOpacity23, bool rollingShowVWAP, RollingVwapPeriod rollingPeriod, int minutesPerDay, bool rollingShowDev1, double rollingDev1Mult, bool rollingShowDev2, double rollingDev2Mult, bool rollingShowDev3, double rollingDev3Mult, int rollingFillOpacityCore, int rollingFillOpacity12, int rollingFillOpacity23, bool weeklyShowVWAP, TimeSpan weeklyStartTime, bool weeklyShowDev1, double weeklyDev1Mult, bool weeklyShowDev2, double weeklyDev2Mult, bool weeklyShowDev3, double weeklyDev3Mult, int weeklyFillOpacityCore, int weeklyFillOpacity12, int weeklyFillOpacity23)
+		{
+			return indicator.OrcaTimeVWAPs(Input, globexShowVWAP, globexStartTime, globexShowDev1, globexDev1Mult, globexShowDev2, globexDev2Mult, globexShowDev3, globexDev3Mult, globexFillOpacityCore, globexFillOpacity12, globexFillOpacity23, rthShowVWAP, rthStartTime, rthShowDev1, rthDev1Mult, rthShowDev2, rthDev2Mult, rthShowDev3, rthDev3Mult, rthFillOpacityCore, rthFillOpacity12, rthFillOpacity23, rollingShowVWAP, rollingPeriod, minutesPerDay, rollingShowDev1, rollingDev1Mult, rollingShowDev2, rollingDev2Mult, rollingShowDev3, rollingDev3Mult, rollingFillOpacityCore, rollingFillOpacity12, rollingFillOpacity23, weeklyShowVWAP, weeklyStartTime, weeklyShowDev1, weeklyDev1Mult, weeklyShowDev2, weeklyDev2Mult, weeklyShowDev3, weeklyDev3Mult, weeklyFillOpacityCore, weeklyFillOpacity12, weeklyFillOpacity23);
+		}
+
+		public Indicators.OrcaTimeVWAPs OrcaTimeVWAPs(ISeries<double> input , bool globexShowVWAP, TimeSpan globexStartTime, bool globexShowDev1, double globexDev1Mult, bool globexShowDev2, double globexDev2Mult, bool globexShowDev3, double globexDev3Mult, int globexFillOpacityCore, int globexFillOpacity12, int globexFillOpacity23, bool rthShowVWAP, TimeSpan rthStartTime, bool rthShowDev1, double rthDev1Mult, bool rthShowDev2, double rthDev2Mult, bool rthShowDev3, double rthDev3Mult, int rthFillOpacityCore, int rthFillOpacity12, int rthFillOpacity23, bool rollingShowVWAP, RollingVwapPeriod rollingPeriod, int minutesPerDay, bool rollingShowDev1, double rollingDev1Mult, bool rollingShowDev2, double rollingDev2Mult, bool rollingShowDev3, double rollingDev3Mult, int rollingFillOpacityCore, int rollingFillOpacity12, int rollingFillOpacity23, bool weeklyShowVWAP, TimeSpan weeklyStartTime, bool weeklyShowDev1, double weeklyDev1Mult, bool weeklyShowDev2, double weeklyDev2Mult, bool weeklyShowDev3, double weeklyDev3Mult, int weeklyFillOpacityCore, int weeklyFillOpacity12, int weeklyFillOpacity23)
+		{
+			return indicator.OrcaTimeVWAPs(input, globexShowVWAP, globexStartTime, globexShowDev1, globexDev1Mult, globexShowDev2, globexDev2Mult, globexShowDev3, globexDev3Mult, globexFillOpacityCore, globexFillOpacity12, globexFillOpacity23, rthShowVWAP, rthStartTime, rthShowDev1, rthDev1Mult, rthShowDev2, rthDev2Mult, rthShowDev3, rthDev3Mult, rthFillOpacityCore, rthFillOpacity12, rthFillOpacity23, rollingShowVWAP, rollingPeriod, minutesPerDay, rollingShowDev1, rollingDev1Mult, rollingShowDev2, rollingDev2Mult, rollingShowDev3, rollingDev3Mult, rollingFillOpacityCore, rollingFillOpacity12, rollingFillOpacity23, weeklyShowVWAP, weeklyStartTime, weeklyShowDev1, weeklyDev1Mult, weeklyShowDev2, weeklyDev2Mult, weeklyShowDev3, weeklyDev3Mult, weeklyFillOpacityCore, weeklyFillOpacity12, weeklyFillOpacity23);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaTimeVWAPs OrcaTimeVWAPs(bool globexShowVWAP, TimeSpan globexStartTime, bool globexShowDev1, double globexDev1Mult, bool globexShowDev2, double globexDev2Mult, bool globexShowDev3, double globexDev3Mult, int globexFillOpacityCore, int globexFillOpacity12, int globexFillOpacity23, bool rthShowVWAP, TimeSpan rthStartTime, bool rthShowDev1, double rthDev1Mult, bool rthShowDev2, double rthDev2Mult, bool rthShowDev3, double rthDev3Mult, int rthFillOpacityCore, int rthFillOpacity12, int rthFillOpacity23, bool rollingShowVWAP, RollingVwapPeriod rollingPeriod, int minutesPerDay, bool rollingShowDev1, double rollingDev1Mult, bool rollingShowDev2, double rollingDev2Mult, bool rollingShowDev3, double rollingDev3Mult, int rollingFillOpacityCore, int rollingFillOpacity12, int rollingFillOpacity23, bool weeklyShowVWAP, TimeSpan weeklyStartTime, bool weeklyShowDev1, double weeklyDev1Mult, bool weeklyShowDev2, double weeklyDev2Mult, bool weeklyShowDev3, double weeklyDev3Mult, int weeklyFillOpacityCore, int weeklyFillOpacity12, int weeklyFillOpacity23)
+		{
+			return indicator.OrcaTimeVWAPs(Input, globexShowVWAP, globexStartTime, globexShowDev1, globexDev1Mult, globexShowDev2, globexDev2Mult, globexShowDev3, globexDev3Mult, globexFillOpacityCore, globexFillOpacity12, globexFillOpacity23, rthShowVWAP, rthStartTime, rthShowDev1, rthDev1Mult, rthShowDev2, rthDev2Mult, rthShowDev3, rthDev3Mult, rthFillOpacityCore, rthFillOpacity12, rthFillOpacity23, rollingShowVWAP, rollingPeriod, minutesPerDay, rollingShowDev1, rollingDev1Mult, rollingShowDev2, rollingDev2Mult, rollingShowDev3, rollingDev3Mult, rollingFillOpacityCore, rollingFillOpacity12, rollingFillOpacity23, weeklyShowVWAP, weeklyStartTime, weeklyShowDev1, weeklyDev1Mult, weeklyShowDev2, weeklyDev2Mult, weeklyShowDev3, weeklyDev3Mult, weeklyFillOpacityCore, weeklyFillOpacity12, weeklyFillOpacity23);
+		}
+
+		public Indicators.OrcaTimeVWAPs OrcaTimeVWAPs(ISeries<double> input , bool globexShowVWAP, TimeSpan globexStartTime, bool globexShowDev1, double globexDev1Mult, bool globexShowDev2, double globexDev2Mult, bool globexShowDev3, double globexDev3Mult, int globexFillOpacityCore, int globexFillOpacity12, int globexFillOpacity23, bool rthShowVWAP, TimeSpan rthStartTime, bool rthShowDev1, double rthDev1Mult, bool rthShowDev2, double rthDev2Mult, bool rthShowDev3, double rthDev3Mult, int rthFillOpacityCore, int rthFillOpacity12, int rthFillOpacity23, bool rollingShowVWAP, RollingVwapPeriod rollingPeriod, int minutesPerDay, bool rollingShowDev1, double rollingDev1Mult, bool rollingShowDev2, double rollingDev2Mult, bool rollingShowDev3, double rollingDev3Mult, int rollingFillOpacityCore, int rollingFillOpacity12, int rollingFillOpacity23, bool weeklyShowVWAP, TimeSpan weeklyStartTime, bool weeklyShowDev1, double weeklyDev1Mult, bool weeklyShowDev2, double weeklyDev2Mult, bool weeklyShowDev3, double weeklyDev3Mult, int weeklyFillOpacityCore, int weeklyFillOpacity12, int weeklyFillOpacity23)
+		{
+			return indicator.OrcaTimeVWAPs(input, globexShowVWAP, globexStartTime, globexShowDev1, globexDev1Mult, globexShowDev2, globexDev2Mult, globexShowDev3, globexDev3Mult, globexFillOpacityCore, globexFillOpacity12, globexFillOpacity23, rthShowVWAP, rthStartTime, rthShowDev1, rthDev1Mult, rthShowDev2, rthDev2Mult, rthShowDev3, rthDev3Mult, rthFillOpacityCore, rthFillOpacity12, rthFillOpacity23, rollingShowVWAP, rollingPeriod, minutesPerDay, rollingShowDev1, rollingDev1Mult, rollingShowDev2, rollingDev2Mult, rollingShowDev3, rollingDev3Mult, rollingFillOpacityCore, rollingFillOpacity12, rollingFillOpacity23, weeklyShowVWAP, weeklyStartTime, weeklyShowDev1, weeklyDev1Mult, weeklyShowDev2, weeklyDev2Mult, weeklyShowDev3, weeklyDev3Mult, weeklyFillOpacityCore, weeklyFillOpacity12, weeklyFillOpacity23);
+		}
+	}
+}
+
+#endregion

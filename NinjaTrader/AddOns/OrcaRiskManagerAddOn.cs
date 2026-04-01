@@ -301,7 +301,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 				gridContent.Children.Add(new TextBlock { Text = text, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center });
 				var b = new Button { 
 					Content = gridContent, 
-					Background = bg, Foreground = Brushes.White, HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(2), Padding = new Thickness(5), BorderThickness = new Thickness(0) 
+					Background = bg, Foreground = Brushes.GhostWhite, 
+					FontWeight = FontWeights.Bold,
+					HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(2), Padding = new Thickness(5), BorderThickness = new Thickness(0) 
 				};
 				if (onClick != null) b.Click += onClick;
 				return b;
@@ -328,7 +330,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Brush amberBrush = (Brush)new BrushConverter().ConvertFrom("#FFCC9944");
 			Brush steelBlue = Brushes.SteelBlue;
 
-			mainPanel.Children.Add(new TextBlock { Text = "Orca Risk Manager", Foreground = Brushes.White, FontFamily = new FontFamily("Arial"), FontSize = 14, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 5, 0, 10)});
+			mainPanel.Children.Add(new TextBlock { Text = "Orca Risk Manager", Foreground = Brushes.GhostWhite, FontSize = 14, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 5, 0, 10)});
 
 			// --- Quick Actions ---
 			StackPanel quickActions = new StackPanel();
@@ -402,14 +404,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			var atp1 = MakeGrid(2);
 			AddToGrid(atp1, new TextBlock{Text="Contracts", Foreground=Brushes.Gray, VerticalAlignment=VerticalAlignment.Center, HorizontalAlignment=HorizontalAlignment.Center}, 0);
-			txtContracts = new TextBox{Text="1", Background=darkGray, Foreground=Brushes.White, TextAlignment=TextAlignment.Center, Margin=new Thickness(2), BorderThickness=new Thickness(0)};
+			txtContracts = new TextBox{Text="1", Background=Brushes.White, Foreground=Brushes.Black, FontFamily=new FontFamily("Segoe UI"), FontSize=11, FontWeight=FontWeights.Bold, TextAlignment=TextAlignment.Center, Margin=new Thickness(2), BorderThickness=new Thickness(1), BorderBrush=Brushes.Black};
 			txtContracts.PreviewKeyDown += filterKeys;
 			AddToGrid(atp1, txtContracts, 1);
 			addPos.Children.Add(atp1);
 
 			var atp2 = MakeGrid(2);
 			AddToGrid(atp2, new TextBlock{Text="Risk $", Foreground=Brushes.Gray, VerticalAlignment=VerticalAlignment.Center, HorizontalAlignment=HorizontalAlignment.Center}, 0);
-			txtRisk = new TextBox{Text="500", Background=darkGray, Foreground=Brushes.White, TextAlignment=TextAlignment.Center, Margin=new Thickness(2), BorderThickness=new Thickness(0)};
+			txtRisk = new TextBox{Text="500", Background=Brushes.White, Foreground=Brushes.Black, FontFamily=new FontFamily("Segoe UI"), FontSize=11, FontWeight=FontWeights.Bold, TextAlignment=TextAlignment.Center, Margin=new Thickness(2), BorderThickness=new Thickness(1), BorderBrush=Brushes.Black};
 			txtRisk.PreviewKeyDown += filterKeys;
 			AddToGrid(atp2, txtRisk, 1);
 			addPos.Children.Add(atp2);
