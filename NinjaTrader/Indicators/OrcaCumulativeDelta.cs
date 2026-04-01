@@ -18,6 +18,12 @@ using SharpDX.Direct2D1;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
+	public enum CumulativeDeltaMode
+	{
+		BidAsk,
+		TickDirection
+	}
+
 	public class OrcaCumulativeDelta : Indicator
 	{
 		#region Private Fields
@@ -41,6 +47,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SharpDX.Direct2D1.Brush	dxDownBorderBrush;
 		private SharpDX.Direct2D1.Brush	dxWickBrush;
 		private SharpDX.Direct2D1.Brush	dxZeroBrush;
+		private SharpDX.Direct2D1.Brush	dxPriceLineBrush;
 		#endregion
 
 		protected override void OnStateChange()
@@ -62,13 +69,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ColorUpBorder		= Brushes.DodgerBlue;
 				ColorDownBorder		= Brushes.Tomato;
 				BarOpacity			= 0.5;
+				BorderOpacity		= 1.0;
 				WickColor			= Brushes.White;
 				ZeroLineColor		= Brushes.DimGray;
 				ZeroLineWidth		= 1;
 				BarWidthPercent		= 90;
+				ShowPriceLine		= true;
+				PriceLineWidth		= 1;
+				DeltaMode			= CumulativeDeltaMode.BidAsk;
 
-				// Visible plot drives auto-scaling (candles draw on top)
+				// DeltaClose is Values[0] so NT's right-side live label tracks the current delta close.
+				// DeltaHigh / DeltaLow are Values[1]/[2] to ensure the scale covers the full range.
+				// Lines are never drawn because base.OnRender() is not called.
 				AddPlot(new Stroke(Brushes.DimGray, 1), PlotStyle.Line, "DeltaClose");
+				AddPlot(new Stroke(Brushes.DimGray, 1), PlotStyle.Line, "DeltaHigh");
+				AddPlot(new Stroke(Brushes.DimGray, 1), PlotStyle.Line, "DeltaLow");
 			}
 			else if (State == State.Configure)
 			{
@@ -147,9 +162,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				long signed = 0;
 
-				if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid)
+				if (DeltaMode == CumulativeDeltaMode.BidAsk
+					&& !double.IsNaN(lastAsk) && !double.IsNaN(lastBid)
 					&& lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
 				{
+					// Bid/Ask mode: classify against the spread, fall back to tick direction mid-spread
 					if (price >= lastAsk)
 						signed = +vol;
 					else if (price <= lastBid)
@@ -158,14 +175,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						if (price > prevLast) signed = +vol;
 						else if (price < prevLast) signed = -vol;
-						else signed = lastDirection * vol;  // unchanged: carry last direction
+						else signed = lastDirection * vol;
 					}
 				}
 				else if (!double.IsNaN(prevLast))
 				{
+					// TickDirection mode (or BidAsk fallback when no quote data yet)
 					if (price > prevLast) signed = +vol;
 					else if (price < prevLast) signed = -vol;
-					else signed = lastDirection * vol;  // unchanged: carry last direction
+					else signed = lastDirection * vol;
 				}
 
 				prevLast = price;
@@ -210,19 +228,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 				prevLast = double.NaN;
 			}
 
-			// Drive auto-scaling
+			// Values[0]=DeltaClose drives the live right-axis label; [1]=High, [2]=Low drive scale range.
 			if (CurrentBar < barDeltaClose.Count && barHasData[CurrentBar])
-				Value[0] = barDeltaClose[CurrentBar];
+			{
+				Values[0][0] = barDeltaClose[CurrentBar];  // DeltaClose — primary live label
+				Values[1][0] = barDeltaHigh[CurrentBar];   // DeltaHigh  — scale max
+				Values[2][0] = barDeltaLow[CurrentBar];    // DeltaLow   — scale min
+			}
 			else
-				Value[0] = double.NaN;
+			{
+				Values[0][0] = double.NaN;
+				Values[1][0] = double.NaN;
+				Values[2][0] = double.NaN;
+			}
 		}
 
 		#region OnRender — OTM-style OHLC delta candles
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
-			// Base renders the DimGray line (and drives auto-scaling)
-			base.OnRender(chartControl, chartScale);
-
 			if (chartControl == null || chartScale == null || Bars == null)
 				return;
 			if (ChartBars == null || barDeltaOpen == null)
@@ -305,8 +328,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 				var bodyRect = new RectangleF(barX - halfW, bTop, halfW * 2, bH);
 				RenderTarget.FillRectangle(bodyRect, fillBrush);
 
-				// 3) Body border (full opacity, on top)
+				// 3) Body border
 				RenderTarget.DrawRectangle(bodyRect, borderBrush, 1f);
+			}
+
+			// Price line — walk backward from toIdx to find the last bar with real data
+			// (toIdx may point to an empty future slot when there's blank space on the right)
+			if (ShowPriceLine)
+			{
+				int lastData = toIdx;
+				while (lastData >= fromIdx && (lastData >= barDeltaClose.Count || !barHasData[lastData]))
+					lastData--;
+
+				if (lastData >= fromIdx)
+				{
+					double lastClose = barDeltaClose[lastData];
+					double lastOpen  = barDeltaOpen[lastData];
+					bool   lineIsUp  = lastClose >= lastOpen;
+					var    plBrush   = lineIsUp ? dxUpBorderBrush : dxDownBorderBrush;
+
+					float lineY    = chartScale.GetYByValue(lastClose);
+					float lastBarX = chartControl.GetXByBarIndex(ChartBars, lastData);
+					float rightX   = panelX + panelW;
+
+					if (lineY >= panelY && lineY <= panelY + panelH && lastBarX < rightX)
+						RenderTarget.DrawLine(
+							new Vector2(lastBarX, lineY),
+							new Vector2(rightX,   lineY),
+							plBrush, (float)PriceLineWidth);
+				}
 			}
 
 			RenderTarget.AntialiasMode = oldMode;
@@ -319,17 +369,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (RenderTarget == null) return;
 			if (dxUpFillBrush == null)
 			{
-				float opacity = (float)Math.Max(0.0, Math.Min(1.0, BarOpacity));
+				float fillOpacity   = (float)Math.Max(0.0, Math.Min(1.0, BarOpacity));
+				float borderOpacity = (float)Math.Max(0.0, Math.Min(1.0, BorderOpacity));
 
-				dxUpFillBrush   = ColorUp.ToDxBrush(RenderTarget);
-				dxUpFillBrush.Opacity = opacity;
-				dxDownFillBrush = ColorDown.ToDxBrush(RenderTarget);
-				dxDownFillBrush.Opacity = opacity;
+				dxUpFillBrush         = ColorUp.ToDxBrush(RenderTarget);
+				dxUpFillBrush.Opacity = fillOpacity;
+				dxDownFillBrush         = ColorDown.ToDxBrush(RenderTarget);
+				dxDownFillBrush.Opacity = fillOpacity;
 
-				dxUpBorderBrush		= ColorUpBorder.ToDxBrush(RenderTarget);
-				dxDownBorderBrush	= ColorDownBorder.ToDxBrush(RenderTarget);
+				dxUpBorderBrush           = ColorUpBorder.ToDxBrush(RenderTarget);
+				dxUpBorderBrush.Opacity   = borderOpacity;
+				dxDownBorderBrush           = ColorDownBorder.ToDxBrush(RenderTarget);
+				dxDownBorderBrush.Opacity   = borderOpacity;
 				dxWickBrush			= WickColor.ToDxBrush(RenderTarget);
+				dxWickBrush.Opacity = borderOpacity;
 				dxZeroBrush			= ZeroLineColor.ToDxBrush(RenderTarget);
+				dxPriceLineBrush    = Brushes.White.ToDxBrush(RenderTarget);
 			}
 		}
 
@@ -339,8 +394,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (dxDownFillBrush	  != null) { dxDownFillBrush.Dispose();	  dxDownFillBrush	= null; }
 			if (dxUpBorderBrush	  != null) { dxUpBorderBrush.Dispose();	  dxUpBorderBrush	= null; }
 			if (dxDownBorderBrush != null) { dxDownBorderBrush.Dispose(); dxDownBorderBrush	= null; }
-			if (dxWickBrush		  != null) { dxWickBrush.Dispose();		  dxWickBrush		= null; }
-			if (dxZeroBrush		  != null) { dxZeroBrush.Dispose();		  dxZeroBrush		= null; }
+			if (dxWickBrush		    != null) { dxWickBrush.Dispose();		    dxWickBrush		    = null; }
+			if (dxZeroBrush		    != null) { dxZeroBrush.Dispose();		    dxZeroBrush		    = null; }
+			if (dxPriceLineBrush    != null) { dxPriceLineBrush.Dispose();     dxPriceLineBrush    = null; }
 		}
 
 		public override void OnRenderTargetChanged()
@@ -380,6 +436,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Bar Opacity", Order = 5, GroupName = "Visual Parameters")]
 		public double BarOpacity { get; set; }
 
+		[Range(0.0, 1.0)]
+		[Display(Name = "Border Opacity", Order = 6, GroupName = "Visual Parameters")]
+		public double BorderOpacity { get; set; }
+
 		[XmlIgnore]
 		[Display(Name = "Wick Color", Order = 6, GroupName = "Visual Parameters")]
 		public System.Windows.Media.Brush WickColor { get; set; }
@@ -387,8 +447,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public string WickColorSerialize { get { return Serialize.BrushToString(WickColor); } set { WickColor = Serialize.StringToBrush(value); } }
 
 		[Range(1, 100)]
-		[Display(Name = "Bar Width %", Order = 7, GroupName = "Visual Parameters")]
+		[Display(Name = "Bar Width %", Order = 8, GroupName = "Visual Parameters")]
 		public int BarWidthPercent { get; set; }
+
+		[Display(Name = "Show Price Line", Order = 1, GroupName = "Price Line")]
+		public bool ShowPriceLine { get; set; }
+
+		[Range(1, 5)]
+		[Display(Name = "Price Line Width", Order = 2, GroupName = "Price Line")]
+		public int PriceLineWidth { get; set; }
 
 		[XmlIgnore]
 		[Display(Name = "Zero Line Color", Order = 1, GroupName = "Reference Levels")]
@@ -399,6 +466,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(1, 5)]
 		[Display(Name = "Zero Line Width", Order = 2, GroupName = "Reference Levels")]
 		public int ZeroLineWidth { get; set; }
+
+		[Display(Name = "Delta Mode", Order = 1, GroupName = "Delta Calculation",
+			Description = "BidAsk: classifies each trade against the bid/ask spread (most accurate live). TickDirection: classifies by whether price moved up or down tick-to-tick (works historically and live).")]
+		public CumulativeDeltaMode DeltaMode { get; set; }
 
 		#endregion
 	}

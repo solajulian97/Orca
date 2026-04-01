@@ -1,0 +1,10 @@
+using System.ComponentModel;
+
+namespace NinjaTrader.NinjaScript.SuperDomColumns;
+
+[TypeConverter("NinjaTrader.Custom.ResourceEnumConverter")]
+public enum RecentResetWhen
+{
+	PriceReturns,
+	BidAskChange
+}

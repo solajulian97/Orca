@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <AssemblyName>NinjaTrader.Custom</AssemblyName>
+    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <UseWPF>True</UseWPF>
+    <TargetFramework>net40</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup>
+    <RootNamespace />
+  </PropertyGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <Reference Include="Infralution.Localization.Wpf" />
+    <Reference Include="NinjaTrader.Gui" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="NinjaTrader.Core" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="NinjaTrader.Vendor">
+      <HintPath>..\..\..\..\..\Documents\NinjaTrader 8\bin\Custom\NinjaTrader.Vendor.dll</HintPath>
+    </Reference>
+    <Reference Include="OTMDeltaBarFree">
+      <HintPath>..\..\..\..\..\Documents\NinjaTrader 8\bin\Custom\OTMDeltaBarFree.dll</HintPath>
+    </Reference>
+    <Reference Include="T3000_MGI">
+      <HintPath>..\..\..\..\..\Documents\NinjaTrader 8\bin\Custom\T3000_MGI.dll</HintPath>
+    </Reference>
+    <Reference Include="SharpDX.Direct2D1" />
+    <Reference Include="SharpDX" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+</Project>

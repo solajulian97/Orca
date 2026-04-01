@@ -115,7 +115,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 								}
 								else
 								{
-									colDef.Width = new GridLength(280);
+									colDef.Width = new GridLength(240);
 									el.Visibility = Visibility.Visible;
 								}
 							}
@@ -190,7 +190,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 							tabGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
 						}
 
-						tabGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(280) });
+						tabGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(240) });
 						
 						Grid.SetColumn(orcaPanel, tabGrid.ColumnDefinitions.Count - 1);
 						tabGrid.Children.Add(orcaPanel);
@@ -224,6 +224,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private TextBox txtRisk;
 		private TextBlock txtPnL;
 		
+		private Button btnBuyLmt;
+		private Button btnSellLmt;
+		private Button btnBuyStop;
+		private Button btnSellStop;
+
+		// Drag-order state
+		private bool isDragOrderActive = false;
+		private string dragOrderType = null;
+		private System.Windows.Shapes.Line dragLine = null;
+		private Canvas dragCanvas = null;
+		private Border dragLabelPill = null;
+		private TextBlock dragLabelTxt = null;
+		
 		private bool isLongSelected = true;
 		private bool isFixedDollar = true;
 		private OrderType selectedOrderType = OrderType.Market;
@@ -244,7 +257,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private bool isCalculatorActive = false;
 		private NinjaScriptBase calcOwner = null;
 		private NinjaTrader.NinjaScript.DrawingTools.HorizontalLine hEntry, hStop, hTarget;
-		private NinjaTrader.NinjaScript.DrawingTools.Text tStop, tTarget;
+		
+		private Canvas calcCanvas;
+		private Border cEntryPill, cStopPill, cTargetPill;
+		private TextBlock cEntryTxt, cStopTxt, cTargetTxt;
+		private EventHandler renderHandler;
 
 		public OrcaRiskPanel(ChartTab tab)
 		{
@@ -268,7 +285,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Grid MainGrid = new Grid
 			{
 				Background = (Brush)new BrushConverter().ConvertFrom("#FF1B1B1B"),
-				Width = 280,
+				Width = 240,
 				HorizontalAlignment = HorizontalAlignment.Right,
 				VerticalAlignment = VerticalAlignment.Stretch,
 				Margin = new Thickness(0, 0, 0, 0)
@@ -280,7 +297,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 			MainGrid.Children.Add(scrollViewer);
 
 			Button CreateBtn(string text, Brush bg, RoutedEventHandler onClick = null) {
-				var b = new Button { Content = text, Background = bg, Foreground = Brushes.White, Margin = new Thickness(2), Padding = new Thickness(5), BorderThickness = new Thickness(0) };
+				var gridContent = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+				gridContent.Children.Add(new TextBlock { Text = text, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center });
+				var b = new Button { 
+					Content = gridContent, 
+					Background = bg, Foreground = Brushes.White, HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(2), Padding = new Thickness(5), BorderThickness = new Thickness(0) 
+				};
 				if (onClick != null) b.Click += onClick;
 				return b;
 			}
@@ -306,7 +328,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Brush amberBrush = (Brush)new BrushConverter().ConvertFrom("#FFCC9944");
 			Brush steelBlue = Brushes.SteelBlue;
 
-			mainPanel.Children.Add(new TextBlock { Text = "= Orca Risk Manager NT =", Foreground = Brushes.White, FontFamily = new FontFamily("Arial"), FontSize = 14, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 5, 0, 10)});
+			mainPanel.Children.Add(new TextBlock { Text = "Orca Risk Manager", Foreground = Brushes.White, FontFamily = new FontFamily("Arial"), FontSize = 14, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 5, 0, 10)});
 
 			// --- Quick Actions ---
 			StackPanel quickActions = new StackPanel();
@@ -410,8 +432,21 @@ namespace NinjaTrader.NinjaScript.AddOns
 			btnBuyAsk = CreateBtn("Buy Ask", darkGray, (s, e) => ExecuteFastCommand("BuyAsk"));
 			btnSellBid = CreateBtn("Sell Bid", darkGray, (s, e) => ExecuteFastCommand("SellBid"));
 			AddToGrid(fe2, btnBuyAsk, 0); AddToGrid(fe2, btnSellBid, 1);
-			btnBreakeven = CreateBtn("Move To Breakeven", darkGray, (s, e) => MoveToBreakeven());
-			fastExec.Children.Add(fe1); fastExec.Children.Add(fe2); fastExec.Children.Add(btnBreakeven);
+			
+			var fe3 = MakeGrid(2);
+			Brush tealBrush = (Brush)new BrushConverter().ConvertFrom("#FF008080");
+			btnBuyLmt = CreateBtn("Buy Limit", tealBrush, (s, e) => StartDragOrder("BuyLimit"));
+			btnSellLmt = CreateBtn("Sell Limit", tealBrush, (s, e) => StartDragOrder("SellLimit"));
+			AddToGrid(fe3, btnBuyLmt, 0); AddToGrid(fe3, btnSellLmt, 1);
+
+			var fe4 = MakeGrid(2);
+			btnBuyStop = CreateBtn("Buy Stop", amberBrush, (s, e) => StartDragOrder("BuyStop"));
+			btnSellStop = CreateBtn("Sell Stop", amberBrush, (s, e) => StartDragOrder("SellStop"));
+			AddToGrid(fe4, btnBuyStop, 0); AddToGrid(fe4, btnSellStop, 1);
+
+			Brush dodgerBlue = (Brush)new BrushConverter().ConvertFrom("#FF1E90FF");
+			btnBreakeven = CreateBtn("Move To Breakeven", dodgerBlue, (s, e) => MoveToBreakeven());
+			fastExec.Children.Add(fe1); fastExec.Children.Add(fe2); fastExec.Children.Add(fe3); fastExec.Children.Add(fe4); fastExec.Children.Add(btnBreakeven);
 			mainPanel.Children.Add(CreateSection("⚡ Fast Execution", fastExec));
 			
 			// --- Close Position ---
@@ -421,7 +456,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			AddToGrid(cp1, CreateBtn("50%", darkGray, (s,e) => ClosePosition(50)), 1); 
 			AddToGrid(cp1, CreateBtn("75%", darkGray, (s,e) => ClosePosition(75)), 2);
 			closePos.Children.Add(cp1);
-			btnCloseAll = CreateBtn("Flatten", darkGray, (s, e) => Flatten());
+			Brush flattenRed = (Brush)new BrushConverter().ConvertFrom("#80DC143C"); // Crimson at 50% opacity
+			btnCloseAll = CreateBtn("Flatten", flattenRed, (s, e) => Flatten());
 			closePos.Children.Add(btnCloseAll);
 			mainPanel.Children.Add(CreateSection("➖ Close Position", closePos));
 
@@ -446,6 +482,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Brush darkGray = (Brush)new BrushConverter().ConvertFrom("#FF2A2A2A");
 			if (btnLong != null) btnLong.Background = isLongSelected ? greenBrush : darkGray;
 			if (btnShort != null) btnShort.Background = !isLongSelected ? redBrush : darkGray;
+			UpdatePnL(null, null); // Immediate label update
 		}
 
 		private void UpdateOrderModeButtons()
@@ -455,6 +492,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (btnMarket != null) btnMarket.Background = selectedOrderType == OrderType.Market ? amberBrush : darkGray;
 			if (btnLimit != null) btnLimit.Background = selectedOrderType == OrderType.Limit ? amberBrush : darkGray;
 			if (btnStop != null) btnStop.Background = selectedOrderType == OrderType.StopMarket ? amberBrush : darkGray;
+			UpdatePnL(null, null); // Immediate label update
 		}
 
 		private void UpdateSizeModeButtons()
@@ -581,8 +619,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 					}
 				}
 
-				if (isCalculatorActive && inst != null && hEntry != null && hStop != null)
+				if (isCalculatorActive && attachedTab != null && attachedTab.ChartControl != null && hEntry != null && hStop != null)
 				{
+					if (inst == null) inst = GetActiveInstrument();
+					if (inst == null) return;
+					
 					double ent = hEntry.StartAnchor.Price;
 					double stp = hStop.StartAnchor.Price;
 					double tar = hTarget != null ? hTarget.StartAnchor.Price : 0;
@@ -593,7 +634,6 @@ namespace NinjaTrader.NinjaScript.AddOns
 						if (Math.Abs(ent - cur) > 0.0000001) {
 							hEntry.StartAnchor.Price = hEntry.EndAnchor.Price = cur;
 							ent = cur;
-							attachedTab.ChartControl.InvalidateVisual();
 						}
 					}
 
@@ -632,15 +672,45 @@ namespace NinjaTrader.NinjaScript.AddOns
 					double profitAmt = targetTicks * val * tick * cQty;
 					double rMult = riskAmt > 0 ? profitAmt / riskAmt : 0;
 
-					if (tStop != null) {
-						tStop.DisplayText = $"RISK: ${riskAmt:N2}";
-						foreach (var a in tStop.Anchors) a.Price = stp;
+					double riskPts = Math.Abs(ent - stp);
+					double profitPts = Math.Abs(tar - ent);
+
+					string modeTxt = (isLongSelected ? "BUY " : "SELL ") + selectedOrderType.ToString().ToUpper();
+					if (selectedOrderType == OrderType.StopMarket) modeTxt = (isLongSelected ? "BUY " : "SELL ") + "STOP";
+
+					if (cEntryPill != null && cEntryTxt != null) {
+						cEntryTxt.Text = $"{modeTxt} {cQty} @ {ent:F2}";
 					}
-					if (tTarget != null) {
-						tTarget.DisplayText = $"PROFIT: ${profitAmt:N2} | {rMult:N1} R";
-						foreach (var a in tTarget.Anchors) a.Price = tar;
+					if (cStopPill != null && cStopTxt != null) {
+						cStopTxt.Text = $"RISK: ${riskAmt:N2} | {riskPts:N2} pts";
 					}
+					if (cTargetPill != null && cTargetTxt != null) {
+						cTargetTxt.Text = $"PROFIT: ${profitAmt:N2} | {profitPts:N2} pts | {rMult:N1} R";
+					}
+					// Note: Y-positioning moved to smooth renderHandler
 					attachedTab.ChartControl.InvalidateVisual();
+				}
+			} catch { }
+		}
+
+		private void OnRenderFrame(object sender, EventArgs e)
+		{
+			if (!isCalculatorActive || hEntry == null || hStop == null || hTarget == null) return;
+			try {
+				if (cEntryPill != null) {
+					double y = GetYByPrice(hEntry.StartAnchor.Price);
+					if (y > 0) Canvas.SetTop(cEntryPill, y - 12);
+					cEntryPill.Visibility = y > 0 ? Visibility.Visible : Visibility.Collapsed;
+				}
+				if (cStopPill != null) {
+					double y = GetYByPrice(hStop.StartAnchor.Price);
+					if (y > 0) Canvas.SetTop(cStopPill, y - 12);
+					cStopPill.Visibility = y > 0 ? Visibility.Visible : Visibility.Collapsed;
+				}
+				if (cTargetPill != null) {
+					double y = GetYByPrice(hTarget.StartAnchor.Price);
+					if (y > 0) Canvas.SetTop(cTargetPill, y - 12);
+					cTargetPill.Visibility = y > 0 ? Visibility.Visible : Visibility.Collapsed;
 				}
 			} catch { }
 		}
@@ -687,6 +757,199 @@ namespace NinjaTrader.NinjaScript.AddOns
 					acc.Submit(new[] { acc.CreateOrder(inst, act, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, qty, GetActivePrice() + off, 0, "", id, DateTime.MaxValue, null) });
 				}
 			} catch { }
+		}
+
+		private void StartDragOrder(string orderType)
+		{
+			if (attachedTab == null || attachedTab.ChartControl == null) return;
+			
+			// Directly inject into the parent Tab Content Grid instead of searching for an elusive canvas
+			var rootGrid = attachedTab.Content as Grid;
+			if (rootGrid == null) return;
+
+			if (isDragOrderActive) CancelDragOrder();
+
+			isDragOrderActive = true;
+			dragOrderType = orderType;
+
+			dragCanvas = new Canvas 
+			{ 
+				Background = Brushes.Transparent, 
+				Cursor = Cursors.Cross,
+				HorizontalAlignment = HorizontalAlignment.Stretch,
+				VerticalAlignment = VerticalAlignment.Stretch 
+			};
+			Panel.SetZIndex(dragCanvas, 9999);
+			// Do not span columns, so it inherently bounds exactly to the ChartControl (Column 0)
+
+			Brush lineBrush = orderType.Contains("Stop") ? Brushes.Orange : Brushes.Cyan;
+			string labelTxt = orderType.Contains("Buy") ? "Buy" : "Sell";
+			string lmtStpTxt = orderType.Contains("Stop") ? "STP" : "LMT";
+
+			dragLine = new System.Windows.Shapes.Line
+			{
+				X1 = 0, X2 = attachedTab.ChartControl.ActualWidth, // Dynamically set to the full width of the viewable chart control
+				Stroke = lineBrush, StrokeThickness = 2
+			};
+
+			dragLabelTxt = new TextBlock
+			{
+				Foreground = Brushes.Black,
+				FontWeight = FontWeights.Bold,
+				HorizontalAlignment = HorizontalAlignment.Center
+			};
+
+			dragLabelPill = new Border
+			{
+				Background = lineBrush,
+				BorderBrush = Brushes.Black,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(8), // Little pill shape
+				Padding = new Thickness(8, 2, 8, 2)
+			};
+			dragLabelPill.Child = dragLabelTxt;
+
+			dragCanvas.Children.Add(dragLine);
+			dragCanvas.Children.Add(dragLabelPill);
+
+			dragCanvas.MouseMove += (s, e) =>
+			{
+				if (!isDragOrderActive) return;
+				// Mouse Y-position must be exactly relative to the inner ChartControl object to map properly to the price scale!
+				Point pos = e.GetPosition(attachedTab.ChartControl);
+				
+				double price = GetPriceByY(pos.Y);
+				Instrument inst = GetActiveInstrument();
+				if (inst != null && inst.MasterInstrument != null && inst.MasterInstrument.TickSize > 0)
+				{
+					double tick = inst.MasterInstrument.TickSize;
+					price = Math.Round(price / tick) * tick;
+					
+					double snappedY = GetYByPrice(price);
+					if (snappedY != 0) pos.Y = snappedY;
+				}
+
+				// Optional: auto-recalculate line width dynamically
+				dragLine.X2 = attachedTab.ChartControl.ActualWidth;
+				dragLine.Y1 = dragLine.Y2 = pos.Y;
+				
+				int qty = 1; int.TryParse(txtContracts.Text, out qty);
+				dragLabelTxt.Text = $"{qty} {labelTxt} {lmtStpTxt} {price:F2}";
+
+				// Lock tracking label perfectly to the left edge of the price scale (standard NT scale width is ~65px)
+				Canvas.SetRight(dragLabelPill, 65);
+				Canvas.SetTop(dragLabelPill, pos.Y - 12);
+			};
+
+			dragCanvas.MouseLeftButtonDown += (s, e) =>
+			{
+				if (!isDragOrderActive) return;
+				Point pos = e.GetPosition(attachedTab.ChartControl);
+				double price = GetPriceByY(pos.Y);
+				
+				Instrument inst = GetActiveInstrument();
+				if (inst != null && inst.MasterInstrument != null && inst.MasterInstrument.TickSize > 0)
+				{
+					double tick = inst.MasterInstrument.TickSize;
+					price = Math.Round(price / tick) * tick;
+				}
+				
+				PlaceDragOrderAt(price);
+				CancelDragOrder();
+			};
+
+			rootGrid.Children.Add(dragCanvas);
+
+			var window = Window.GetWindow(attachedTab.ChartControl);
+			if (window != null)
+			{
+				window.PreviewKeyDown += Window_PreviewKeyDown_CancelDrag;
+			}
+		}
+
+		private double GetPriceByY(double y)
+		{
+			if (attachedTab == null || attachedTab.ChartControl == null) return 0;
+			try
+			{
+				var chartPanel = attachedTab.ChartControl.ChartPanels.FirstOrDefault();
+				if (chartPanel != null)
+				{
+					var scale = chartPanel.Scales.FirstOrDefault();
+					if (scale != null) return scale.GetValueByY((float)y);
+				}
+			}
+			catch { }
+			return 0;
+		}
+
+		private double GetYByPrice(double price)
+		{
+			if (attachedTab == null || attachedTab.ChartControl == null) return 0;
+			try
+			{
+				var chartPanel = attachedTab.ChartControl.ChartPanels.FirstOrDefault();
+				if (chartPanel != null)
+				{
+					var scale = chartPanel.Scales.FirstOrDefault();
+					if (scale != null) return scale.GetYByValue(price);
+				}
+			}
+			catch { }
+			return 0;
+		}
+
+		private void PlaceDragOrderAt(double price)
+		{
+			try {
+				Account acc = GetActiveAccount(); Instrument inst = GetActiveInstrument();
+				if (acc == null || inst == null) return;
+				int qty = 1; if (txtContracts != null) int.TryParse(txtContracts.Text, out qty);
+				string id = "Drag_" + Guid.NewGuid().ToString("N");
+
+				OrderAction act = dragOrderType.Contains("Buy") ? OrderAction.Buy : OrderAction.Sell;
+				OrderType typ = dragOrderType.Contains("Stop") ? OrderType.StopMarket : OrderType.Limit;
+
+				acc.Submit(new[] { acc.CreateOrder(inst, act, typ, OrderEntry.Manual, TimeInForce.Day, qty, typ == OrderType.Limit ? price : 0, typ == OrderType.StopMarket ? price : 0, "", id, DateTime.MaxValue, null) });
+			} catch { }
+		}
+
+		private void CancelDragOrder()
+		{
+			isDragOrderActive = false;
+			if (dragCanvas != null)
+			{
+				// Because the parent is the massive root Grid, clear it from there.
+				var pnl = VisualTreeHelper.GetParent(dragCanvas) as Panel;
+				if (pnl != null) pnl.Children.Remove(dragCanvas);
+				dragCanvas = null;
+			}
+			if (attachedTab != null && attachedTab.ChartControl != null)
+			{
+				var window = Window.GetWindow(attachedTab.ChartControl);
+				if (window != null) window.PreviewKeyDown -= Window_PreviewKeyDown_CancelDrag;
+			}
+		}
+
+		private void Window_PreviewKeyDown_CancelDrag(object sender, KeyEventArgs e)
+		{
+			if (e.Key == Key.Escape)
+			{
+				CancelDragOrder();
+				e.Handled = true;
+			}
+		}
+
+		private Canvas FindCanvas(DependencyObject parent)
+		{
+			for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+			{
+				var child = VisualTreeHelper.GetChild(parent, i);
+				if (child is Canvas canvas) return canvas;
+				var result = FindCanvas(child);
+				if (result != null) return result;
+			}
+			return null;
 		}
 
 		private void Flatten() { try { Account acc = GetActiveAccount(); Instrument inst = GetActiveInstrument(); if (acc != null && inst != null) { foreach (var o in acc.Orders) if (o.Instrument == inst && (o.OrderState == OrderState.Accepted || o.OrderState == OrderState.Working)) acc.Cancel(new[] { o }); ClosePosition(100); } } catch { } }
@@ -740,20 +1003,49 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 				double cp = GetActivePrice(); Instrument inst = GetActiveInstrument(); if (inst == null) return;
 				double tick = inst.MasterInstrument.TickSize;
-				double sY = isLongSelected ? cp - (100 * tick) : cp + (100 * tick);
-				double tY = isLongSelected ? cp + (200 * tick) : cp - (200 * tick);
+				
+				// Standard defaults: NQ/MNQ = 100 ticks (25 pts), ES/MES = 20 ticks (5 pts)
+				int stopTicks = inst.FullName.Contains("ES") ? 20 : 100;
+				int targetTicks = stopTicks * 2;
+				
+				double sY = isLongSelected ? cp - (stopTicks * tick) : cp + (stopTicks * tick);
+				double tY = isLongSelected ? cp + (targetTicks * tick) : cp - (targetTicks * tick);
+				
+				var rootGrid = attachedTab.Content as Grid;
+				if (rootGrid == null) return;
 
 				hEntry = Draw.HorizontalLine(owner, "OrcaCalcEntry", cp, Brushes.WhiteSmoke, DashStyleHelper.Solid, 2);
 				hTarget = Draw.HorizontalLine(owner, "OrcaCalcTarget", tY, Brushes.LimeGreen, DashStyleHelper.Solid, 2);
 				hStop = Draw.HorizontalLine(owner, "OrcaCalcStop", sY, Brushes.Salmon, DashStyleHelper.Solid, 2);
-				
-				DateTime t = GetActiveTime().AddMinutes(15);
-				tTarget = Draw.Text(owner, "OrcaCalcTargetText", "PROFIT", 0, tY, Brushes.LimeGreen);
-				tStop = Draw.Text(owner, "OrcaCalcStopText", "RISK", 0, sY, Brushes.Salmon);
-				if (tTarget != null) { tTarget.YPixelOffset = -15; foreach (var a in tTarget.Anchors) a.Time = t; }
-				if (tStop != null) { tStop.YPixelOffset = -15; foreach (var a in tStop.Anchors) a.Time = t; }
 
-				foreach (var obj in new DrawingTool[] { hEntry, hTarget, hStop, tTarget, tStop }) {
+				// Create a transparent canvas overlay to host the labels
+				calcCanvas = new Canvas { IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch };
+				Panel.SetZIndex(calcCanvas, 9998);
+				
+				// CRITICAL: Anchor the canvas EXACTLY to where the ChartControl is in the rootGrid
+				Grid.SetRow(calcCanvas, Grid.GetRow(attachedTab.ChartControl));
+				Grid.SetColumn(calcCanvas, Grid.GetColumn(attachedTab.ChartControl));
+				Grid.SetRowSpan(calcCanvas, Grid.GetRowSpan(attachedTab.ChartControl));
+				Grid.SetColumnSpan(calcCanvas, Grid.GetColumnSpan(attachedTab.ChartControl));
+				
+				rootGrid.Children.Add(calcCanvas);
+
+				// Create the three custom Pills (Entry, Stop, Target)
+				cEntryPill = CreatePill(Brushes.WhiteSmoke, out cEntryTxt);
+				cStopPill = CreatePill(Brushes.Salmon, out cStopTxt);
+				cTargetPill = CreatePill(Brushes.LimeGreen, out cTargetTxt);
+
+				foreach (var pill in new Border[] { cEntryPill, cStopPill, cTargetPill }) {
+					Canvas.SetRight(pill, 65);
+					calcCanvas.Children.Add(pill);
+				}
+
+				if (renderHandler == null) {
+					renderHandler = new EventHandler(OnRenderFrame);
+					CompositionTarget.Rendering += renderHandler;
+				}
+
+				foreach (var obj in new DrawingTool[] { hEntry, hTarget, hStop }) {
 					if (obj == null) continue;
 					try { 
 						typeof(DrawingTool).GetProperty("IsUserDrawn").SetValue(obj, true, null);
@@ -764,8 +1056,43 @@ namespace NinjaTrader.NinjaScript.AddOns
 					if (obj is INotifyPropertyChanged inpc) inpc.PropertyChanged += OnCalculatorLineMoved;
 				}
 				isCalculatorActive = true; 
+				UpdatePnL(null, null); // Force immediate text population
 				attachedTab.ChartControl.InvalidateVisual();
 			} catch { }
+		}
+
+		private Border CreatePill(Brush bg, out TextBlock txt)
+		{
+			txt = new TextBlock
+			{
+				Foreground = Brushes.Black,
+				FontFamily = new FontFamily("Segoe UI"),
+				FontSize = 11,
+				FontWeight = FontWeights.Bold,
+				HorizontalAlignment = HorizontalAlignment.Center,
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(4, 0, 4, 0)
+			};
+
+			LinearGradientBrush gradient = new LinearGradientBrush();
+			gradient.StartPoint = new Point(0, 0);
+			gradient.EndPoint = new Point(0, 1);
+			gradient.GradientStops.Add(new GradientStop(((Color)ColorConverter.ConvertFromString(bg.ToString())), 0.0));
+			gradient.GradientStops.Add(new GradientStop(Colors.White, 3.0)); // Slow fade to white for premium sheen
+
+			Border b = new Border
+			{
+				Background = bg,
+				BorderBrush = new SolidColorBrush(Color.FromArgb(200, 0, 0, 0)),
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(4),
+				Padding = new Thickness(5, 2, 5, 2),
+				HorizontalAlignment = HorizontalAlignment.Right,
+				VerticalAlignment = VerticalAlignment.Top,
+				Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 4, ShadowDepth = 1, Opacity = 0.5 }
+			};
+			b.Child = txt;
+			return b;
 		}
 
 		private void RemoveCalculator()
@@ -774,32 +1101,28 @@ namespace NinjaTrader.NinjaScript.AddOns
 				isCalculatorActive = false;
 				if (attachedTab == null || attachedTab.ChartControl == null) return;
 				
-				// Use the official Draw API to overwrite our lines at price 0 with black (off-screen).
-				// IMPORTANT: Only use standard frozen WPF brushes (Brushes.Black, etc.)
-				// Never use ChartBackground or any dynamic brush — they may be DirectX resources.
+				var rootGrid = attachedTab.Content as Grid;
+				if (rootGrid != null && calcCanvas != null) {
+					if (rootGrid.Children.Contains(calcCanvas)) rootGrid.Children.Remove(calcCanvas);
+					calcCanvas = null;
+				}
+
 				if (calcOwner != null) {
 					try {
 						Draw.HorizontalLine(calcOwner, "OrcaCalcEntry", 0, Brushes.Black, DashStyleHelper.Solid, 1);
 						Draw.HorizontalLine(calcOwner, "OrcaCalcTarget", 0, Brushes.Black, DashStyleHelper.Solid, 1);
 						Draw.HorizontalLine(calcOwner, "OrcaCalcStop", 0, Brushes.Black, DashStyleHelper.Solid, 1);
-						Draw.Text(calcOwner, "OrcaCalcTargetText", "", 0, 0, Brushes.Black);
-						Draw.Text(calcOwner, "OrcaCalcStopText", "", 0, 0, Brushes.Black);
 					} catch { }
 				}
 				
-				// Disable price markers on our held references before nulling
 				foreach (var line in new[] { hEntry, hStop, hTarget }) {
 					if (line == null) continue;
 					try { line.GetType().GetProperty("IsPriceMarkerVisible").SetValue(line, false, null); } catch { }
 					try { line.StartAnchor.Price = line.EndAnchor.Price = 0; } catch { }
 				}
-				foreach (var txt in new[] { tStop, tTarget }) {
-					if (txt == null) continue;
-					try { txt.DisplayText = ""; foreach (var a in txt.Anchors) a.Price = 0; } catch { }
-				}
 				
 				// Also try reflection removal as backup
-				string[] tags = new[] { "OrcaCalcEntry", "OrcaCalcTarget", "OrcaCalcStop", "OrcaCalcTargetText", "OrcaCalcStopText" };
+				string[] tags = new[] { "OrcaCalcEntry", "OrcaCalcTarget", "OrcaCalcStop", "OrcaCalcEntryText", "OrcaCalcTargetText", "OrcaCalcStopText" };
 				var rm = typeof(NinjaScriptBase).GetMethod("RemoveDrawObject", 
 					System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, 
 					null, new Type[] { typeof(string) }, null);
@@ -818,7 +1141,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 				}
 				
 				hEntry = hStop = hTarget = null; 
-				tStop = tTarget = null;
+				cEntryPill = cStopPill = cTargetPill = null;
+				cEntryTxt = cStopTxt = cTargetTxt = null;
+				
+				if (renderHandler != null) {
+					CompositionTarget.Rendering -= renderHandler;
+					renderHandler = null;
+				}
+				
 				calcOwner = null;
 				attachedTab.ChartControl.InvalidateVisual();
 			} catch { }

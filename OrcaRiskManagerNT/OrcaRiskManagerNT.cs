@@ -91,7 +91,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			MainGrid = new Grid
 			{
 				Background = (Brush)new BrushConverter().ConvertFrom("#FF1B1B1B"),
-				Width = 280,
+				Width = 240,
 				HorizontalAlignment = HorizontalAlignment.Right,
 				VerticalAlignment = VerticalAlignment.Stretch,
 				Margin = new Thickness(0, 0, 0, 0)
