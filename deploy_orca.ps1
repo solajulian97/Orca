@@ -1,8 +1,16 @@
-$WorkspaceRoot = "C:\Users\Owner\.gemini\antigravity\scratch\Orca"
-$LiveCustomRoot = "C:\Users\Owner\Documents\NinjaTrader 8\bin\Custom"
+$WorkspaceRoot = "C:\Users\julia\.gemini\antigravity\scratch\Orca Projects"
+$LiveCustomRoot = "C:\Users\julia\Documents\NinjaTrader 8\bin\Custom"
 
 # Files to sync
-$Indicators = @("OrcaLegtoLegProfile.cs", "OrcaExecutionLines.cs", "OrcaStepProfile.cs", "OrcaCandleVolumeProfile.cs", "OrcaAnchoredVWAPs.cs", "OrcaCumulativeDelta.cs", "OrcaTimeVWAPs.cs", "OrcaTickDirectionIndex.cs")
+$Indicators = @(
+    "AutoLegProfile.cs", "AutoLegProfileNT.cs", "AutoLegProfileNT2.cs", "BarTimes.cs", 
+    "FastCandleHighlight.cs", "LegToLegDeltaProfile.cs", "OrcaAbsorptionCandles.cs", 
+    "OrcaAnchoredVWAPs.cs", "OrcaCandleVolumeProfile.cs", "OrcaCumulativeDelta.cs", 
+    "OrcaExecutionLines.cs", "OrcaExecutionLines2.cs", "OrcaLegtoLegProfile.cs", 
+    "OrcaRollingProfiles.cs", "OrcaStepProfile.cs", "OrcaTickDirectionIndex.cs", 
+    "OrcaTimeStatistics.cs", "OrcaTimeVWAPs.cs", "OrcaVisualOrders.cs", 
+    "PAX30OpeningRange.cs", "PassiveFlowSuite.cs", "VWAPx.cs"
+)
 $AddOns = @("OrcaRiskManagerAddOn.cs")
 
 Write-Host "Deploying Orca Suite Indicators to NinjaTrader 8..."
