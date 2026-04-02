@@ -7,7 +7,6 @@ using System.Linq;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Threading;
 using System.Xml.Serialization;
 using NinjaTrader.Cbi;
@@ -23,1367 +22,802 @@ using SharpDX.DirectWrite;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-
-public class OrcaExecutionLines : Indicator
-{
-	private class PendingEntry
+	public class OrcaExecutionLines : Indicator
 	{
-		public DateTime Time;
-
-		public double Price;
-
-		public int Quantity;
-
-		public MarketPosition Side;
-	}
-
-	private class FillMatch
-	{
-		public DateTime EntryTime;
-
-		public double EntryPrice;
-
-		public DateTime ExitTime;
-
-		public double ExitPrice;
-
-		public int Quantity;
-
-		public bool IsLong;
-
-		public double PnLTicks;
-
-		public double PnLDollars;
-	}
-
-	private class RoundTrip
-	{
-		public int Number;
-
-		public bool IsLong;
-
-		public bool IsComplete;
-
-		public string AccountName;
-
-		public List<FillMatch> Matches = new List<FillMatch>();
-
-		public double EntryPriceSum;
-
-		public int EntryQtyTotal;
-
-		public DateTime FirstEntryTime;
-
-		public double ExitPriceSum;
-
-		public int ExitQtyTotal;
-
-		public DateTime LastExitTime;
-
-		public double TotalPnLDollars;
-
-		public double TotalPnLTicks;
-
-		public double MaxAdverseExcursion;
-
-		public double MaxFavorableExcursion;
-
-		public bool MAEMFECalculated;
-
-		public double AvgEntryPrice
+		private class PendingEntry
 		{
-			get
+			public DateTime Time;
+			public double Price;
+			public int Quantity;
+			public MarketPosition Side;
+		}
+
+		private class FillMatch
+		{
+			public DateTime EntryTime;
+			public double EntryPrice;
+			public DateTime ExitTime;
+			public double ExitPrice;
+			public int Quantity;
+			public bool IsLong;
+			public double PnLTicks;
+			public double PnLDollars;
+		}
+
+		private class RoundTrip
+		{
+			public int Number;
+			public bool IsLong;
+			public bool IsComplete;
+			public string AccountName;
+			public List<FillMatch> Matches = new List<FillMatch>();
+			public double EntryPriceSum;
+			public int EntryQtyTotal;
+			public DateTime FirstEntryTime;
+			public double ExitPriceSum;
+			public int ExitQtyTotal;
+			public DateTime LastExitTime;
+			public double TotalPnLDollars;
+			public double TotalPnLTicks;
+			public double MaxAdverseExcursion;
+			public double MaxFavorableExcursion;
+			public bool MAEMFECalculated;
+
+			public double AvgEntryPrice { get { return EntryQtyTotal <= 0 ? 0.0 : EntryPriceSum / (double)EntryQtyTotal; } }
+			public double AvgExitPrice  { get { return ExitQtyTotal  <= 0 ? 0.0 : ExitPriceSum  / (double)ExitQtyTotal;  } }
+		}
+
+		private class AccountState
+		{
+			public string AccountName;
+			public List<PendingEntry> OpenFills  = new List<PendingEntry>();
+			public List<RoundTrip>   RoundTrips  = new List<RoundTrip>();
+			public RoundTrip CurrentRT;
+			public int RTCounter;
+			public int NetPosition;
+		}
+
+		// â”€â”€ fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		private Dictionary<string, AccountState> accountStates;
+		private List<Account> hookedAccounts;
+		private string activeAccountName;
+		private string lastDrawnAccount;
+		private readonly object tradeLock = new object();
+		private bool needsRedraw;
+		private bool historyLoaded;
+		private DateTime shotClockEnd = DateTime.MinValue;
+		private bool shotClockActive;
+		private bool shotClockIsLive;
+		private System.Windows.Point mousePosition = new System.Windows.Point(-1, -1);
+		private bool isMouseOverChart;
+		private DateTime lastAccountCheck = DateTime.MinValue;
+		private bool mouseHooked;
+
+		// â”€â”€ properties â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		[NinjaScriptProperty][Display(Name="Show Execution Lines",   GroupName="1. Visibility", Order=0)] public bool ShowExecutionLines  { get; set; }
+		[NinjaScriptProperty][Display(Name="Show Labels",            GroupName="1. Visibility", Order=1)] public bool ShowLabels           { get; set; }
+		[Display(Name="Hover Individual PnL",                        GroupName="1. Visibility", Order=2)] public bool HoverShowsIndividualPnL { get; set; }
+		[NinjaScriptProperty][Display(Name="Show Average Markers",   GroupName="1. Visibility", Order=3)] public bool ShowMarkers          { get; set; }
+		[NinjaScriptProperty][Display(Name="Individual Lines",       GroupName="1. Visibility", Order=4)] public bool ShowIndividualLines  { get; set; }
+		[NinjaScriptProperty][Display(Name="Individual Fill Markers",GroupName="1. Visibility", Order=5)] public bool ShowIndividualMarkers { get; set; }
+		[NinjaScriptProperty][Display(Name="Show MAE/MFE",          GroupName="1. Visibility", Order=6)] public bool ShowMAEMFE           { get; set; }
+		[Display(Name="Show Session Total",                          GroupName="1. Visibility", Order=7)] public bool ShowSessionTotal     { get; set; }
+		[Display(Name="Session Total Position",                      GroupName="3. Appearance", Order=2)] public TextPosition SessionTotalPosition { get; set; }
+
+		[NinjaScriptProperty][Display(Name="Enable Shot Clock",      GroupName="5. Shot Clock", Order=0)] public bool EnableShotClock     { get; set; }
+		[NinjaScriptProperty][Range(5,3600)][Display(Name="Cooldown (seconds)", GroupName="5. Shot Clock", Order=1)] public int ShotClockSeconds { get; set; }
+		[Display(Name="Label Position",                              GroupName="5. Shot Clock", Order=2)] public TextPosition ShotClockPosition { get; set; }
+
+		[XmlIgnore][Display(Name="Countdown Color",  GroupName="5. Shot Clock", Order=3)] public System.Windows.Media.Brush ShotClockColor        { get; set; }
+		[Browsable(false)] public string ShotClockColorSerializable        { get { return Serialize.BrushToString(ShotClockColor);        } set { ShotClockColor        = Serialize.StringToBrush(value); } }
+		[XmlIgnore][Display(Name="Warning Color (â‰¤30s)", GroupName="5. Shot Clock", Order=4)] public System.Windows.Media.Brush ShotClockWarningColor { get; set; }
+		[Browsable(false)] public string ShotClockWarningColorSerializable { get { return Serialize.BrushToString(ShotClockWarningColor); } set { ShotClockWarningColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty][Display(Name="Load from Account",      GroupName="2. Data", Order=0)] public bool LoadTodayHistory   { get; set; }
+		[NinjaScriptProperty][Display(Name="Load from SQLite",       GroupName="2. Data", Order=1)] public bool LoadSqliteHistory  { get; set; }
+		[NinjaScriptProperty][Range(0,100000)][Display(Name="Risk Amount ($)", GroupName="2. Data", Order=2)] public double RiskAmount { get; set; }
+		[Range(5,200)][Display(Name="Max Trades To Show",            GroupName="2. Data", Order=3)] public int MaxTradesToShow     { get; set; }
+
+		[NinjaScriptProperty][Range(1,5)][Display(Name="Line Width", GroupName="3. Appearance", Order=0)] public int LineWidth      { get; set; }
+		[NinjaScriptProperty][Range(8,20)][Display(Name="Label Font Size", GroupName="3. Appearance", Order=1)] public int LabelFontSize { get; set; }
+
+		[XmlIgnore][Display(Name="Profit Color", GroupName="4. Colors", Order=0)] public System.Windows.Media.Brush ProfitColor      { get; set; }
+		[Browsable(false)] public string ProfitColorSerializable      { get { return Serialize.BrushToString(ProfitColor);      } set { ProfitColor      = Serialize.StringToBrush(value); } }
+		[XmlIgnore][Display(Name="Loss Color",   GroupName="4. Colors", Order=1)] public System.Windows.Media.Brush LossColor        { get; set; }
+		[Browsable(false)] public string LossColorSerializable        { get { return Serialize.BrushToString(LossColor);        } set { LossColor        = Serialize.StringToBrush(value); } }
+		[XmlIgnore][Display(Name="Long Marker Color",  GroupName="4. Colors", Order=2)] public System.Windows.Media.Brush LongMarkerColor  { get; set; }
+		[Browsable(false)] public string LongMarkerColorSerializable  { get { return Serialize.BrushToString(LongMarkerColor);  } set { LongMarkerColor  = Serialize.StringToBrush(value); } }
+		[XmlIgnore][Display(Name="Short Marker Color", GroupName="4. Colors", Order=3)] public System.Windows.Media.Brush ShortMarkerColor { get; set; }
+		[Browsable(false)] public string ShortMarkerColorSerializable { get { return Serialize.BrushToString(ShortMarkerColor); } set { ShortMarkerColor = Serialize.StringToBrush(value); } }
+
+		// â”€â”€ lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
 			{
-				if (EntryQtyTotal <= 0)
+				Description = "Automatic execution lines with FIFO round-trip matching, SQLite history, and R-multiple tracking";
+				Name        = "OrcaExecutionLines";
+				Calculate   = Calculate.OnEachTick;
+				IsOverlay   = true;
+				DisplayInDataBox      = false;
+				DrawOnPricePanel      = true;
+				ScaleJustification    = ScaleJustification.Right;
+				IsSuspendedWhileInactive = false;
+
+				ShowExecutionLines   = true;
+				ShowLabels           = true;
+				HoverShowsIndividualPnL = false;
+				ShowMarkers          = true;
+				ShowIndividualLines  = true;
+				ShowIndividualMarkers= true;
+				ShowMAEMFE           = true;
+				ShowSessionTotal     = true;
+				SessionTotalPosition = TextPosition.TopRight;
+				LoadTodayHistory     = true;
+				LoadSqliteHistory    = true;
+				EnableShotClock      = true;
+				ShotClockSeconds     = 300;
+				ShotClockPosition    = TextPosition.BottomRight;
+				ShotClockColor        = System.Windows.Media.Brushes.Orange;
+				ShotClockWarningColor = System.Windows.Media.Brushes.Red;
+				LineWidth            = 2;
+				LabelFontSize        = 11;
+				MaxTradesToShow      = 50;
+				RiskAmount           = 200.0;
+				ProfitColor          = System.Windows.Media.Brushes.DodgerBlue;
+				LossColor            = System.Windows.Media.Brushes.Tomato;
+				LongMarkerColor      = System.Windows.Media.Brushes.Lime;
+				ShortMarkerColor     = System.Windows.Media.Brushes.Red;
+			}
+			else if (State == State.DataLoaded)
+			{
+				accountStates    = new Dictionary<string, AccountState>();
+				hookedAccounts   = new List<Account>();
+				needsRedraw      = false;
+				historyLoaded    = false;
+				activeAccountName= "";
+				lastDrawnAccount = "";
+				shotClockActive  = false;
+				shotClockIsLive  = false;
+				mouseHooked      = false;
+				HookAllAccounts();
+			}
+			else if (State == State.Realtime)
+			{
+				if (ChartControl != null && !mouseHooked)
 				{
-					return 0.0;
+					ChartControl.MouseMove  += OnChartMouseMove;
+					ChartControl.MouseLeave += OnChartMouseLeave;
+					mouseHooked = true;
 				}
-				return EntryPriceSum / (double)EntryQtyTotal;
+			}
+			else if (State == State.Terminated)
+			{
+				UnhookAllAccounts();
+				if (ChartControl != null && mouseHooked)
+				{
+					try { ChartControl.MouseMove  -= OnChartMouseMove; } catch {}
+					try { ChartControl.MouseLeave -= OnChartMouseLeave; } catch {}
+				}
+				try { RemoveDrawObject("OrcaShotClock"); } catch {}
 			}
 		}
 
-		public double AvgExitPrice
+		private void HookAllAccounts()
 		{
-			get
-			{
-				if (ExitQtyTotal <= 0)
-				{
-					return 0.0;
-				}
-				return ExitPriceSum / (double)ExitQtyTotal;
-			}
-		}
-	}
-
-	private class AccountState
-	{
-		public string AccountName;
-
-		public List<PendingEntry> OpenFills = new List<PendingEntry>();
-
-		public List<RoundTrip> RoundTrips = new List<RoundTrip>();
-
-		public RoundTrip CurrentRT;
-
-		public int RTCounter;
-
-		public int NetPosition;
-	}
-
-	private Dictionary<string, AccountState> accountStates;
-
-	private List<Account> hookedAccounts;
-
-	private string activeAccountName;
-
-	private string lastDrawnAccount;
-
-	private object tradeLock = new object();
-
-	private bool needsRedraw;
-
-	private bool historyLoaded;
-
-	private DateTime shotClockEnd = DateTime.MinValue;
-
-	private bool shotClockActive;
-
-	private bool shotClockIsLive;
-
-	private Point mousePosition = new Point(-1.0, -1.0);
-	private bool isMouseOverChart;
-	private DateTime lastAccountCheck = DateTime.MinValue;
-
-	[NinjaScriptProperty]
-	[Display(Name = "Show Execution Lines", GroupName = "1. Visibility", Order = 0)]
-	public bool ShowExecutionLines { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "Show Labels", GroupName = "1. Visibility", Order = 1)]
-	public bool ShowLabels { get; set; }
-
-	[Display(Name = "Hover Individual PnL", GroupName = "1. Visibility", Order = 2)]
-	public bool HoverShowsIndividualPnL { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "Show Average Markers", GroupName = "1. Visibility", Order = 3)]
-	public bool ShowMarkers { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "Individual Lines (vs Averaged)", GroupName = "1. Visibility", Order = 4)]
-	public bool ShowIndividualLines { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "Individual Fill Markers", GroupName = "1. Visibility", Order = 5)]
-	public bool ShowIndividualMarkers { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "Show MAE/MFE", Description = "Winners show max drawdown, losers show peak unrealized gain", GroupName = "1. Visibility", Order = 6)]
-	public bool ShowMAEMFE { get; set; }
-
-	[Display(Name = "Show Session Total", GroupName = "1. Visibility", Order = 7)]
-	public bool ShowSessionTotal { get; set; }
-
-	[Display(Name = "Session Total Position", GroupName = "3. Appearance", Order = 2)]
-	public TextPosition SessionTotalPosition { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "Enable Shot Clock", Description = "Show a cooldown countdown after each completed trade", GroupName = "5. Shot Clock", Order = 0)]
-	public bool EnableShotClock { get; set; }
-
-	[NinjaScriptProperty]
-	[Range(5, 3600)]
-	[Display(Name = "Cooldown Duration (seconds)", Description = "How long the shot clock counts down (default 300 = 5 min)", GroupName = "5. Shot Clock", Order = 1)]
-	public int ShotClockSeconds { get; set; }
-
-	[Display(Name = "Label Position", GroupName = "5. Shot Clock", Order = 2)]
-	public TextPosition ShotClockPosition { get; set; }
-
-	[XmlIgnore]
-	[Display(Name = "Countdown Color", GroupName = "5. Shot Clock", Order = 3)]
-	public Brush ShotClockColor { get; set; }
-
-	[Browsable(false)]
-	public string ShotClockColorSerializable
-	{
-		get
-		{
-			return Serialize.BrushToString(ShotClockColor);
-		}
-		set
-		{
-			ShotClockColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[XmlIgnore]
-	[Display(Name = "Warning Color (≤ 30 s)", GroupName = "5. Shot Clock", Order = 4)]
-	public Brush ShotClockWarningColor { get; set; }
-
-	[Browsable(false)]
-	public string ShotClockWarningColorSerializable
-	{
-		get
-		{
-			return Serialize.BrushToString(ShotClockWarningColor);
-		}
-		set
-		{
-			ShotClockWarningColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[NinjaScriptProperty]
-	[Display(Name = "Load from Account (live session)", GroupName = "2. Data", Order = 0)]
-	public bool LoadTodayHistory { get; set; }
-
-	[NinjaScriptProperty]
-	[Display(Name = "Load from SQLite (all history)", GroupName = "2. Data", Order = 1)]
-	public bool LoadSqliteHistory { get; set; }
-
-	[NinjaScriptProperty]
-	[Range(0, 100000)]
-	[Display(Name = "Risk Amount ($)", Description = "Dollar risk per trade for R-multiple calc. 0 = disabled", GroupName = "2. Data", Order = 2)]
-	public double RiskAmount { get; set; }
-
-	[NinjaScriptProperty]
-	[Range(1, 5)]
-	[Display(Name = "Line Width", GroupName = "3. Appearance", Order = 0)]
-	public int LineWidth { get; set; }
-
-	[NinjaScriptProperty]
-	[Range(8, 20)]
-	[Display(Name = "Label Font Size", GroupName = "3. Appearance", Order = 1)]
-	public int LabelFontSize { get; set; }
-
-	[Range(5, 200)]
-	[Display(Name = "Max Trades To Show", GroupName = "2. Data", Order = 3)]
-	public int MaxTradesToShow { get; set; }
-
-	[XmlIgnore]
-	[Display(Name = "Profit Color", GroupName = "4. Colors", Order = 0)]
-	public Brush ProfitColor { get; set; }
-
-	[Browsable(false)]
-	public string ProfitColorSerializable
-	{
-		get
-		{
-			return Serialize.BrushToString(ProfitColor);
-		}
-		set
-		{
-			ProfitColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[XmlIgnore]
-	[Display(Name = "Loss Color", GroupName = "4. Colors", Order = 1)]
-	public Brush LossColor { get; set; }
-
-	[Browsable(false)]
-	public string LossColorSerializable
-	{
-		get
-		{
-			return Serialize.BrushToString(LossColor);
-		}
-		set
-		{
-			LossColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[XmlIgnore]
-	[Display(Name = "Long Marker Color", GroupName = "4. Colors", Order = 2)]
-	public Brush LongMarkerColor { get; set; }
-
-	[Browsable(false)]
-	public string LongMarkerColorSerializable
-	{
-		get
-		{
-			return Serialize.BrushToString(LongMarkerColor);
-		}
-		set
-		{
-			LongMarkerColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	[XmlIgnore]
-	[Display(Name = "Short Marker Color", GroupName = "4. Colors", Order = 3)]
-	public Brush ShortMarkerColor { get; set; }
-
-	[Browsable(false)]
-	public string ShortMarkerColorSerializable
-	{
-		get
-		{
-			return Serialize.BrushToString(ShortMarkerColor);
-		}
-		set
-		{
-			ShortMarkerColor = Serialize.StringToBrush(value);
-		}
-	}
-
-	protected override void OnStateChange()
-	{
-		if (State == State.SetDefaults)
-		{
-			Description = "Automatic execution lines with FIFO round-trip matching, SQLite history, and R-multiple tracking";
-			Name = "OrcaExecutionLines";
-			Calculate = Calculate.OnEachTick;
-			IsOverlay = true;
-			DisplayInDataBox = false;
-			DrawOnPricePanel = true;
-			ScaleJustification = ScaleJustification.Right;
-			IsSuspendedWhileInactive = false;
-			ShowExecutionLines = true;
-			ShowLabels = true;
-			HoverShowsIndividualPnL = false;
-			ShowMarkers = true;
-			ShowIndividualLines = true;
-			ShowIndividualMarkers = true;
-			ShowMAEMFE = true;
-			ShowSessionTotal = true;
-			SessionTotalPosition = TextPosition.TopRight;
-			LoadTodayHistory = true;
-			LoadSqliteHistory = true;
-			EnableShotClock = true;
-			ShotClockSeconds = 300;
-			ShotClockPosition = TextPosition.BottomRight;
-			ShotClockColor = Brushes.Orange;
-			ShotClockWarningColor = Brushes.Red;
-			LineWidth = 2;
-			LabelFontSize = 11;
-			MaxTradesToShow = 50;
-			RiskAmount = 200.0;
-			ProfitColor = Brushes.DodgerBlue;
-			LossColor = Brushes.Tomato;
-			LongMarkerColor = Brushes.Lime;
-			ShortMarkerColor = Brushes.Red;
-		}
-		else if (State == State.DataLoaded)
-		{
-			accountStates = new Dictionary<string, AccountState>();
-			hookedAccounts = new List<Account>();
-			needsRedraw = false;
-			historyLoaded = false;
-			activeAccountName = "";
-			lastDrawnAccount = "";
-			shotClockActive = false;
-			shotClockIsLive = false;
-			HookAllAccounts();
-		}
-		else if (State == State.RealtimeStateChanged)
-		{
-			if (ChartControl != null)
-			{
-				ChartControl.MouseMove += OnChartMouseMove;
-				ChartControl.MouseLeave += OnChartMouseLeave;
-			}
-		}
-		else if (State == State.Terminated)
-		{
-			UnhookAllAccounts();
-			if (ChartControl != null)
-			{
-				try
-				{
-					ChartControl.MouseMove -= OnChartMouseMove;
-				}
-				catch
-				{
-				}
-				try
-				{
-					ChartControl.MouseLeave -= OnChartMouseLeave;
-				}
-				catch
-				{
-				}
-			}
 			try
 			{
-				RemoveDrawObject("OrcaShotClock");
-			}
-			catch
-			{
-			}
-		}
-	}
-
-	private void HookAllAccounts()
-	{
-		try
-		{
-			foreach (Account item in Account.All)
-			{
-				item.ExecutionUpdate += OnExecutionUpdate;
-				hookedAccounts.Add(item);
-			}
-		}
-		catch (Exception ex)
-		{
-			Print("OrcaExecLines HookAll error: " + ex.Message);
-		}
-	}
-
-	private void UnhookAllAccounts()
-	{
-		try
-		{
-			foreach (Account hookedAccount in hookedAccounts)
-			{
-				try
+				foreach (Account a in Account.All)
 				{
-					hookedAccount.ExecutionUpdate -= OnExecutionUpdate;
-				}
-				catch
-				{
+					a.ExecutionUpdate += OnExecutionUpdate;
+					hookedAccounts.Add(a);
 				}
 			}
-			hookedAccounts.Clear();
+			catch (Exception ex) { Print("OrcaExecLines HookAll: " + ex.Message); }
 		}
-		catch
-		{
-		}
-	}
 
-	private AccountState GetOrCreateState(string accountName)
-	{
-		if (!accountStates.ContainsKey(accountName))
+		private void UnhookAllAccounts()
 		{
-			accountStates[accountName] = new AccountState
-			{
-				AccountName = accountName
-			};
-		}
-		return accountStates[accountName];
-	}
-
-	private string GetChartTraderAccount()
-	{
-		try
-		{
-			if (ChartControl == null)
-			{
-				return "";
-			}
-			string result = "";
-			ChartControl.Dispatcher.InvokeAsync(delegate
-			{
-				try
-				{
-					Window window = Window.GetWindow(ChartControl);
-					Chart val = (window is Chart) ? (Chart)window : null;
-					if (val != null && val.ChartTrader != null && val.ChartTrader.Account != null)
-					{
-						result = val.ChartTrader.Account.Name;
-					}
-				}
-				catch
-				{
-				}
-			}).Wait(TimeSpan.FromMilliseconds(100.0));
-			return result;
-		}
-		catch
-		{
-			return "";
-		}
-	}
-
-	private void OnExecutionUpdate(object sender, ExecutionEventArgs e)
-	{
-		try
-		{
-			if (e.Execution != null && e.Execution.Instrument != null && Instrument != null && !(e.Execution.Instrument.FullName != Instrument.FullName) && e.Execution.Order != null)
-			{
-				string accountName = ((e.Execution.Account != null) ? e.Execution.Account.Name : "Unknown");
-				bool isBuy = e.Execution.Order.OrderAction == OrderAction.Buy || e.Execution.Order.OrderAction == OrderAction.BuyToCover;
-				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, accountName);
-			}
-		}
-		catch (Exception ex)
-		{
-			Print("OrcaExecLines OnExecUpdate error: " + ex.Message);
-		}
-	}
-
-	private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName)
-	{
-		lock (tradeLock)
-		{
-			AccountState orCreateState = GetOrCreateState(accountName);
-			int netPosition = orCreateState.NetPosition;
-			int num = orCreateState.NetPosition + (isBuy ? quantity : (-quantity));
-			if ((orCreateState.NetPosition > 0 && !isBuy) || (orCreateState.NetPosition < 0 && isBuy))
-			{
-				int num2 = Math.Min(quantity, Math.Abs(orCreateState.NetPosition));
-				int num3 = quantity - num2;
-				int num4 = num2;
-				while (num4 > 0 && orCreateState.OpenFills.Count > 0)
-				{
-					PendingEntry pendingEntry = orCreateState.OpenFills[0];
-					int num5 = Math.Min(num4, pendingEntry.Quantity);
-					bool flag = (int)pendingEntry.Side == 1;
-					double num6 = (flag ? ((price - pendingEntry.Price) / TickSize) : ((pendingEntry.Price - price) / TickSize));
-					double num7 = num6 * TickSize * Instrument.MasterInstrument.PointValue * (double)num5;
-					if (orCreateState.CurrentRT != null)
-					{
-						orCreateState.CurrentRT.Matches.Add(new FillMatch
-						{
-							EntryTime = pendingEntry.Time,
-							EntryPrice = pendingEntry.Price,
-							ExitTime = time,
-							ExitPrice = price,
-							Quantity = num5,
-							IsLong = flag,
-							PnLTicks = num6,
-							PnLDollars = num7
-						});
-						orCreateState.CurrentRT.ExitPriceSum += price * (double)num5;
-						orCreateState.CurrentRT.ExitQtyTotal += num5;
-						orCreateState.CurrentRT.LastExitTime = time;
-						orCreateState.CurrentRT.TotalPnLDollars += num7;
-						orCreateState.CurrentRT.TotalPnLTicks += num6 * (double)num5;
-					}
-					pendingEntry.Quantity -= num5;
-					num4 -= num5;
-					if (pendingEntry.Quantity <= 0)
-					{
-						orCreateState.OpenFills.RemoveAt(0);
-					}
-				}
-				if (num == 0 && orCreateState.CurrentRT != null)
-				{
-					orCreateState.CurrentRT.IsComplete = true;
-					while (orCreateState.RoundTrips.Count > MaxTradesToShow)
-					{
-						orCreateState.RoundTrips.RemoveAt(0);
-					}
-					orCreateState.CurrentRT = null;
-					if (EnableShotClock && shotClockIsLive)
-					{
-						shotClockEnd = DateTime.UtcNow.AddSeconds(ShotClockSeconds);
-						shotClockActive = true;
-					}
-				}
-				if (num3 > 0)
-				{
-					StartNewRoundTrip(orCreateState, isBuy, price, num3, time, accountName);
-					orCreateState.OpenFills.Add(new PendingEntry
-					{
-						Time = time,
-						Price = price,
-						Quantity = num3,
-						Side = isBuy ? MarketPosition.Long : MarketPosition.Short
-					});
-				}
-				needsRedraw = true;
-			}
-			else
-			{
-				if (netPosition == 0)
-				{
-					StartNewRoundTrip(orCreateState, isBuy, price, quantity, time, accountName);
-				}
-				else if (orCreateState.CurrentRT != null)
-				{
-					orCreateState.CurrentRT.EntryPriceSum += price * (double)quantity;
-					orCreateState.CurrentRT.EntryQtyTotal += quantity;
-				}
-				orCreateState.OpenFills.Add(new PendingEntry
-				{
-					Time = time,
-					Price = price,
-					Quantity = quantity,
-					Side = isBuy ? MarketPosition.Long : MarketPosition.Short
-				});
-			}
-			orCreateState.NetPosition = num;
-		}
-	}
-
-	private void StartNewRoundTrip(AccountState state, bool isBuy, double price, int quantity, DateTime time, string accountName)
-	{
-		state.RTCounter++;
-		state.CurrentRT = new RoundTrip
-		{
-			Number = state.RTCounter,
-			IsLong = isBuy,
-			IsComplete = false,
-			AccountName = accountName,
-			EntryPriceSum = price * (double)quantity,
-			EntryQtyTotal = quantity,
-			FirstEntryTime = time,
-			LastExitTime = DateTime.MinValue
-		};
-		state.RoundTrips.Add(state.CurrentRT);
-	}
-
-	private void LoadAllHistory()
-	{
-		if (LoadSqliteHistory)
-		{
-			LoadFromSqlite();
-		}
-		if (LoadTodayHistory)
-		{
-			LoadFromAccountExecutions();
-		}
-		CalculateAllMAEMFE();
-		int num = 0;
-		lock (tradeLock)
-		{
-			foreach (KeyValuePair<string, AccountState> accountState in accountStates)
-			{
-				num += accountState.Value.RoundTrips.Count((RoundTrip rt) => rt.IsComplete);
-			}
-		}
-		Print("OrcaExecLines: Total " + num + " completed round trips across all accounts");
-		if (num > 0)
-		{
-			needsRedraw = true;
-		}
-	}
-
-	private void LoadFromSqlite()
-	{
-		try
-		{
-			string text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), "NinjaTrader 8", "db", "NinjaTrader.sqlite");
-			if (!File.Exists(text))
-			{
-				Print("OrcaExecLines: SQLite DB not found");
-				return;
-			}
-			string text2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "NinjaTrader 8", "bin", "System.Data.SQLite.dll");
-			if (!File.Exists(text2))
-			{
-				Print("OrcaExecLines: SQLite DLL not found");
-				return;
-			}
-			Type type = Assembly.LoadFrom(text2).GetType("System.Data.SQLite.SQLiteConnection");
-			string text3 = "Data Source=" + text + ";Read Only=True";
-			object obj = Activator.CreateInstance(type, text3);
 			try
 			{
-				type.GetMethod("Open").Invoke(obj, null);
-				string name = Instrument.MasterInstrument.Name;
-				object obj2 = type.GetMethod("CreateCommand").Invoke(obj, null);
-				Type type2 = obj2.GetType();
-				type2.GetProperty("CommandText").SetValue(obj2, "SELECT e.Time, a.Name, e.MarketPosition, e.Price, e.Quantity FROM Executions e INNER JOIN Accounts a ON e.Account = a.Id INNER JOIN Instruments i ON e.Instrument = i.Id INNER JOIN MasterInstruments mi ON i.MasterInstrument = mi.Id WHERE mi.Name = @instName ORDER BY e.Time ASC", null);
-				object obj3 = type2.GetMethod("CreateParameter").Invoke(obj2, null);
-				Type type3 = obj3.GetType();
-				type3.GetProperty("ParameterName").SetValue(obj3, "@instName", null);
-				type3.GetProperty("Value").SetValue(obj3, name, null);
-				object value = type2.GetProperty("Parameters").GetValue(obj2, null);
-				value.GetType().GetMethod("Add", new Type[1] { type3 }).Invoke(value, new object[1] { obj3 });
-				object obj4 = type2.GetMethod("ExecuteReader", Type.EmptyTypes).Invoke(obj2, null);
-				Type type4 = obj4.GetType();
-				MethodInfo method = type4.GetMethod("Read");
-				MethodInfo method2 = type4.GetMethod("GetInt64");
-				MethodInfo method3 = type4.GetMethod("GetString");
-				MethodInfo method4 = type4.GetMethod("GetInt32");
-				MethodInfo method5 = type4.GetMethod("GetDouble");
-				int num = 0;
-				while ((bool)method.Invoke(obj4, null))
-				{
-					long ticks = (long)method2.Invoke(obj4, new object[1] { 0 });
-					string accountName = (string)method3.Invoke(obj4, new object[1] { 1 });
-					int num2 = (int)method4.Invoke(obj4, new object[1] { 2 });
-					double price = (double)method5.Invoke(obj4, new object[1] { 3 });
-					int quantity = (int)method4.Invoke(obj4, new object[1] { 4 });
-					DateTime time = new DateTime(ticks);
-					bool isBuy = num2 == 1;
-					ProcessExecution(isBuy, price, quantity, time, accountName);
-					num++;
-				}
-				type4.GetMethod("Close").Invoke(obj4, null);
-				Print("OrcaExecLines: Loaded " + num + " executions from SQLite for " + name);
+				foreach (Account a in hookedAccounts)
+					try { a.ExecutionUpdate -= OnExecutionUpdate; } catch {}
+				hookedAccounts.Clear();
 			}
-			finally
-			{
-				try
-				{
-					type.GetMethod("Close").Invoke(obj, null);
-				}
-				catch
-				{
-				}
-				try
-				{
-					type.GetMethod("Dispose").Invoke(obj, null);
-				}
-				catch
-				{
-				}
-			}
+			catch {}
 		}
-		catch (Exception ex)
-		{
-			Print("OrcaExecLines SQLite error: " + ex.Message);
-		}
-	}
 
-	private void LoadFromAccountExecutions()
-	{
-		try
+		private AccountState GetOrCreateState(string name)
 		{
-			if (Instrument == null)
+			if (!accountStates.ContainsKey(name))
+				accountStates[name] = new AccountState { AccountName = name };
+			return accountStates[name];
+		}
+
+		private string GetChartTraderAccount()
+		{
+			try
 			{
-				return;
+				if (ChartControl == null) return "";
+				string result = "";
+				ChartControl.Dispatcher.InvokeAsync(() =>
+				{
+					try
+					{
+						Window w = Window.GetWindow(ChartControl);
+						Chart ch = w as Chart;
+						if (ch != null && ch.ChartTrader != null && ch.ChartTrader.Account != null)
+							result = ch.ChartTrader.Account.Name;
+					}
+					catch {}
+				}).Wait(TimeSpan.FromMilliseconds(100));
+				return result;
 			}
-			string chartInstrument = Instrument.FullName;
-			HashSet<string> hashSet = new HashSet<string>();
+			catch { return ""; }
+		}
+
+		private void OnExecutionUpdate(object sender, ExecutionEventArgs e)
+		{
+			try
+			{
+				if (e.Execution == null || e.Execution.Instrument == null || Instrument == null) return;
+				if (e.Execution.Instrument.FullName != Instrument.FullName) return;
+				if (e.Execution.Order == null) return;
+				string acct = e.Execution.Account != null ? e.Execution.Account.Name : "Unknown";
+				bool isBuy  = e.Execution.Order.OrderAction == OrderAction.Buy || e.Execution.Order.OrderAction == OrderAction.BuyToCover;
+				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct);
+			}
+			catch (Exception ex) { Print("OrcaExecLines OnExec: " + ex.Message); }
+		}
+
+		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName)
+		{
 			lock (tradeLock)
 			{
-				foreach (KeyValuePair<string, AccountState> accountState in accountStates)
-				{
-					foreach (RoundTrip roundTrip in accountState.Value.RoundTrips)
-					{
-						foreach (FillMatch match in roundTrip.Matches)
-						{
-							hashSet.Add(match.EntryTime.Ticks + "_" + match.EntryPrice + "_" + match.Quantity);
-							hashSet.Add(match.ExitTime.Ticks + "_" + match.ExitPrice + "_" + match.Quantity);
-						}
-					}
-				}
-			}
-			foreach (Account hookedAccount in hookedAccounts)
-			{
-				try
-				{
-					List<Execution> list = (from val in hookedAccount.Executions
-						where val.Instrument != null && val.Instrument.FullName == chartInstrument && val.Order != null
-						orderby val.Time
-						select val).ToList();
-					int num = 0;
-					foreach (Execution item2 in list)
-					{
-						string item = item2.Time.Ticks + "_" + item2.Price + "_" + item2.Quantity;
-						if (!hashSet.Contains(item))
-						{
-							bool isBuy = item2.Order.OrderAction == OrderAction.Buy || item2.Order.OrderAction == OrderAction.BuyToCover;
-							ProcessExecution(isBuy, item2.Price, item2.Quantity, item2.Time, hookedAccount.Name);
-							num++;
-						}
-					}
-					if (num > 0)
-					{
-						Print("OrcaExecLines: Loaded " + num + " new executions from account " + hookedAccount.Name);
-					}
-				}
-				catch
-				{
-				}
-			}
-		}
-		catch (Exception ex)
-		{
-			Print("OrcaExecLines AccountExec error: " + ex.Message);
-		}
-	}
+				AccountState st  = GetOrCreateState(accountName);
+				int prev = st.NetPosition;
+				int next = st.NetPosition + (isBuy ? quantity : -quantity);
 
-	private void CalculateAllMAEMFE()
-	{
-		if (!ShowMAEMFE)
-		{
-			return;
-		}
-		lock (tradeLock)
-		{
-			foreach (KeyValuePair<string, AccountState> accountState in accountStates)
-			{
-				foreach (RoundTrip item in accountState.Value.RoundTrips.Where((RoundTrip r) => r.IsComplete && !r.MAEMFECalculated))
+				bool isReducing = (st.NetPosition > 0 && !isBuy) || (st.NetPosition < 0 && isBuy);
+				if (isReducing)
 				{
-					CalculateMAEMFE(item);
-				}
-			}
-		}
-	}
+					int toClose = Math.Min(quantity, Math.Abs(st.NetPosition));
+					int toOpen  = quantity - toClose;
+					int rem     = toClose;
 
-	private void CalculateMAEMFE(RoundTrip rt)
-	{
-		try
-		{
-			if (Bars == null || Bars.Count < 2)
-			{
-				return;
-			}
-			int num = Bars.GetBar(rt.FirstEntryTime);
-			int num2 = Bars.GetBar(rt.LastExitTime);
-			if (num < 0)
-			{
-				num = 0;
-			}
-			if (num2 >= Bars.Count)
-			{
-				num2 = Bars.Count - 1;
-			}
-			if (num > num2)
-			{
-				return;
-			}
-			double avgEntryPrice = rt.AvgEntryPrice;
-			int entryQtyTotal = rt.EntryQtyTotal;
-			double pointValue = Instrument.MasterInstrument.PointValue;
-			double num3 = 0.0;
-			double num4 = 0.0;
-			for (int i = num; i <= num2; i++)
-			{
-				double valueAt = High.GetValueAt(i);
-				double valueAt2 = Low.GetValueAt(i);
-				double val;
-				double val2;
-				if (rt.IsLong)
-				{
-					val = (valueAt - avgEntryPrice) * pointValue * (double)entryQtyTotal;
-					val2 = (valueAt2 - avgEntryPrice) * pointValue * (double)entryQtyTotal;
+					while (rem > 0 && st.OpenFills.Count > 0)
+					{
+						PendingEntry pe  = st.OpenFills[0];
+						int filled       = Math.Min(rem, pe.Quantity);
+						bool wasLong     = ((int)pe.Side == 1);
+						double ticks     = wasLong ? (price - pe.Price)/TickSize : (pe.Price - price)/TickSize;
+						double dollars   = ticks * TickSize * Instrument.MasterInstrument.PointValue * filled;
+
+						if (st.CurrentRT != null)
+						{
+							st.CurrentRT.Matches.Add(new FillMatch {
+								EntryTime = pe.Time, EntryPrice = pe.Price,
+								ExitTime  = time,    ExitPrice  = price,
+								Quantity  = filled,  IsLong     = wasLong,
+								PnLTicks  = ticks,   PnLDollars = dollars
+							});
+							st.CurrentRT.ExitPriceSum  += price  * filled;
+							st.CurrentRT.ExitQtyTotal  += filled;
+							st.CurrentRT.LastExitTime   = time;
+							st.CurrentRT.TotalPnLDollars+= dollars;
+							st.CurrentRT.TotalPnLTicks  += ticks * filled;
+						}
+						pe.Quantity -= filled;
+						rem         -= filled;
+						if (pe.Quantity <= 0) st.OpenFills.RemoveAt(0);
+					}
+
+					if (next == 0 && st.CurrentRT != null)
+					{
+						st.CurrentRT.IsComplete = true;
+						while (st.RoundTrips.Count > MaxTradesToShow) st.RoundTrips.RemoveAt(0);
+						st.CurrentRT = null;
+						if (EnableShotClock && shotClockIsLive) { shotClockEnd = DateTime.UtcNow.AddSeconds(ShotClockSeconds); shotClockActive = true; }
+					}
+					if (toOpen > 0)
+					{
+						StartNewRoundTrip(st, isBuy, price, toOpen, time, accountName);
+						st.OpenFills.Add(new PendingEntry { Time=time, Price=price, Quantity=toOpen, Side=isBuy?MarketPosition.Long:MarketPosition.Short });
+					}
+					needsRedraw = true;
 				}
 				else
 				{
-					val = (avgEntryPrice - valueAt) * pointValue * (double)entryQtyTotal;
-					val2 = (avgEntryPrice - valueAt2) * pointValue * (double)entryQtyTotal;
+					if (prev == 0) StartNewRoundTrip(st, isBuy, price, quantity, time, accountName);
+					else if (st.CurrentRT != null) { st.CurrentRT.EntryPriceSum += price*(double)quantity; st.CurrentRT.EntryQtyTotal += quantity; }
+					st.OpenFills.Add(new PendingEntry { Time=time, Price=price, Quantity=quantity, Side=isBuy?MarketPosition.Long:MarketPosition.Short });
 				}
-				if (Math.Max(val, val2) > num4)
-				{
-					num4 = Math.Max(val, val2);
-				}
-				if (Math.Min(val, val2) < num3)
-				{
-					num3 = Math.Min(val, val2);
-				}
-			}
-			rt.MaxFavorableExcursion = num4;
-			rt.MaxAdverseExcursion = num3;
-			rt.MAEMFECalculated = true;
-		}
-		catch
-		{
-		}
-	}
-
-	private void UpdateLiveMAEMFE()
-	{
-		if (!ShowMAEMFE)
-		{
-			return;
-		}
-		lock (tradeLock)
-		{
-			if (string.IsNullOrEmpty(activeAccountName) || !accountStates.ContainsKey(activeAccountName))
-				return;
-
-			AccountState value = accountStates[activeAccountName];
-			if (value.CurrentRT != null && value.NetPosition != 0)
-			{
-				RoundTrip currentRT = value.CurrentRT;
-				double avgEntryPrice = currentRT.AvgEntryPrice;
-				int entryQtyTotal = currentRT.EntryQtyTotal;
-				double pointValue = Instrument.MasterInstrument.PointValue;
-				double val;
-				double val2;
-				if (currentRT.IsLong)
-				{
-					val = (High[0] - avgEntryPrice) * pointValue * (double)entryQtyTotal;
-					val2 = (Low[0] - avgEntryPrice) * pointValue * (double)entryQtyTotal;
-				}
-				else
-				{
-					val = (avgEntryPrice - High[0]) * pointValue * (double)entryQtyTotal;
-					val2 = (avgEntryPrice - Low[0]) * pointValue * (double)entryQtyTotal;
-				}
-				if (Math.Max(val, val2) > currentRT.MaxFavorableExcursion)
-				{
-					currentRT.MaxFavorableExcursion = Math.Max(val, val2);
-				}
-				if (Math.Min(val, val2) < currentRT.MaxAdverseExcursion)
-				{
-					currentRT.MaxAdverseExcursion = Math.Min(val, val2);
-				}
+				st.NetPosition = next;
 			}
 		}
-	}
 
-	protected override void OnBarUpdate()
-	{
-		if (!historyLoaded && CurrentBar > 10)
+		private void StartNewRoundTrip(AccountState st, bool isBuy, double price, int qty, DateTime time, string acct)
 		{
-			historyLoaded = true;
-			LoadAllHistory();
-			shotClockIsLive = true;
+			st.RTCounter++;
+			st.CurrentRT = new RoundTrip {
+				Number=st.RTCounter, IsLong=isBuy, IsComplete=false, AccountName=acct,
+				EntryPriceSum=price*(double)qty, EntryQtyTotal=qty, FirstEntryTime=time, LastExitTime=DateTime.MinValue
+			};
+			st.RoundTrips.Add(st.CurrentRT);
 		}
-		if (DateTime.UtcNow - lastAccountCheck > TimeSpan.FromSeconds(1))
+
+		// â”€â”€ history loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		private void LoadAllHistory()
 		{
-			lastAccountCheck = DateTime.UtcNow;
-			string chartTraderAccount = GetChartTraderAccount();
-			if (!string.IsNullOrEmpty(chartTraderAccount) && chartTraderAccount != activeAccountName)
-			{
-				activeAccountName = chartTraderAccount;
-				needsRedraw = true;
-			}
+			if (LoadSqliteHistory) LoadFromSqlite();
+			if (LoadTodayHistory)  LoadFromAccountExecutions();
+			CalculateAllMAEMFE();
+			int total = 0;
+			lock (tradeLock)
+				foreach (var kv in accountStates)
+					total += kv.Value.RoundTrips.Count(r => r.IsComplete);
+			Print("OrcaExecLines: " + total + " completed round-trips loaded");
+			if (total > 0) needsRedraw = true;
 		}
-		UpdateLiveMAEMFE();
-		if (needsRedraw)
+
+		private void LoadFromSqlite()
 		{
-			needsRedraw = false;
-			DrawAllTrades();
-		}
-		if (!EnableShotClock || !shotClockActive)
-		{
-			return;
-		}
-		double totalSeconds = (shotClockEnd - DateTime.UtcNow).TotalSeconds;
-		if (totalSeconds <= 0.0)
-		{
-			shotClockActive = false;
 			try
 			{
-				RemoveDrawObject("OrcaShotClock");
-				return;
-			}
-			catch
-			{
-				return;
-			}
-		}
-		int num = (int)(totalSeconds / 60.0);
-		int num2 = (int)(totalSeconds % 60.0);
-		string text = $"⏱ Shot Clock  {num}:{num2:D2}";
-		Brush textBrush = ((totalSeconds <= 30.0) ? ShotClockWarningColor : ShotClockColor);
-		Draw.TextFixed(this, "OrcaShotClock", text, ShotClockPosition, textBrush, new SimpleFont("Arial", 14)
-		{
-			Bold = true
-		}, Brushes.Transparent, Brushes.Transparent, 0);
-	}
+				string db  = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), "NinjaTrader 8", "db", "NinjaTrader.sqlite");
+				string dll = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "NinjaTrader 8", "bin", "System.Data.SQLite.dll");
+				if (!System.IO.File.Exists(db) || !System.IO.File.Exists(dll)) { Print("OrcaExecLines: SQLite db/dll not found"); return; }
 
-	private void ClearOldDrawings()
-	{
-		try
-		{
-			foreach (string item in (from d in DrawObjects
-				where d.Tag.StartsWith("OrcaRT_")
-				select d.Tag).ToList())
-			{
-				RemoveDrawObject(item);
-			}
-		}
-		catch
-		{
-		}
-	}
-
-	private void DrawAllTrades()
-	{
-		if (!ShowExecutionLines)
-		{
-			return;
-		}
-		List<RoundTrip> list;
-		lock (tradeLock)
-		{
-			if (!accountStates.ContainsKey(activeAccountName))
-			{
-				return;
-			}
-			list = accountStates[activeAccountName].RoundTrips.Where((RoundTrip rt) => rt.IsComplete).ToList();
-		}
-		if (lastDrawnAccount != activeAccountName)
-		{
-			ClearOldDrawings();
-			lastDrawnAccount = activeAccountName;
-		}
-		if (list.Count > 0)
-		{
-			double num = list.Sum((RoundTrip rt) => rt.TotalPnLDollars);
-			string text = ((RiskAmount > 0.0) ? (" | " + (num / RiskAmount).ToString("+0.##;-0.##;0") + "R") : "");
-			string text2 = "Session: " + Fmt(num) + text + " (" + list.Count + " trades)";
-			if (ShowSessionTotal)
-			{
-				Draw.TextFixed(this, "OrcaRT_SessionTotal", text2, SessionTotalPosition, (num >= 0.0) ? Brushes.Lime : Brushes.Salmon, new SimpleFont("Arial", 13)
+				Type connT = Assembly.LoadFrom(dll).GetType("System.Data.SQLite.SQLiteConnection");
+				object conn = Activator.CreateInstance(connT, "Data Source=" + db + ";Read Only=True");
+				try
 				{
-					Bold = true
-				}, Brushes.Transparent, (num >= 0.0) ? Brushes.DarkGreen : Brushes.DarkRed, 80);
-			}
-			else
-			{
-				RemoveDrawObject("OrcaRT_SessionTotal");
-			}
-		}
-		foreach (RoundTrip item in list)
-		{
-			DrawRoundTrip(item);
-		}
-	}
+					connT.GetMethod("Open").Invoke(conn, null);
+					string instName = Instrument.MasterInstrument.Name;
+					object cmd   = connT.GetMethod("CreateCommand").Invoke(conn, null);
+					Type   cmdT  = cmd.GetType();
+					cmdT.GetProperty("CommandText").SetValue(cmd,
+						"SELECT e.Time, a.Name, e.MarketPosition, e.Price, e.Quantity " +
+						"FROM Executions e " +
+						"INNER JOIN Accounts a ON e.Account = a.Id " +
+						"INNER JOIN Instruments i ON e.Instrument = i.Id " +
+						"INNER JOIN MasterInstruments mi ON i.MasterInstrument = mi.Id " +
+						"WHERE mi.Name = @n ORDER BY e.Time ASC", null);
+					object p  = cmdT.GetMethod("CreateParameter").Invoke(cmd, null);
+					Type   pT = p.GetType();
+					pT.GetProperty("ParameterName").SetValue(p, "@n", null);
+					pT.GetProperty("Value").SetValue(p, instName, null);
+					object ps = cmdT.GetProperty("Parameters").GetValue(cmd, null);
+					ps.GetType().GetMethod("Add", new[] { pT }).Invoke(ps, new[] { p });
 
-	private void DrawRoundTrip(RoundTrip rt)
-	{
-		try
-		{
-			string text = "OrcaRT_" + rt.Number + "_";
-			double avgEntryPrice = rt.AvgEntryPrice;
-			double avgExitPrice = rt.AvgExitPrice;
-			Brush brush = ((rt.TotalPnLDollars >= 0.0) ? ProfitColor : LossColor);
-			if (ShowIndividualLines)
-			{
-				for (int i = 0; i < rt.Matches.Count; i++)
-				{
-					FillMatch fillMatch = rt.Matches[i];
-					DateTime dateTime = fillMatch.EntryTime;
-					DateTime dateTime2 = fillMatch.ExitTime;
-					if (Bars != null && Bars.Count > 0)
+					object r  = cmdT.GetMethod("ExecuteReader", Type.EmptyTypes).Invoke(cmd, null);
+					Type   rT = r.GetType();
+					var mRead   = rT.GetMethod("Read");
+					var mI64    = rT.GetMethod("GetInt64");
+					var mStr    = rT.GetMethod("GetString");
+					var mI32    = rT.GetMethod("GetInt32");
+					var mDbl    = rT.GetMethod("GetDouble");
+					int count = 0;
+					while ((bool)mRead.Invoke(r, null))
 					{
-						int bar = Bars.GetBar(dateTime);
-						if (bar >= 0 && bar < Bars.Count)
-						{
-							dateTime = Bars.GetTime(bar);
-						}
-						int bar2 = Bars.GetBar(dateTime2);
-						if (bar2 >= 0 && bar2 < Bars.Count)
-						{
-							dateTime2 = Bars.GetTime(bar2);
-						}
+						long   ticks = (long)mI64.Invoke(r, new object[]{0});
+						string acct  = (string)mStr.Invoke(r, new object[]{1});
+						int    mp    = (int)mI32.Invoke(r, new object[]{2});
+						double price = (double)mDbl.Invoke(r, new object[]{3});
+						int    qty   = (int)mI32.Invoke(r, new object[]{4});
+						ProcessExecution(mp == 1, price, qty, new DateTime(ticks), acct);
+						count++;
 					}
-					Draw.Line(this, text + "L" + i, false, dateTime, fillMatch.EntryPrice, dateTime2, fillMatch.ExitPrice, (fillMatch.PnLDollars >= 0.0) ? ProfitColor : LossColor, DashStyleHelper.Solid, LineWidth);
+					rT.GetMethod("Close").Invoke(r, null);
+					Print("OrcaExecLines: " + count + " SQLite rows for " + instName);
 				}
-				return;
+				finally { try { connT.GetMethod("Close").Invoke(conn, null); } catch {} }
 			}
-			DateTime dateTime3 = rt.FirstEntryTime;
-			DateTime dateTime4 = rt.LastExitTime;
-			if (Bars != null && Bars.Count > 0)
-			{
-				int bar3 = Bars.GetBar(dateTime3);
-				if (bar3 >= 0 && bar3 < Bars.Count)
-				{
-					dateTime3 = Bars.GetTime(bar3);
-				}
-				int bar4 = Bars.GetBar(dateTime4);
-				if (bar4 >= 0 && bar4 < Bars.Count)
-				{
-					dateTime4 = Bars.GetTime(bar4);
-				}
-			}
-			Draw.Line(this, text + "L", false, dateTime3, avgEntryPrice, dateTime4, avgExitPrice, brush, DashStyleHelper.Solid, LineWidth);
+			catch (Exception ex) { Print("OrcaExecLines SQLite: " + ex.Message); }
 		}
-		catch (Exception ex)
-		{
-			Print("OrcaExecLines DrawRT error: " + ex.Message);
-		}
-	}
 
-	private string Fmt(double d)
-	{
-		return ((d >= 0.0) ? "+$" : "-$") + Math.Abs(d).ToString("N2");
-	}
-
-	private void OnChartMouseMove(object sender, MouseEventArgs e)
-	{
-		mousePosition = e.GetPosition(ChartControl);
-		isMouseOverChart = true;
-		if (ChartControl != null)
+		private void LoadFromAccountExecutions()
 		{
-			ChartControl.InvalidateVisual();
-		}
-	}
-
-	private void OnChartMouseLeave(object sender, MouseEventArgs e)
-	{
-		isMouseOverChart = false;
-		mousePosition = new Point(-1.0, -1.0);
-		if (ChartControl != null)
-		{
-			ChartControl.InvalidateVisual();
-		}
-	}
-
-	protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
-	{
-		if (!ShowExecutionLines || RenderTarget == null || ChartBars == null || Bars == null)
-		{
-			return;
-		}
-		List<RoundTrip> list;
-		lock (tradeLock)
-		{
-			if (string.IsNullOrEmpty(activeAccountName) || !accountStates.ContainsKey(activeAccountName))
+			try
 			{
-				return;
-			}
-			list = accountStates[activeAccountName].RoundTrips.Where((RoundTrip rt) => rt.IsComplete).ToList();
-		}
-		if (list.Count == 0)
-		{
-			return;
-		}
-		RoundTrip roundTrip = null;
-		FillMatch fillMatch = null;
-		if (ShowLabels && isMouseOverChart)
-		{
-			float num = (float)mousePosition.X;
-			float num2 = (float)mousePosition.Y;
-			if (ChartPanel != null)
-			{
-				num2 -= (float)ChartPanel.Y;
-				num -= (float)ChartPanel.X;
-			}
-			double num3 = 625.0;
-			foreach (RoundTrip item in list)
-			{
-				float x3;
-				float y3;
-				float x4;
-				float y4;
-				if (HoverShowsIndividualPnL)
-				{
-					foreach (FillMatch match in item.Matches)
-					{
-						if (TryGetXY(match.EntryTime, match.EntryPrice, chartControl, chartScale, out var x, out var y) && TryGetXY(match.ExitTime, match.ExitPrice, chartControl, chartScale, out var x2, out var y2))
-						{
-							double num4 = DistToSegmentSquared(num, num2, x, y, x2, y2);
-							if (num4 < num3)
+				if (Instrument == null) return;
+				string chartInst = Instrument.FullName;
+				HashSet<string> seen = new HashSet<string>();
+				lock (tradeLock)
+					foreach (var kv in accountStates)
+						foreach (var rt in kv.Value.RoundTrips)
+							foreach (var m in rt.Matches)
 							{
-								num3 = num4;
-								roundTrip = item;
-								fillMatch = match;
+								seen.Add(m.EntryTime.Ticks+"_"+m.EntryPrice+"_"+m.Quantity);
+								seen.Add(m.ExitTime.Ticks +"_"+m.ExitPrice +"_"+m.Quantity);
+							}
+
+				foreach (Account a in hookedAccounts)
+				{
+					try
+					{
+						var execs = a.Executions.Where(e => e.Instrument != null && e.Instrument.FullName == chartInst && e.Order != null).OrderBy(e => e.Time).ToList();
+						int count = 0;
+						foreach (var e in execs)
+						{
+							string key = e.Time.Ticks+"_"+e.Price+"_"+e.Quantity;
+							if (!seen.Contains(key))
+							{
+								bool isBuy = e.Order.OrderAction == OrderAction.Buy || e.Order.OrderAction == OrderAction.BuyToCover;
+								ProcessExecution(isBuy, e.Price, e.Quantity, e.Time, a.Name);
+								count++;
+							}
+						}
+						if (count > 0) Print("OrcaExecLines: " + count + " executions from account " + a.Name);
+					}
+					catch {}
+				}
+			}
+			catch (Exception ex) { Print("OrcaExecLines AcctExec: " + ex.Message); }
+		}
+
+		private void CalculateAllMAEMFE()
+		{
+			if (!ShowMAEMFE) return;
+			lock (tradeLock)
+				foreach (var kv in accountStates)
+					foreach (var rt in kv.Value.RoundTrips.Where(r => r.IsComplete && !r.MAEMFECalculated))
+						CalculateMAEMFE(rt);
+		}
+
+		private void CalculateMAEMFE(RoundTrip rt)
+		{
+			try
+			{
+				if (Bars == null || Bars.Count < 2) return;
+				int s = Bars.GetBar(rt.FirstEntryTime), e = Bars.GetBar(rt.LastExitTime);
+				if (s < 0) s = 0; if (e >= Bars.Count) e = Bars.Count - 1; if (s > e) return;
+				double ep = rt.AvgEntryPrice, pv = Instrument.MasterInstrument.PointValue;
+				double mfe = 0, mae = 0;
+				for (int i = s; i <= e; i++)
+				{
+					double h = High.GetValueAt(i), l = Low.GetValueAt(i);
+					double vh = rt.IsLong ? (h-ep)*pv*rt.EntryQtyTotal : (ep-h)*pv*rt.EntryQtyTotal;
+					double vl = rt.IsLong ? (l-ep)*pv*rt.EntryQtyTotal : (ep-l)*pv*rt.EntryQtyTotal;
+					mfe = Math.Max(mfe, Math.Max(vh, vl));
+					mae = Math.Min(mae, Math.Min(vh, vl));
+				}
+				rt.MaxFavorableExcursion = mfe;
+				rt.MaxAdverseExcursion   = mae;
+				rt.MAEMFECalculated      = true;
+			}
+			catch {}
+		}
+
+		private void UpdateLiveMAEMFE()
+		{
+			if (!ShowMAEMFE) return;
+			lock (tradeLock)
+			{
+				if (string.IsNullOrEmpty(activeAccountName) || !accountStates.ContainsKey(activeAccountName)) return;
+				AccountState st = accountStates[activeAccountName];
+				if (st.CurrentRT == null || st.NetPosition == 0) return;
+				RoundTrip rt = st.CurrentRT;
+				double ep = rt.AvgEntryPrice, pv = Instrument.MasterInstrument.PointValue;
+				double vh = rt.IsLong ? (High[0]-ep)*pv*rt.EntryQtyTotal : (ep-High[0])*pv*rt.EntryQtyTotal;
+				double vl = rt.IsLong ? (Low[0] -ep)*pv*rt.EntryQtyTotal : (ep-Low[0] )*pv*rt.EntryQtyTotal;
+				rt.MaxFavorableExcursion = Math.Max(rt.MaxFavorableExcursion, Math.Max(vh, vl));
+				rt.MaxAdverseExcursion   = Math.Min(rt.MaxAdverseExcursion,   Math.Min(vh, vl));
+			}
+		}
+
+		// â”€â”€ bar update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		protected override void OnBarUpdate()
+		{
+			if (!historyLoaded && CurrentBar > 10)
+			{
+				historyLoaded   = true;
+				shotClockIsLive = true;
+				LoadAllHistory();
+			}
+
+			if (DateTime.UtcNow - lastAccountCheck > TimeSpan.FromSeconds(1))
+			{
+				lastAccountCheck = DateTime.UtcNow;
+				string acct = GetChartTraderAccount();
+				if (!string.IsNullOrEmpty(acct) && acct != activeAccountName)
+				{
+					activeAccountName = acct;
+					needsRedraw = true;
+				}
+			}
+
+			UpdateLiveMAEMFE();
+
+			if (needsRedraw) { needsRedraw = false; DrawAllTrades(); }
+
+			if (!EnableShotClock || !shotClockActive) return;
+			double rem = (shotClockEnd - DateTime.UtcNow).TotalSeconds;
+			if (rem <= 0)
+			{
+				shotClockActive = false;
+				try { RemoveDrawObject("OrcaShotClock"); } catch {}
+				return;
+			}
+			System.Windows.Media.Brush clk = rem <= 30 ? ShotClockWarningColor : ShotClockColor;
+			Draw.TextFixed(this, "OrcaShotClock",
+				string.Format("â± Shot Clock  {0}:{1:D2}", (int)(rem/60), (int)(rem%60)),
+				ShotClockPosition, clk,
+				new SimpleFont("Arial", 14){ Bold=true },
+				System.Windows.Media.Brushes.Transparent,
+				System.Windows.Media.Brushes.Transparent, 0);
+		}
+
+		// â”€â”€ drawing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		private void ClearOldDrawings()
+		{
+			try
+			{
+				foreach (string tag in DrawObjects.Where(d => d.Tag.StartsWith("OrcaRT_")).Select(d => d.Tag).ToList())
+					RemoveDrawObject(tag);
+			}
+			catch {}
+		}
+
+		private void DrawAllTrades()
+		{
+			if (!ShowExecutionLines) return;
+			List<RoundTrip> list;
+			lock (tradeLock)
+			{
+				if (!accountStates.ContainsKey(activeAccountName)) return;
+				list = accountStates[activeAccountName].RoundTrips.Where(rt => rt.IsComplete).ToList();
+			}
+			if (lastDrawnAccount != activeAccountName) { ClearOldDrawings(); lastDrawnAccount = activeAccountName; }
+
+			if (list.Count > 0)
+			{
+				double total = list.Sum(rt => rt.TotalPnLDollars);
+				string rStr  = RiskAmount > 0 ? " | " + (total/RiskAmount).ToString("+0.##;-0.##;0") + "R" : "";
+				if (ShowSessionTotal)
+					Draw.TextFixed(this, "OrcaRT_SessionTotal",
+						"Session: " + Fmt(total) + rStr + " (" + list.Count + " trades)",
+						SessionTotalPosition,
+						total >= 0 ? System.Windows.Media.Brushes.Lime : System.Windows.Media.Brushes.Salmon,
+						new SimpleFont("Arial",13){Bold=true},
+						System.Windows.Media.Brushes.Transparent,
+						total >= 0 ? System.Windows.Media.Brushes.DarkGreen : System.Windows.Media.Brushes.DarkRed, 80);
+				else
+					RemoveDrawObject("OrcaRT_SessionTotal");
+			}
+			foreach (var rt in list) DrawRoundTrip(rt);
+		}
+
+		private void DrawRoundTrip(RoundTrip rt)
+		{
+			try
+			{
+				string tag  = "OrcaRT_" + rt.Number + "_";
+				System.Windows.Media.Brush b = rt.TotalPnLDollars >= 0 ? ProfitColor : LossColor;
+				if (ShowIndividualLines)
+				{
+					for (int i = 0; i < rt.Matches.Count; i++)
+					{
+						FillMatch m = rt.Matches[i];
+						Draw.Line(this, tag+"L"+i, false, m.EntryTime, m.EntryPrice, m.ExitTime, m.ExitPrice,
+							m.PnLDollars >= 0 ? ProfitColor : LossColor, DashStyleHelper.Solid, LineWidth);
+					}
+				}
+				else
+				{
+					Draw.Line(this, tag+"L", false, rt.FirstEntryTime, rt.AvgEntryPrice, rt.LastExitTime, rt.AvgExitPrice,
+						b, DashStyleHelper.Solid, LineWidth);
+				}
+			}
+			catch (Exception ex) { Print("OrcaExecLines DrawRT: " + ex.Message); }
+		}
+
+		private string Fmt(double d) { return (d >= 0 ? "+$" : "-$") + Math.Abs(d).ToString("N2"); }
+
+		// â”€â”€ mouse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		private void OnChartMouseMove(object sender, MouseEventArgs e)
+		{
+			mousePosition   = e.GetPosition(ChartControl);
+			isMouseOverChart = true;
+			if (ChartControl != null) ChartControl.InvalidateVisual();
+		}
+		private void OnChartMouseLeave(object sender, MouseEventArgs e)
+		{
+			isMouseOverChart = false;
+			mousePosition    = new System.Windows.Point(-1, -1);
+			if (ChartControl != null) ChartControl.InvalidateVisual();
+		}
+
+		// â”€â”€ render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
+		{
+			if (!ShowExecutionLines || RenderTarget == null || ChartBars == null || Bars == null) return;
+			List<RoundTrip> list;
+			lock (tradeLock)
+			{
+				if (string.IsNullOrEmpty(activeAccountName) || !accountStates.ContainsKey(activeAccountName)) return;
+				list = accountStates[activeAccountName].RoundTrips.Where(rt => rt.IsComplete).ToList();
+			}
+			if (list.Count == 0) return;
+
+			RoundTrip hoveredRT     = null;
+			FillMatch hoveredFill   = null;
+			if (ShowLabels && isMouseOverChart)
+			{
+				float mx = (float)mousePosition.X - (ChartPanel != null ? (float)ChartPanel.X : 0);
+				float my = (float)mousePosition.Y - (ChartPanel != null ? (float)ChartPanel.Y : 0);
+				double best = 625.0;
+				foreach (var rt in list)
+				{
+					if (HoverShowsIndividualPnL)
+					{
+						foreach (var m in rt.Matches)
+						{
+							float x1,y1,x2,y2;
+							if (TryGetXY(m.EntryTime, m.EntryPrice, chartControl, chartScale, out x1, out y1) &&
+							    TryGetXY(m.ExitTime,  m.ExitPrice,  chartControl, chartScale, out x2, out y2))
+							{
+								double d = DistSq(mx,my,x1,y1,x2,y2);
+								if (d < best) { best=d; hoveredRT=rt; hoveredFill=m; }
 							}
 						}
 					}
-				}
-				else if (TryGetXY(item.FirstEntryTime, item.AvgEntryPrice, chartControl, chartScale, out x3, out y3) && TryGetXY(item.LastExitTime, item.AvgExitPrice, chartControl, chartScale, out x4, out y4))
-				{
-					double num5 = DistToSegmentSquared(num, num2, x3, y3, x4, y4);
-					if (num5 < num3)
+					else
 					{
-						num3 = num5;
-						roundTrip = item;
-						fillMatch = null;
+						float x1,y1,x2,y2;
+						if (TryGetXY(rt.FirstEntryTime, rt.AvgEntryPrice, chartControl, chartScale, out x1, out y1) &&
+						    TryGetXY(rt.LastExitTime,  rt.AvgExitPrice,  chartControl, chartScale, out x2, out y2))
+						{
+							double d = DistSq(mx,my,x1,y1,x2,y2);
+							if (d < best) { best=d; hoveredRT=rt; hoveredFill=null; }
+						}
 					}
 				}
 			}
-		}
 
-		SolidColorBrush longMarkerBrush = ToD2DBrush(LongMarkerColor);
-		SolidColorBrush longMarkerBrushAlpha = ToD2DBrush(LongMarkerColor, 0.65f);
-		SolidColorBrush shortMarkerBrush = ToD2DBrush(ShortMarkerColor);
-		SolidColorBrush shortMarkerBrushAlpha = ToD2DBrush(ShortMarkerColor, 0.65f);
-
-		try
-		{
-			foreach (RoundTrip item2 in list)
-			{
-				SolidColorBrush markerBrush = (item2.IsLong ? longMarkerBrush : shortMarkerBrush);
-				SolidColorBrush markerBrushAlpha = (item2.IsLong ? longMarkerBrushAlpha : shortMarkerBrushAlpha);
-
-				if (ShowMarkers && TryGetXY(item2.FirstEntryTime, item2.AvgEntryPrice, chartControl, chartScale, out var x5, out var y5) && TryGetXY(item2.LastExitTime, item2.AvgExitPrice, chartControl, chartScale, out var x6, out var y6))
-				{
-					DrawTriangle(item2.IsLong, x5, y5, 8f, markerBrush);
-					DrawTriangle(!item2.IsLong, x6, y6, 8f, markerBrush);
-				}
-
-				if (!ShowIndividualMarkers || (item2.Matches.Count <= 1 && ShowMarkers))
-				{
-					continue;
-				}
-
-				foreach (FillMatch match2 in item2.Matches)
-				{
-					if (TryGetXY(match2.EntryTime, match2.EntryPrice, chartControl, chartScale, out var x7, out var y7))
-					{
-						DrawTriangle(item2.IsLong, x7, y7, 4.4f, markerBrushAlpha);
-					}
-					if (TryGetXY(match2.ExitTime, match2.ExitPrice, chartControl, chartScale, out var x8, out var y8))
-					{
-						DrawTriangle(!item2.IsLong, x8, y8, 4.4f, markerBrushAlpha);
-					}
-				}
-			}
-		}
-		finally
-		{
-			longMarkerBrush?.Dispose();
-			longMarkerBrushAlpha?.Dispose();
-			shortMarkerBrush?.Dispose();
-			shortMarkerBrushAlpha?.Dispose();
-		}
-		if (roundTrip == null)
-		{
-			return;
-		}
-		float x9;
-		float y9;
-		if (HoverShowsIndividualPnL && fillMatch != null)
-		{
-			if (TryGetXY(fillMatch.ExitTime, fillMatch.ExitPrice, chartControl, chartScale, out x9, out y9))
-			{
-				DrawHoverLabel(roundTrip, fillMatch, x9, y9);
-			}
-		}
-		else if (TryGetXY(roundTrip.LastExitTime, roundTrip.AvgExitPrice, chartControl, chartScale, out x9, out y9))
-		{
-			DrawHoverLabel(roundTrip, null, x9, y9);
-		}
-	}
-
-	private bool TryGetXY(DateTime time, double price, ChartControl cc, ChartScale cs, out float x, out float y)
-	{
-		x = (y = 0f);
-		try
-		{
-			int bar = Bars.GetBar(time);
-			if (bar < 0 || bar >= Bars.Count)
-			{
-				return false;
-			}
-			x = cc.GetXByBarIndex(ChartBars, bar);
-			y = cs.GetYByValue(price);
-			return true;
-		}
-		catch
-		{
-			return false;
-		}
-	}
-
-	private void DrawTriangle(bool pointUp, float cx, float cy, float size, SolidColorBrush brush)
-	{
-		try
-		{
-			PathGeometry val = new PathGeometry(Globals.D2DFactory);
-			GeometrySink val2 = val.Open();
-			val2.SetFillMode(FillMode.Winding);
-			if (pointUp)
-			{
-				val2.BeginFigure(new Vector2(cx, cy - size * 1.4f), FigureBegin.Filled);
-				val2.AddLines(new Vector2[2]
-				{
-					new Vector2(cx + size, cy + size * 0.7f),
-					new Vector2(cx - size, cy + size * 0.7f)
-				});
-			}
-			else
-			{
-				val2.BeginFigure(new Vector2(cx, cy + size * 1.4f), FigureBegin.Filled);
-				val2.AddLines(new Vector2[2]
-				{
-					new Vector2(cx + size, cy - size * 0.7f),
-					new Vector2(cx - size, cy - size * 0.7f)
-				});
-			}
-			val2.EndFigure(FigureEnd.Closed);
-			val2.Close();
-			RenderTarget.FillGeometry(val, brush);
-			val.Dispose();
-			val2.Dispose();
-		}
-		catch
-		{
-		}
-	}
-
-	private void DrawHoverLabel(RoundTrip rt, FillMatch match, float exitX, float exitY)
-	{
-		try
-		{
-			bool flag = match != null;
-			string text = (rt.IsLong ? "Long" : "Short");
-			int num = (flag ? match.Quantity : rt.EntryQtyTotal);
-			string text2 = ((num > 1) ? (" x" + num) : "");
-			double num2 = (flag ? match.PnLTicks : ((rt.EntryQtyTotal > 0) ? (rt.TotalPnLTicks / (double)rt.EntryQtyTotal) : 0.0));
-			double num3 = (flag ? match.PnLDollars : rt.TotalPnLDollars);
-			string text3 = "#" + rt.Number + (flag ? " (Fill)" : "") + " " + text + text2 + "\n" + num2.ToString("+0.##;-0.##;0") + " ticks | " + Fmt(num3);
-			if (RiskAmount > 0.0)
-			{
-				text3 = text3 + " | " + (num3 / RiskAmount).ToString("+0.##;-0.##;0") + "R";
-			}
-			if (!flag && ShowMAEMFE && rt.MAEMFECalculated)
-			{
-				text3 = text3 + "\n" + ((num3 >= 0.0) ? ("MDD: " + Fmt(rt.MaxAdverseExcursion)) : ("Peak: " + Fmt(rt.MaxFavorableExcursion)));
-			}
-			bool num4 = num3 >= 0.0;
-			Color4 val = (num4 ? new Color4(0f, 1f, 0f, 1f) : new Color4(1f, 0.5f, 0.5f, 1f));
-			Color4 val2 = (num4 ? new Color4(0f, 0.18f, 0f, 0.88f) : new Color4(0.32f, 0f, 0f, 0.88f));
-			TextFormat val3 = new TextFormat(Globals.DirectWriteFactory, "Segoe UI", FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize);
+			SharpDX.Direct2D1.SolidColorBrush lngB  = ToD2D(LongMarkerColor);
+			SharpDX.Direct2D1.SolidColorBrush lngBA = ToD2D(LongMarkerColor, 0.65f);
+			SharpDX.Direct2D1.SolidColorBrush shtB  = ToD2D(ShortMarkerColor);
+			SharpDX.Direct2D1.SolidColorBrush shtBA = ToD2D(ShortMarkerColor, 0.65f);
 			try
 			{
-				TextLayout val4 = new TextLayout(Globals.DirectWriteFactory, text3, val3, 320f, 120f);
+				foreach (var rt in list)
+				{
+					SharpDX.Direct2D1.SolidColorBrush mb  = rt.IsLong ? lngB  : shtB;
+					SharpDX.Direct2D1.SolidColorBrush mba = rt.IsLong ? lngBA : shtBA;
+					float x1,y1,x2,y2;
+					if (ShowMarkers &&
+					    TryGetXY(rt.FirstEntryTime, rt.AvgEntryPrice, chartControl, chartScale, out x1, out y1) &&
+					    TryGetXY(rt.LastExitTime,  rt.AvgExitPrice,  chartControl, chartScale, out x2, out y2))
+					{
+						DrawTri( rt.IsLong, x1, y1, 8f, mb);
+						DrawTri(!rt.IsLong, x2, y2, 8f, mb);
+					}
+					if (!ShowIndividualMarkers || (rt.Matches.Count <= 1 && ShowMarkers)) continue;
+					foreach (var m in rt.Matches)
+					{
+						float xa,ya,xb,yb;
+						if (TryGetXY(m.EntryTime, m.EntryPrice, chartControl, chartScale, out xa, out ya))  DrawTri( rt.IsLong, xa, ya, 4.4f, mba);
+						if (TryGetXY(m.ExitTime,  m.ExitPrice,  chartControl, chartScale, out xb, out yb))  DrawTri(!rt.IsLong, xb, yb, 4.4f, mba);
+					}
+				}
+			}
+			finally { lngB?.Dispose(); lngBA?.Dispose(); shtB?.Dispose(); shtBA?.Dispose(); }
+
+			if (hoveredRT == null) return;
+			float hx, hy;
+			if (HoverShowsIndividualPnL && hoveredFill != null)
+			{
+				if (TryGetXY(hoveredFill.ExitTime, hoveredFill.ExitPrice, chartControl, chartScale, out hx, out hy))
+					DrawHover(hoveredRT, hoveredFill, hx, hy);
+			}
+			else if (TryGetXY(hoveredRT.LastExitTime, hoveredRT.AvgExitPrice, chartControl, chartScale, out hx, out hy))
+				DrawHover(hoveredRT, null, hx, hy);
+		}
+
+		private bool TryGetXY(DateTime time, double price, ChartControl cc, ChartScale cs, out float x, out float y)
+		{
+			x = y = 0f;
+			try
+			{
+				int bar = Bars.GetBar(time);
+				if (bar < 0 || bar >= Bars.Count) return false;
+				x = cc.GetXByBarIndex(ChartBars, bar);
+				y = cs.GetYByValue(price);
+				return true;
+			}
+			catch { return false; }
+		}
+
+		private void DrawTri(bool up, float cx, float cy, float sz, SharpDX.Direct2D1.SolidColorBrush brush)
+		{
+			try
+			{
+				SharpDX.Direct2D1.PathGeometry pg = new SharpDX.Direct2D1.PathGeometry(Globals.D2DFactory);
+				GeometrySink gs = pg.Open();
+				gs.SetFillMode(FillMode.Winding);
+				if (up)
+				{
+					gs.BeginFigure(new Vector2(cx, cy - sz*1.4f), FigureBegin.Filled);
+					gs.AddLines(new[] { new Vector2(cx+sz, cy+sz*0.7f), new Vector2(cx-sz, cy+sz*0.7f) });
+				}
+				else
+				{
+					gs.BeginFigure(new Vector2(cx, cy + sz*1.4f), FigureBegin.Filled);
+					gs.AddLines(new[] { new Vector2(cx+sz, cy-sz*0.7f), new Vector2(cx-sz, cy-sz*0.7f) });
+				}
+				gs.EndFigure(FigureEnd.Closed);
+				gs.Close();
+				RenderTarget.FillGeometry(pg, brush);
+				pg.Dispose(); gs.Dispose();
+			}
+			catch {}
+		}
+
+		private void DrawHover(RoundTrip rt, FillMatch m, float ex, float ey)
+		{
+			try
+			{
+				bool isFill = m != null;
+				double ticks   = isFill ? m.PnLTicks   : (rt.EntryQtyTotal>0 ? rt.TotalPnLTicks/(double)rt.EntryQtyTotal : 0);
+				double dollars = isFill ? m.PnLDollars  : rt.TotalPnLDollars;
+				int    qty     = isFill ? m.Quantity     : rt.EntryQtyTotal;
+				string label   = "#" + rt.Number + (isFill?" (Fill)":"") + " " + (rt.IsLong?"Long":"Short") + (qty>1?" x"+qty:"")
+				               + "\n" + ticks.ToString("+0.##;-0.##;0") + " ticks | " + Fmt(dollars);
+				if (RiskAmount > 0) label += " | " + (dollars/RiskAmount).ToString("+0.##;-0.##;0") + "R";
+				if (!isFill && ShowMAEMFE && rt.MAEMFECalculated)
+					label += "\n" + (dollars>=0 ? "MDD: "+Fmt(rt.MaxAdverseExcursion) : "Peak: "+Fmt(rt.MaxFavorableExcursion));
+
+				bool   pos  = dollars >= 0;
+				Color4 fg   = pos ? new Color4(0f,1f,0f,1f)       : new Color4(1f,0.5f,0.5f,1f);
+				Color4 bg   = pos ? new Color4(0f,0.18f,0f,0.88f) : new Color4(0.32f,0f,0f,0.88f);
+
+				TextFormat tf = new TextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize);
 				try
 				{
-					TextMetrics metrics = val4.Metrics;
-					float num5 = exitX + 10f;
-					float num6 = exitY - metrics.Height / 2f;
-					if (num5 + metrics.Width + 14f > RenderTarget.Size.Width)
-					{
-						num5 = exitX - metrics.Width - 14f - 10f;
-					}
-					if (num6 < 2f)
-					{
-						num6 = 2f;
-					}
-					SolidColorBrush val5 = new SolidColorBrush(RenderTarget, val2);
+					TextLayout tl = new TextLayout(Globals.DirectWriteFactory, label, tf, 320f, 120f);
 					try
 					{
-						SolidColorBrush val6 = new SolidColorBrush(RenderTarget, val);
+						TextMetrics tm = tl.Metrics;
+						float lx = ex + 10f, ly = ey - tm.Height/2f;
+						if (lx + tm.Width + 14f > RenderTarget.Size.Width) lx = ex - tm.Width - 24f;
+						if (ly < 2f) ly = 2f;
+						SharpDX.Direct2D1.SolidColorBrush bgB = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, bg);
+						SharpDX.Direct2D1.SolidColorBrush fgB = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, fg);
 						try
 						{
-							RenderTarget.FillRectangle(new RectangleF(num5 - 7f, num6 - 7f, metrics.Width + 14f, metrics.Height + 14f), val5);
-							RenderTarget.DrawTextLayout(new Vector2(num5, num6), val4, val6);
+							RenderTarget.FillRectangle(new RectangleF(lx-7f, ly-7f, tm.Width+14f, tm.Height+14f), bgB);
+							RenderTarget.DrawTextLayout(new Vector2(lx, ly), tl, fgB);
 						}
-						finally
-						{
-							val6?.Dispose();
-						}
+						finally { bgB?.Dispose(); fgB?.Dispose(); }
 					}
-					finally
-					{
-						val5?.Dispose();
-					}
+					finally { tl?.Dispose(); }
 				}
-				finally
-				{
-					val4?.Dispose();
-				}
+				finally { tf?.Dispose(); }
 			}
-			finally
+			catch {}
+		}
+
+		private SharpDX.Direct2D1.SolidColorBrush ToD2D(System.Windows.Media.Brush wpf, float a = 1f)
+		{
+			System.Windows.Media.SolidColorBrush scb = wpf as System.Windows.Media.SolidColorBrush;
+			if (scb != null)
 			{
-				val3?.Dispose();
+				System.Windows.Media.Color c = scb.Color;
+				return new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(c.R/255f, c.G/255f, c.B/255f, a));
 			}
+			return new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(1f,1f,0f,a));
 		}
-		catch
-		{
-		}
-	}
 
-	private SolidColorBrush ToD2DBrush(Brush wpfBrush, float alpha = 1f)
-	{
-		if (wpfBrush is SolidColorBrush { Color: var color })
+		private static double DistSq(float px, float py, float x1, float y1, float x2, float y2)
 		{
-			return new SolidColorBrush(RenderTarget, new Color4((float)color.R / 255f, (float)color.G / 255f, (float)color.B / 255f, alpha));
+			float dx = x2-x1, dy = y2-y1, len2 = dx*dx+dy*dy;
+			if (len2 == 0f) return (px-x1)*(px-x1)+(py-y1)*(py-y1);
+			float t = Math.Max(0f, Math.Min(1f, ((px-x1)*dx+(py-y1)*dy)/len2));
+			float qx = x1+t*dx, qy = y1+t*dy;
+			return (px-qx)*(px-qx)+(py-qy)*(py-qy);
 		}
-		return new SolidColorBrush(RenderTarget, new Color4(1f, 1f, 0f, alpha));
 	}
-
-	private static double DistToSegmentSquared(float px, float py, float x1, float y1, float x2, float y2)
-	{
-		float num = (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2);
-		if (num == 0f)
-		{
-			return Dist2(px, py, x1, y1);
-		}
-		float val = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / num;
-		val = Math.Max(0f, Math.Min(1f, val));
-		return Dist2(px, py, x1 + val * (x2 - x1), y1 + val * (y2 - y1));
-	}
-
-	private static double Dist2(float ax, float ay, float bx, float by)
-	{
-		return (double)(ax - bx) * (double)(ax - bx) + (double)(ay - by) * (double)(ay - by);
-	}
-}
 }
 
 #region NinjaScript generated code. Neither change nor remove.

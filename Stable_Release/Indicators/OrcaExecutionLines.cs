@@ -150,7 +150,7 @@ public class OrcaExecutionLines : Indicator
 
 	private bool shotClockIsLive;
 
-	private Point mousePosition = new Point(-1.0, -1.0);
+	private System.Windows.Point mousePosition = new System.Windows.Point(-1.0, -1.0);
 	private bool isMouseOverChart;
 	private DateTime lastAccountCheck = DateTime.MinValue;
 
@@ -188,6 +188,16 @@ public class OrcaExecutionLines : Indicator
 	public TextPosition SessionTotalPosition { get; set; }
 
 	[NinjaScriptProperty]
+	[Range(0, 1000)]
+	[Display(Name = "Session Total Horizontal Offset", GroupName = "3. Appearance", Order = 3)]
+	public int SessionTotalHorizontalOffset { get; set; }
+
+	[NinjaScriptProperty]
+	[Range(0, 1000)]
+	[Display(Name = "Session Total Vertical Offset", GroupName = "3. Appearance", Order = 4)]
+	public int SessionTotalVerticalOffset { get; set; }
+
+	[NinjaScriptProperty]
 	[Display(Name = "Enable Shot Clock", Description = "Show a cooldown countdown after each completed trade", GroupName = "5. Shot Clock", Order = 0)]
 	public bool EnableShotClock { get; set; }
 
@@ -201,7 +211,7 @@ public class OrcaExecutionLines : Indicator
 
 	[XmlIgnore]
 	[Display(Name = "Countdown Color", GroupName = "5. Shot Clock", Order = 3)]
-	public Brush ShotClockColor { get; set; }
+	public System.Windows.Media.Brush ShotClockColor { get; set; }
 
 	[Browsable(false)]
 	public string ShotClockColorSerializable
@@ -218,7 +228,7 @@ public class OrcaExecutionLines : Indicator
 
 	[XmlIgnore]
 	[Display(Name = "Warning Color (≤ 30 s)", GroupName = "5. Shot Clock", Order = 4)]
-	public Brush ShotClockWarningColor { get; set; }
+	public System.Windows.Media.Brush ShotClockWarningColor { get; set; }
 
 	[Browsable(false)]
 	public string ShotClockWarningColorSerializable
@@ -262,7 +272,7 @@ public class OrcaExecutionLines : Indicator
 
 	[XmlIgnore]
 	[Display(Name = "Profit Color", GroupName = "4. Colors", Order = 0)]
-	public Brush ProfitColor { get; set; }
+	public System.Windows.Media.Brush ProfitColor { get; set; }
 
 	[Browsable(false)]
 	public string ProfitColorSerializable
@@ -279,7 +289,7 @@ public class OrcaExecutionLines : Indicator
 
 	[XmlIgnore]
 	[Display(Name = "Loss Color", GroupName = "4. Colors", Order = 1)]
-	public Brush LossColor { get; set; }
+	public System.Windows.Media.Brush LossColor { get; set; }
 
 	[Browsable(false)]
 	public string LossColorSerializable
@@ -296,7 +306,7 @@ public class OrcaExecutionLines : Indicator
 
 	[XmlIgnore]
 	[Display(Name = "Long Marker Color", GroupName = "4. Colors", Order = 2)]
-	public Brush LongMarkerColor { get; set; }
+	public System.Windows.Media.Brush LongMarkerColor { get; set; }
 
 	[Browsable(false)]
 	public string LongMarkerColorSerializable
@@ -313,7 +323,7 @@ public class OrcaExecutionLines : Indicator
 
 	[XmlIgnore]
 	[Display(Name = "Short Marker Color", GroupName = "4. Colors", Order = 3)]
-	public Brush ShortMarkerColor { get; set; }
+	public System.Windows.Media.Brush ShortMarkerColor { get; set; }
 
 	[Browsable(false)]
 	public string ShortMarkerColorSerializable
@@ -334,7 +344,7 @@ public class OrcaExecutionLines : Indicator
 		{
 			Description = "Automatic execution lines with FIFO round-trip matching, SQLite history, and R-multiple tracking";
 			Name = "OrcaExecutionLines";
-			Calculate = Calculate.OnEachTick;
+			Calculate = Calculate.OnPriceChange;
 			IsOverlay = true;
 			DisplayInDataBox = false;
 			DrawOnPricePanel = true;
@@ -349,6 +359,8 @@ public class OrcaExecutionLines : Indicator
 			ShowMAEMFE = true;
 			ShowSessionTotal = true;
 			SessionTotalPosition = TextPosition.TopRight;
+			SessionTotalHorizontalOffset = 20;
+			SessionTotalVerticalOffset = 20;
 			LoadTodayHistory = true;
 			LoadSqliteHistory = true;
 			EnableShotClock = true;
@@ -377,7 +389,7 @@ public class OrcaExecutionLines : Indicator
 			shotClockIsLive = false;
 			HookAllAccounts();
 		}
-		else if (State == State.RealtimeStateChanged)
+		else if (State == State.Realtime)
 		{
 			if (ChartControl != null)
 			{
@@ -529,8 +541,8 @@ public class OrcaExecutionLines : Indicator
 				{
 					PendingEntry pendingEntry = orCreateState.OpenFills[0];
 					int num5 = Math.Min(num4, pendingEntry.Quantity);
-					bool flag = (int)pendingEntry.Side == 1;
-					double num6 = (flag ? ((price - pendingEntry.Price) / TickSize) : ((pendingEntry.Price - price) / TickSize));
+					bool isLongEntry = pendingEntry.Side == MarketPosition.Long;
+					double num6 = (isLongEntry ? ((price - pendingEntry.Price) / TickSize) : ((pendingEntry.Price - price) / TickSize));
 					double num7 = num6 * TickSize * Instrument.MasterInstrument.PointValue * (double)num5;
 					if (orCreateState.CurrentRT != null)
 					{
@@ -541,7 +553,7 @@ public class OrcaExecutionLines : Indicator
 							ExitTime = time,
 							ExitPrice = price,
 							Quantity = num5,
-							IsLong = flag,
+							IsLong = isLongEntry,
 							PnLTicks = num6,
 							PnLDollars = num7
 						});
@@ -910,8 +922,14 @@ public class OrcaExecutionLines : Indicator
 		}
 	}
 
+	private DateTime lastOnBarUpdate = DateTime.MinValue;
+
 	protected override void OnBarUpdate()
 	{
+		if (DateTime.UtcNow - lastOnBarUpdate < TimeSpan.FromMilliseconds(250))
+			return;
+		lastOnBarUpdate = DateTime.UtcNow;
+
 		if (!historyLoaded && CurrentBar > 10)
 		{
 			historyLoaded = true;
@@ -929,11 +947,6 @@ public class OrcaExecutionLines : Indicator
 			}
 		}
 		UpdateLiveMAEMFE();
-		if (needsRedraw)
-		{
-			needsRedraw = false;
-			DrawAllTrades();
-		}
 		if (!EnableShotClock || !shotClockActive)
 		{
 			return;
@@ -955,7 +968,7 @@ public class OrcaExecutionLines : Indicator
 		int num = (int)(totalSeconds / 60.0);
 		int num2 = (int)(totalSeconds % 60.0);
 		string text = $"⏱ Shot Clock  {num}:{num2:D2}";
-		Brush textBrush = ((totalSeconds <= 30.0) ? ShotClockWarningColor : ShotClockColor);
+		System.Windows.Media.Brush textBrush = ((totalSeconds <= 30.0) ? ShotClockWarningColor : ShotClockColor);
 		Draw.TextFixed(this, "OrcaShotClock", text, ShotClockPosition, textBrush, new SimpleFont("Arial", 14)
 		{
 			Bold = true
@@ -978,104 +991,6 @@ public class OrcaExecutionLines : Indicator
 		}
 	}
 
-	private void DrawAllTrades()
-	{
-		if (!ShowExecutionLines)
-		{
-			return;
-		}
-		List<RoundTrip> list;
-		lock (tradeLock)
-		{
-			if (!accountStates.ContainsKey(activeAccountName))
-			{
-				return;
-			}
-			list = accountStates[activeAccountName].RoundTrips.Where((RoundTrip rt) => rt.IsComplete).ToList();
-		}
-		if (lastDrawnAccount != activeAccountName)
-		{
-			ClearOldDrawings();
-			lastDrawnAccount = activeAccountName;
-		}
-		if (list.Count > 0)
-		{
-			double num = list.Sum((RoundTrip rt) => rt.TotalPnLDollars);
-			string text = ((RiskAmount > 0.0) ? (" | " + (num / RiskAmount).ToString("+0.##;-0.##;0") + "R") : "");
-			string text2 = "Session: " + Fmt(num) + text + " (" + list.Count + " trades)";
-			if (ShowSessionTotal)
-			{
-				Draw.TextFixed(this, "OrcaRT_SessionTotal", text2, SessionTotalPosition, (num >= 0.0) ? Brushes.Lime : Brushes.Salmon, new SimpleFont("Arial", 13)
-				{
-					Bold = true
-				}, Brushes.Transparent, (num >= 0.0) ? Brushes.DarkGreen : Brushes.DarkRed, 80);
-			}
-			else
-			{
-				RemoveDrawObject("OrcaRT_SessionTotal");
-			}
-		}
-		foreach (RoundTrip item in list)
-		{
-			DrawRoundTrip(item);
-		}
-	}
-
-	private void DrawRoundTrip(RoundTrip rt)
-	{
-		try
-		{
-			string text = "OrcaRT_" + rt.Number + "_";
-			double avgEntryPrice = rt.AvgEntryPrice;
-			double avgExitPrice = rt.AvgExitPrice;
-			Brush brush = ((rt.TotalPnLDollars >= 0.0) ? ProfitColor : LossColor);
-			if (ShowIndividualLines)
-			{
-				for (int i = 0; i < rt.Matches.Count; i++)
-				{
-					FillMatch fillMatch = rt.Matches[i];
-					DateTime dateTime = fillMatch.EntryTime;
-					DateTime dateTime2 = fillMatch.ExitTime;
-					if (Bars != null && Bars.Count > 0)
-					{
-						int bar = Bars.GetBar(dateTime);
-						if (bar >= 0 && bar < Bars.Count)
-						{
-							dateTime = Bars.GetTime(bar);
-						}
-						int bar2 = Bars.GetBar(dateTime2);
-						if (bar2 >= 0 && bar2 < Bars.Count)
-						{
-							dateTime2 = Bars.GetTime(bar2);
-						}
-					}
-					Draw.Line(this, text + "L" + i, false, dateTime, fillMatch.EntryPrice, dateTime2, fillMatch.ExitPrice, (fillMatch.PnLDollars >= 0.0) ? ProfitColor : LossColor, DashStyleHelper.Solid, LineWidth);
-				}
-				return;
-			}
-			DateTime dateTime3 = rt.FirstEntryTime;
-			DateTime dateTime4 = rt.LastExitTime;
-			if (Bars != null && Bars.Count > 0)
-			{
-				int bar3 = Bars.GetBar(dateTime3);
-				if (bar3 >= 0 && bar3 < Bars.Count)
-				{
-					dateTime3 = Bars.GetTime(bar3);
-				}
-				int bar4 = Bars.GetBar(dateTime4);
-				if (bar4 >= 0 && bar4 < Bars.Count)
-				{
-					dateTime4 = Bars.GetTime(bar4);
-				}
-			}
-			Draw.Line(this, text + "L", false, dateTime3, avgEntryPrice, dateTime4, avgExitPrice, brush, DashStyleHelper.Solid, LineWidth);
-		}
-		catch (Exception ex)
-		{
-			Print("OrcaExecLines DrawRT error: " + ex.Message);
-		}
-	}
-
 	private string Fmt(double d)
 	{
 		return ((d >= 0.0) ? "+$" : "-$") + Math.Abs(d).ToString("N2");
@@ -1094,7 +1009,7 @@ public class OrcaExecutionLines : Indicator
 	private void OnChartMouseLeave(object sender, MouseEventArgs e)
 	{
 		isMouseOverChart = false;
-		mousePosition = new Point(-1.0, -1.0);
+		mousePosition = new System.Windows.Point(-1.0, -1.0);
 		if (ChartControl != null)
 		{
 			ChartControl.InvalidateVisual();
@@ -1116,6 +1031,37 @@ public class OrcaExecutionLines : Indicator
 			}
 			list = accountStates[activeAccountName].RoundTrips.Where((RoundTrip rt) => rt.IsComplete).ToList();
 		}
+
+		if (ShowSessionTotal && list.Count > 0)
+		{
+			try
+			{
+				double totalPnL = list.Sum((RoundTrip rt) => rt.TotalPnLDollars);
+				string rText = ((RiskAmount > 0.0) ? (" | " + (totalPnL / RiskAmount).ToString("+0.##;-0.##;0") + "R") : "");
+				string sessionText = "SESSION: " + Fmt(totalPnL) + rText + " (" + list.Count + " Trades)";
+
+				using (var fmt = new SharpDX.DirectWrite.TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 13f))
+				using (var l = new SharpDX.DirectWrite.TextLayout(NinjaTrader.Core.Globals.DirectWriteFactory, sessionText, fmt, 500f, 1000f))
+				using (var br = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, (totalPnL >= 0) ? new SharpDX.Color4(0f, 1f, 0f, 1f) : new SharpDX.Color4(1f, 0.4f, 0.4f, 1f)))
+				using (var bgBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color4(0f, 0f, 0f, 0.6f)))
+				{
+					float tw = l.Metrics.Width + 16f;
+					float th = l.Metrics.Height + 8f;
+					float tx = RenderTarget.Size.Width - tw - (float)SessionTotalHorizontalOffset;
+					float ty = (float)SessionTotalVerticalOffset;
+
+					if (SessionTotalPosition == TextPosition.BottomRight) ty = RenderTarget.Size.Height - th - (float)SessionTotalVerticalOffset;
+					else if (SessionTotalPosition == TextPosition.BottomLeft) { tx = (float)SessionTotalHorizontalOffset; ty = RenderTarget.Size.Height - th - (float)SessionTotalVerticalOffset; }
+					else if (SessionTotalPosition == TextPosition.TopLeft) tx = (float)SessionTotalHorizontalOffset;
+
+					var bgRect = new SharpDX.RectangleF(tx, ty, tw, th);
+					RenderTarget.FillRoundedRectangle(new SharpDX.Direct2D1.RoundedRectangle { Rect = bgRect, RadiusX = 4f, RadiusY = 4f }, bgBr);
+					RenderTarget.DrawTextLayout(new SharpDX.Vector2(tx + 8f, ty + 4f), l, br);
+				}
+			}
+			catch { }
+		}
+
 		if (list.Count == 0)
 		{
 			return;
@@ -1167,17 +1113,34 @@ public class OrcaExecutionLines : Indicator
 			}
 		}
 
-		SolidColorBrush longMarkerBrush = ToD2DBrush(LongMarkerColor);
-		SolidColorBrush longMarkerBrushAlpha = ToD2DBrush(LongMarkerColor, 0.65f);
-		SolidColorBrush shortMarkerBrush = ToD2DBrush(ShortMarkerColor);
-		SolidColorBrush shortMarkerBrushAlpha = ToD2DBrush(ShortMarkerColor, 0.65f);
+		SharpDX.Direct2D1.SolidColorBrush longMarkerBrush = ToD2DBrush(LongMarkerColor);
+		SharpDX.Direct2D1.SolidColorBrush longMarkerBrushAlpha = ToD2DBrush(LongMarkerColor, 0.65f);
+		SharpDX.Direct2D1.SolidColorBrush shortMarkerBrush = ToD2DBrush(ShortMarkerColor);
+		SharpDX.Direct2D1.SolidColorBrush shortMarkerBrushAlpha = ToD2DBrush(ShortMarkerColor, 0.65f);
+		SharpDX.Direct2D1.SolidColorBrush profitBrush = ToD2DBrush(ProfitColor);
+		SharpDX.Direct2D1.SolidColorBrush lossBrush = ToD2DBrush(LossColor);
 
 		try
 		{
 			foreach (RoundTrip item2 in list)
 			{
-				SolidColorBrush markerBrush = (item2.IsLong ? longMarkerBrush : shortMarkerBrush);
-				SolidColorBrush markerBrushAlpha = (item2.IsLong ? longMarkerBrushAlpha : shortMarkerBrushAlpha);
+				SharpDX.Direct2D1.SolidColorBrush markerBrush = (item2.IsLong ? longMarkerBrush : shortMarkerBrush);
+				SharpDX.Direct2D1.SolidColorBrush markerBrushAlpha = (item2.IsLong ? longMarkerBrushAlpha : shortMarkerBrushAlpha);
+
+				if (ShowIndividualLines)
+				{
+					foreach (FillMatch match in item2.Matches)
+					{
+						if (TryGetXY(match.EntryTime, match.EntryPrice, chartControl, chartScale, out var lx1, out var ly1) && TryGetXY(match.ExitTime, match.ExitPrice, chartControl, chartScale, out var lx2, out var ly2))
+						{
+							RenderTarget.DrawLine(new Vector2(lx1, ly1), new Vector2(lx2, ly2), (match.PnLDollars >= 0.0) ? profitBrush : lossBrush, (float)LineWidth);
+						}
+					}
+				}
+				else if (TryGetXY(item2.FirstEntryTime, item2.AvgEntryPrice, chartControl, chartScale, out var lx1, out var ly1) && TryGetXY(item2.LastExitTime, item2.AvgExitPrice, chartControl, chartScale, out var lx2, out var ly2))
+				{
+					RenderTarget.DrawLine(new Vector2(lx1, ly1), new Vector2(lx2, ly2), (item2.TotalPnLDollars >= 0.0) ? profitBrush : lossBrush, (float)LineWidth);
+				}
 
 				if (ShowMarkers && TryGetXY(item2.FirstEntryTime, item2.AvgEntryPrice, chartControl, chartScale, out var x5, out var y5) && TryGetXY(item2.LastExitTime, item2.AvgExitPrice, chartControl, chartScale, out var x6, out var y6))
 				{
@@ -1209,6 +1172,8 @@ public class OrcaExecutionLines : Indicator
 			longMarkerBrushAlpha?.Dispose();
 			shortMarkerBrush?.Dispose();
 			shortMarkerBrushAlpha?.Dispose();
+			profitBrush?.Dispose();
+			lossBrush?.Dispose();
 		}
 		if (roundTrip == null)
 		{
@@ -1234,12 +1199,7 @@ public class OrcaExecutionLines : Indicator
 		x = (y = 0f);
 		try
 		{
-			int bar = Bars.GetBar(time);
-			if (bar < 0 || bar >= Bars.Count)
-			{
-				return false;
-			}
-			x = cc.GetXByBarIndex(ChartBars, bar);
+			x = cc.GetXByTime(time);
 			y = cs.GetYByValue(price);
 			return true;
 		}
@@ -1249,11 +1209,11 @@ public class OrcaExecutionLines : Indicator
 		}
 	}
 
-	private void DrawTriangle(bool pointUp, float cx, float cy, float size, SolidColorBrush brush)
+	private void DrawTriangle(bool pointUp, float cx, float cy, float size, SharpDX.Direct2D1.SolidColorBrush brush)
 	{
 		try
 		{
-			PathGeometry val = new PathGeometry(Globals.D2DFactory);
+			SharpDX.Direct2D1.PathGeometry val = new SharpDX.Direct2D1.PathGeometry(Globals.D2DFactory);
 			GeometrySink val2 = val.Open();
 			val2.SetFillMode(FillMode.Winding);
 			if (pointUp)
@@ -1307,7 +1267,7 @@ public class OrcaExecutionLines : Indicator
 			bool num4 = num3 >= 0.0;
 			Color4 val = (num4 ? new Color4(0f, 1f, 0f, 1f) : new Color4(1f, 0.5f, 0.5f, 1f));
 			Color4 val2 = (num4 ? new Color4(0f, 0.18f, 0f, 0.88f) : new Color4(0.32f, 0f, 0f, 0.88f));
-			TextFormat val3 = new TextFormat(Globals.DirectWriteFactory, "Segoe UI", FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize);
+			TextFormat val3 = new TextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize);
 			try
 			{
 				TextLayout val4 = new TextLayout(Globals.DirectWriteFactory, text3, val3, 320f, 120f);
@@ -1324,10 +1284,10 @@ public class OrcaExecutionLines : Indicator
 					{
 						num6 = 2f;
 					}
-					SolidColorBrush val5 = new SolidColorBrush(RenderTarget, val2);
+					SharpDX.Direct2D1.SolidColorBrush val5 = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, val2);
 					try
 					{
-						SolidColorBrush val6 = new SolidColorBrush(RenderTarget, val);
+						SharpDX.Direct2D1.SolidColorBrush val6 = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, val);
 						try
 						{
 							RenderTarget.FillRectangle(new RectangleF(num5 - 7f, num6 - 7f, metrics.Width + 14f, metrics.Height + 14f), val5);
@@ -1358,13 +1318,13 @@ public class OrcaExecutionLines : Indicator
 		}
 	}
 
-	private SolidColorBrush ToD2DBrush(Brush wpfBrush, float alpha = 1f)
+	private SharpDX.Direct2D1.SolidColorBrush ToD2DBrush(System.Windows.Media.Brush wpfBrush, float alpha = 1f)
 	{
-		if (wpfBrush is SolidColorBrush { Color: var color })
+		if (wpfBrush is System.Windows.Media.SolidColorBrush { Color: var color })
 		{
-			return new SolidColorBrush(RenderTarget, new Color4((float)color.R / 255f, (float)color.G / 255f, (float)color.B / 255f, alpha));
+			return new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4((float)color.R / 255f, (float)color.G / 255f, (float)color.B / 255f, alpha));
 		}
-		return new SolidColorBrush(RenderTarget, new Color4(1f, 1f, 0f, alpha));
+		return new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(1f, 1f, 0f, alpha));
 	}
 
 	private static double DistToSegmentSquared(float px, float py, float x1, float y1, float x2, float y2)
@@ -1393,18 +1353,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private OrcaExecutionLines[] cacheOrcaExecutionLines;
-		public OrcaExecutionLines OrcaExecutionLines(bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
+		public OrcaExecutionLines OrcaExecutionLines(bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, int sessionTotalHorizontalOffset, int sessionTotalVerticalOffset, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
 		{
-			return OrcaExecutionLines(Input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
+			return OrcaExecutionLines(Input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, sessionTotalHorizontalOffset, sessionTotalVerticalOffset, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
 		}
 
-		public OrcaExecutionLines OrcaExecutionLines(ISeries<double> input, bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
+		public OrcaExecutionLines OrcaExecutionLines(ISeries<double> input, bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, int sessionTotalHorizontalOffset, int sessionTotalVerticalOffset, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
 		{
 			if (cacheOrcaExecutionLines != null)
 				for (int idx = 0; idx < cacheOrcaExecutionLines.Length; idx++)
-					if (cacheOrcaExecutionLines[idx] != null && cacheOrcaExecutionLines[idx].ShowExecutionLines == showExecutionLines && cacheOrcaExecutionLines[idx].ShowLabels == showLabels && cacheOrcaExecutionLines[idx].ShowMarkers == showMarkers && cacheOrcaExecutionLines[idx].ShowIndividualLines == showIndividualLines && cacheOrcaExecutionLines[idx].ShowIndividualMarkers == showIndividualMarkers && cacheOrcaExecutionLines[idx].ShowMAEMFE == showMAEMFE && cacheOrcaExecutionLines[idx].EnableShotClock == enableShotClock && cacheOrcaExecutionLines[idx].ShotClockSeconds == shotClockSeconds && cacheOrcaExecutionLines[idx].LoadTodayHistory == loadTodayHistory && cacheOrcaExecutionLines[idx].LoadSqliteHistory == loadSqliteHistory && cacheOrcaExecutionLines[idx].RiskAmount == riskAmount && cacheOrcaExecutionLines[idx].LineWidth == lineWidth && cacheOrcaExecutionLines[idx].LabelFontSize == labelFontSize && cacheOrcaExecutionLines[idx].EqualsInput(input))
+					if (cacheOrcaExecutionLines[idx] != null && cacheOrcaExecutionLines[idx].ShowExecutionLines == showExecutionLines && cacheOrcaExecutionLines[idx].ShowLabels == showLabels && cacheOrcaExecutionLines[idx].ShowMarkers == showMarkers && cacheOrcaExecutionLines[idx].ShowIndividualLines == showIndividualLines && cacheOrcaExecutionLines[idx].ShowIndividualMarkers == showIndividualMarkers && cacheOrcaExecutionLines[idx].ShowMAEMFE == showMAEMFE && cacheOrcaExecutionLines[idx].SessionTotalHorizontalOffset == sessionTotalHorizontalOffset && cacheOrcaExecutionLines[idx].SessionTotalVerticalOffset == sessionTotalVerticalOffset && cacheOrcaExecutionLines[idx].EnableShotClock == enableShotClock && cacheOrcaExecutionLines[idx].ShotClockSeconds == shotClockSeconds && cacheOrcaExecutionLines[idx].LoadTodayHistory == loadTodayHistory && cacheOrcaExecutionLines[idx].LoadSqliteHistory == loadSqliteHistory && cacheOrcaExecutionLines[idx].RiskAmount == riskAmount && cacheOrcaExecutionLines[idx].LineWidth == lineWidth && cacheOrcaExecutionLines[idx].LabelFontSize == labelFontSize && cacheOrcaExecutionLines[idx].EqualsInput(input))
 						return cacheOrcaExecutionLines[idx];
-			return CacheIndicator<OrcaExecutionLines>(new OrcaExecutionLines(){ ShowExecutionLines = showExecutionLines, ShowLabels = showLabels, ShowMarkers = showMarkers, ShowIndividualLines = showIndividualLines, ShowIndividualMarkers = showIndividualMarkers, ShowMAEMFE = showMAEMFE, EnableShotClock = enableShotClock, ShotClockSeconds = shotClockSeconds, LoadTodayHistory = loadTodayHistory, LoadSqliteHistory = loadSqliteHistory, RiskAmount = riskAmount, LineWidth = lineWidth, LabelFontSize = labelFontSize }, input, ref cacheOrcaExecutionLines);
+			return CacheIndicator<OrcaExecutionLines>(new OrcaExecutionLines(){ ShowExecutionLines = showExecutionLines, ShowLabels = showLabels, ShowMarkers = showMarkers, ShowIndividualLines = showIndividualLines, ShowIndividualMarkers = showIndividualMarkers, ShowMAEMFE = showMAEMFE, SessionTotalHorizontalOffset = sessionTotalHorizontalOffset, SessionTotalVerticalOffset = sessionTotalVerticalOffset, EnableShotClock = enableShotClock, ShotClockSeconds = shotClockSeconds, LoadTodayHistory = loadTodayHistory, LoadSqliteHistory = loadSqliteHistory, RiskAmount = riskAmount, LineWidth = lineWidth, LabelFontSize = labelFontSize }, input, ref cacheOrcaExecutionLines);
 		}
 	}
 }
@@ -1413,14 +1373,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.OrcaExecutionLines OrcaExecutionLines(bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
+		public Indicators.OrcaExecutionLines OrcaExecutionLines(bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, int sessionTotalHorizontalOffset, int sessionTotalVerticalOffset, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
 		{
-			return indicator.OrcaExecutionLines(Input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
+			return indicator.OrcaExecutionLines(Input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, sessionTotalHorizontalOffset, sessionTotalVerticalOffset, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
 		}
 
-		public Indicators.OrcaExecutionLines OrcaExecutionLines(ISeries<double> input , bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
+		public Indicators.OrcaExecutionLines OrcaExecutionLines(ISeries<double> input , bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, int sessionTotalHorizontalOffset, int sessionTotalVerticalOffset, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
 		{
-			return indicator.OrcaExecutionLines(input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
+			return indicator.OrcaExecutionLines(input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, sessionTotalHorizontalOffset, sessionTotalVerticalOffset, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
 		}
 	}
 }
@@ -1429,14 +1389,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.OrcaExecutionLines OrcaExecutionLines(bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
+		public Indicators.OrcaExecutionLines OrcaExecutionLines(bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, int sessionTotalHorizontalOffset, int sessionTotalVerticalOffset, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
 		{
-			return indicator.OrcaExecutionLines(Input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
+			return indicator.OrcaExecutionLines(Input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, sessionTotalHorizontalOffset, sessionTotalVerticalOffset, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
 		}
 
-		public Indicators.OrcaExecutionLines OrcaExecutionLines(ISeries<double> input , bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
+		public Indicators.OrcaExecutionLines OrcaExecutionLines(ISeries<double> input , bool showExecutionLines, bool showLabels, bool showMarkers, bool showIndividualLines, bool showIndividualMarkers, bool showMAEMFE, int sessionTotalHorizontalOffset, int sessionTotalVerticalOffset, bool enableShotClock, int shotClockSeconds, bool loadTodayHistory, bool loadSqliteHistory, double riskAmount, int lineWidth, int labelFontSize)
 		{
-			return indicator.OrcaExecutionLines(input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
+			return indicator.OrcaExecutionLines(input, showExecutionLines, showLabels, showMarkers, showIndividualLines, showIndividualMarkers, showMAEMFE, sessionTotalHorizontalOffset, sessionTotalVerticalOffset, enableShotClock, shotClockSeconds, loadTodayHistory, loadSqliteHistory, riskAmount, lineWidth, labelFontSize);
 		}
 	}
 }

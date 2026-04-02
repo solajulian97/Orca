@@ -38,17 +38,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private ChartPanel lastChartPanel;
 
 		[NinjaScriptProperty]
-		[Range(50, 2000)]
-		[Display(Name = "Tag Offset From Right", GroupName = "1. Styling", Order = 0)]
-		public int TagOffsetRight { get; set; }
+		[Range(0, 100)]
+		[Display(Name = "Button Opacity %", GroupName = "1. Styling (Aesthetics)", Order = 2)]
+		public int ButtonOpacity { get; set; }
 
 		[NinjaScriptProperty]
-		[Range(50, 2000)]
-		[Display(Name = "Order Label Offset Right", GroupName = "1. Styling", Order = 1)]
-		public int OrderLabelOffsetRight { get; set; }
+		[Range(0, 100)]
+		[Display(Name = "Label Opacity %", GroupName = "1. Styling (Aesthetics)", Order = 3)]
+		public int LabelOpacity { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "TP Button Color", GroupName = "1. Styling", Order = 2)]
+		[Display(Name = "Button Text Color", GroupName = "1. Styling (Aesthetics)", Order = 4)]
+		public System.Windows.Media.Brush ButtonTextColor { get; set; }
+
+		[Browsable(false)]
+		public string ButtonTextColorSerializable
+		{
+			get { return Serialize.BrushToString(ButtonTextColor); }
+			set { ButtonTextColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "Label Text Color", GroupName = "1. Styling (Aesthetics)", Order = 5)]
+		public System.Windows.Media.Brush LabelTextColor { get; set; }
+
+		[Browsable(false)]
+		public string LabelTextColorSerializable
+		{
+			get { return Serialize.BrushToString(LabelTextColor); }
+			set { LabelTextColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "TP Color", GroupName = "1. Styling (Aesthetics)", Order = 0)]
 		public System.Windows.Media.Brush ButtonColorTP { get; set; }
 
 		[Browsable(false)]
@@ -59,7 +81,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		[XmlIgnore]
-		[Display(Name = "SL Button Color", GroupName = "1. Styling", Order = 1)]
+		[Display(Name = "SL Color", GroupName = "1. Styling (Aesthetics)", Order = 1)]
 		public System.Windows.Media.Brush ButtonColorSL { get; set; }
 
 		[Browsable(false)]
@@ -69,13 +91,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 			set { ButtonColorSL = Serialize.StringToBrush(value); }
 		}
 
+		[NinjaScriptProperty]
+		[Range(50, 2000)]
+		[Display(Name = "Drag Button Offset Right", GroupName = "2. Styling (Layout)", Order = 0)]
+		public int TagOffsetRight { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(50, 2000)]
+		[Display(Name = "Trade Label Offset Right", GroupName = "2. Styling (Layout)", Order = 1)]
+		public int OrderLabelOffsetRight { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(-100, 100)]
+		[Display(Name = "Label Vertical Offset", GroupName = "2. Styling (Layout)", Order = 2)]
+		public int LabelVerticalOffset { get; set; }
+
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults)
 			{
 				Description = "Interactive drag-to-create TP and SL directly from the chart";
 				Name = "OrcaVisualOrders";
-				Calculate = Calculate.OnEachTick;
+				Calculate = Calculate.OnPriceChange;
 				IsOverlay = true;
 				DisplayInDataBox = false;
 				DrawOnPricePanel = true;
@@ -84,10 +121,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				PaintPriceMarkers = false;
 				ScaleJustification = ScaleJustification.Right;
 				IsSuspendedWhileInactive = true;
-				ButtonColorTP = System.Windows.Media.Brushes.LimeGreen;
-				ButtonColorSL = System.Windows.Media.Brushes.Salmon;
+				var bc = new System.Windows.Media.BrushConverter();
+				ButtonColorTP = (System.Windows.Media.Brush)bc.ConvertFrom("#FF44CC44");
+				ButtonColorSL = (System.Windows.Media.Brush)bc.ConvertFrom("#FFCC4444");
+				ButtonTextColor = System.Windows.Media.Brushes.Black;
+				LabelTextColor = System.Windows.Media.Brushes.Black;
+				ButtonOpacity = 60;
+				LabelOpacity = 80;
 				TagOffsetRight = 600;
-				OrderLabelOffsetRight = 600;
+				OrderLabelOffsetRight = 480;
+				LabelVerticalOffset = 0;
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -137,20 +180,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ChartControl != null && lastChartPanel != null && lastChartScale != null)
 			{
 				System.Windows.Point position = e.GetPosition(lastChartPanel);
-				double tickSize = Instrument.MasterInstrument.TickSize;
-				if (showTPButton && rectTP.Contains(position))
+				bool isTP = showTPButton && rectTP.Contains(position);
+				bool isSL = showSLButton && rectSL.Contains(position);
+				
+				if (isTP || isSL)
 				{
-					isDraggingTP = true;
-					currentDragPrice = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
+					isDraggingTP = isTP; isDraggingSL = isSL;
+					currentDragPrice = Math.Round(lastChartScale.GetValueByY((float)position.Y) / Instrument.MasterInstrument.TickSize) * Instrument.MasterInstrument.TickSize;
+					ChartControl.CaptureMouse();
 					e.Handled = true;
-					ForceRefresh();
-				}
-				else if (showSLButton && rectSL.Contains(position))
-				{
-					isDraggingSL = true;
-					currentDragPrice = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
-					e.Handled = true;
-					ForceRefresh();
+					ChartControl.InvalidateVisual();
 				}
 			}
 		}
@@ -162,7 +201,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				System.Windows.Point position = e.GetPosition(lastChartPanel);
 				double tickSize = Instrument.MasterInstrument.TickSize;
 				currentDragPrice = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
-				ForceRefresh();
+				ChartControl.InvalidateVisual();
 			}
 		}
 
@@ -170,13 +209,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if ((isDraggingTP || isDraggingSL) && lastChartPanel != null && lastChartScale != null)
 			{
-				System.Windows.Point position = e.GetPosition(lastChartPanel);
-				double tickSize = Instrument.MasterInstrument.TickSize;
-				double price = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
-				SubmitDraggedOrder(isDraggingTP, price);
+				SubmitDraggedOrder(isDraggingTP, currentDragPrice);
 				isDraggingTP = false; isDraggingSL = false;
+				ChartControl.ReleaseMouseCapture();
 				e.Handled = true;
-				ForceRefresh();
+				ChartControl.InvalidateVisual();
 			}
 		}
 
@@ -229,8 +266,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double rightX = chartControl.CanvasRight;
 			double buttonX = rightX - TagOffsetRight;
 
-			if (showTPButton && !isDraggingTP) { rectTP = new Rect(buttonX, yEntry - 22.0, 36.0, 18.0); DrawButton("TP", rectTP, ButtonColorTP); } else rectTP = Rect.Empty;
-			if (showSLButton && !isDraggingSL) { rectSL = new Rect(buttonX + 40.0, yEntry - 22.0, 36.0, 18.0); DrawButton("SL", rectSL, ButtonColorSL); } else rectSL = Rect.Empty;
+			if (showTPButton && !isDraggingTP) { rectTP = new Rect(buttonX, yEntry - 10.5, 40.0, 21.0); DrawButton("TP", rectTP, ButtonColorTP); } else rectTP = Rect.Empty;
+			if (showSLButton && !isDraggingSL) { rectSL = new Rect(buttonX + 44.0, yEntry - 10.5, 40.0, 21.0); DrawButton("SL", rectSL, ButtonColorSL); } else rectSL = Rect.Empty;
 
 			double tickSize = Instrument.MasterInstrument.TickSize;
 			double pointValue = Instrument.MasterInstrument.PointValue;
@@ -254,19 +291,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				bool isLim = g.Value.Item1; double pr = g.Value.Item2; int qty = g.Value.Item3;
 				float y = chartScale.GetYByValue(pr);
-				double ticks = Math.Round(Math.Abs(pr - activeEntryPrice) / tickSize);
-				double val = ticks * tickSize * pointValue * qty;
+				double pts = Math.Round(Math.Abs(pr - activeEntryPrice), 2);
+				double val = (Math.Abs(pr - activeEntryPrice) / tickSize) * tickSize * pointValue * qty;
 				bool isProf = (activeSide == MarketPosition.Long && pr > activeEntryPrice) || (activeSide == MarketPosition.Short && pr < activeEntryPrice);
-				string txt = string.Format("{0}: ${1:N2} ({2} pts)", (isLim && isProf ? "Profit" : "Risk"), val, Math.Round(ticks * tickSize, 2));
+				double rMultiple = val / 500.0;
+				string txt = string.Format("{0}: ${1:N0} | {2:F2}pts | {3:F1}R", (isLim && isProf ? "PROFIT" : "RISK"), val, pts, rMultiple);
 
-				var dxClr = ToDxColor((isLim && isProf ? ButtonColorTP : ButtonColorSL));
-				using (var fmt = new SharpDX.DirectWrite.TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 11f))
-				using (var layout = new SharpDX.DirectWrite.TextLayout(NinjaTrader.Core.Globals.DirectWriteFactory, txt, fmt, 300f, 20f))
-				using (var br = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, dxClr))
-				{
-					fmt.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
-					RenderTarget.DrawTextLayout(new Vector2((float)rightX - OrderLabelOffsetRight, y - 18f), layout, br);
-				}
+				DrawPill(txt, new Vector2((float)rightX - OrderLabelOffsetRight, y + LabelVerticalOffset), (isLim && isProf ? ButtonColorTP : ButtonColorSL));
 			}
 
 			if (isDraggingTP || isDraggingSL)
@@ -277,14 +308,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				using (var stroke = new SharpDX.Direct2D1.StrokeStyle(RenderTarget.Factory, new SharpDX.Direct2D1.StrokeStyleProperties { DashStyle = SharpDX.Direct2D1.DashStyle.Dash }))
 				{
 					RenderTarget.DrawLine(new Vector2(0f, yDrag), new Vector2((float)rightX, yDrag), br, 1.5f, stroke);
-					double ts = Math.Round(Math.Abs(currentDragPrice - activeEntryPrice) / tickSize);
-					string dTxt = string.Format("{0}: ${1:N2} ({2} pts)", (isDraggingTP ? "Profit" : "Risk"), ts * tickSize * pointValue * activeQuantity, Math.Round(ts * tickSize, 2));
-					using (var f = new SharpDX.DirectWrite.TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 12f))
-					using (var l = new SharpDX.DirectWrite.TextLayout(NinjaTrader.Core.Globals.DirectWriteFactory, dTxt, f, 300f, 20f))
-					{
-						f.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
-						RenderTarget.DrawTextLayout(new Vector2((float)rightX - OrderLabelOffsetRight, yDrag - 20f), l, br);
-					}
+					double ps = Math.Round(Math.Abs(currentDragPrice - activeEntryPrice), 2);
+					double v = (Math.Abs(currentDragPrice - activeEntryPrice) / tickSize) * tickSize * pointValue * activeQuantity;
+					double rM = v / 500.0;
+					string dTxt = string.Format("{0}: ${1:N0} | {2:F2}pts | {3:F1}R", (isDraggingTP ? "TARGET" : "STOP"), v, ps, rM);
+					DrawPill(dTxt, new Vector2((float)rightX - OrderLabelOffsetRight, yDrag), (isDraggingTP ? ButtonColorTP : ButtonColorSL));
 				}
 			}
 		}
@@ -292,18 +320,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void DrawButton(string text, Rect rect, System.Windows.Media.Brush wpfColor)
 		{
 			var clr = ToDxColor(wpfColor);
-			using (var br = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, clr))
-			using (var whiteBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
+			var fillClr = new SharpDX.Color4(clr.Red, clr.Green, clr.Blue, (float)ButtonOpacity / 100f);
+			var borderClr = clr;
+
+			using (var fillBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, fillClr))
+			using (var borderBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, borderClr))
+			using (var textBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(ButtonTextColor)))
 			using (var fmt = new SharpDX.DirectWrite.TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 11f))
 			{
 				var dxRect = new RectangleF((float)rect.X, (float)rect.Y, (float)rect.Width, (float)rect.Height);
 				var rounded = new RoundedRectangle { Rect = dxRect, RadiusX = 4f, RadiusY = 4f };
-				RenderTarget.FillRoundedRectangle(rounded, br);
+				RenderTarget.FillRoundedRectangle(rounded, fillBr);
+				RenderTarget.DrawRoundedRectangle(rounded, borderBr, 1.5f);
 				fmt.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
 				using (var l = new SharpDX.DirectWrite.TextLayout(NinjaTrader.Core.Globals.DirectWriteFactory, text, fmt, dxRect.Width, dxRect.Height))
 				{
-					RenderTarget.DrawTextLayout(new Vector2(dxRect.Left, dxRect.Top + 2f), l, whiteBr);
+					RenderTarget.DrawTextLayout(new Vector2(dxRect.Left, dxRect.Top + 3.5f), l, textBr);
 				}
+			}
+		}
+
+		private void DrawPill(string text, Vector2 pos, System.Windows.Media.Brush wpfColor)
+		{
+			var clr = ToDxColor(wpfColor);
+			var fillClr = new SharpDX.Color4(clr.Red, clr.Green, clr.Blue, (float)LabelOpacity / 100f);
+			var borderClr = clr;
+
+			using (var fillBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, fillClr))
+			using (var borderBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, borderClr))
+			using (var textBr = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(LabelTextColor)))
+			using (var fmt = new SharpDX.DirectWrite.TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 12f))
+			using (var l = new SharpDX.DirectWrite.TextLayout(NinjaTrader.Core.Globals.DirectWriteFactory, text, fmt, 400f, 1000f))
+			{
+				float w = l.Metrics.Width + 12f;
+				float h = l.Metrics.Height + 4f;
+				var rect = new RectangleF(pos.X - w, pos.Y - h/2f, w, h);
+				var rounded = new RoundedRectangle { Rect = rect, RadiusX = 4f, RadiusY = 4f };
+				RenderTarget.FillRoundedRectangle(rounded, fillBr);
+				RenderTarget.DrawRoundedRectangle(rounded, borderBr, 1.5f);
+				RenderTarget.DrawTextLayout(new Vector2(rect.Left + 6f, rect.Top + 2f), l, textBr);
 			}
 		}
 
@@ -315,3 +370,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaVisualOrders[] cacheOrcaVisualOrders;
+		public OrcaVisualOrders OrcaVisualOrders(int buttonOpacity, int labelOpacity, int tagOffsetRight, int orderLabelOffsetRight, int labelVerticalOffset)
+		{
+			return OrcaVisualOrders(Input, buttonOpacity, labelOpacity, tagOffsetRight, orderLabelOffsetRight, labelVerticalOffset);
+		}
+
+		public OrcaVisualOrders OrcaVisualOrders(ISeries<double> input, int buttonOpacity, int labelOpacity, int tagOffsetRight, int orderLabelOffsetRight, int labelVerticalOffset)
+		{
+			if (cacheOrcaVisualOrders != null)
+				for (int idx = 0; idx < cacheOrcaVisualOrders.Length; idx++)
+					if (cacheOrcaVisualOrders[idx] != null && cacheOrcaVisualOrders[idx].ButtonOpacity == buttonOpacity && cacheOrcaVisualOrders[idx].LabelOpacity == labelOpacity && cacheOrcaVisualOrders[idx].TagOffsetRight == tagOffsetRight && cacheOrcaVisualOrders[idx].OrderLabelOffsetRight == orderLabelOffsetRight && cacheOrcaVisualOrders[idx].LabelVerticalOffset == labelVerticalOffset && cacheOrcaVisualOrders[idx].EqualsInput(input))
+						return cacheOrcaVisualOrders[idx];
+			return CacheIndicator<OrcaVisualOrders>(new OrcaVisualOrders(){ ButtonOpacity = buttonOpacity, LabelOpacity = labelOpacity, TagOffsetRight = tagOffsetRight, OrderLabelOffsetRight = orderLabelOffsetRight, LabelVerticalOffset = labelVerticalOffset }, input, ref cacheOrcaVisualOrders);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(int buttonOpacity, int labelOpacity, int tagOffsetRight, int orderLabelOffsetRight, int labelVerticalOffset)
+		{
+			return indicator.OrcaVisualOrders(Input, buttonOpacity, labelOpacity, tagOffsetRight, orderLabelOffsetRight, labelVerticalOffset);
+		}
+
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(ISeries<double> input , int buttonOpacity, int labelOpacity, int tagOffsetRight, int orderLabelOffsetRight, int labelVerticalOffset)
+		{
+			return indicator.OrcaVisualOrders(input, buttonOpacity, labelOpacity, tagOffsetRight, orderLabelOffsetRight, labelVerticalOffset);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(int buttonOpacity, int labelOpacity, int tagOffsetRight, int orderLabelOffsetRight, int labelVerticalOffset)
+		{
+			return indicator.OrcaVisualOrders(Input, buttonOpacity, labelOpacity, tagOffsetRight, orderLabelOffsetRight, labelVerticalOffset);
+		}
+
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(ISeries<double> input , int buttonOpacity, int labelOpacity, int tagOffsetRight, int orderLabelOffsetRight, int labelVerticalOffset)
+		{
+			return indicator.OrcaVisualOrders(input, buttonOpacity, labelOpacity, tagOffsetRight, orderLabelOffsetRight, labelVerticalOffset);
+		}
+	}
+}
+
+#endregion
