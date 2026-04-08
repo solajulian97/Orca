@@ -289,7 +289,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						PendingEntry pe  = st.OpenFills[0];
 						int filled       = Math.Min(rem, pe.Quantity);
-						bool wasLong     = ((int)pe.Side == 1);
+						bool wasLong     = (pe.Side == MarketPosition.Long);
 						double ticks     = wasLong ? (price - pe.Price)/TickSize : (pe.Price - price)/TickSize;
 						double dollars   = ticks * TickSize * Instrument.MasterInstrument.PointValue * filled;
 
@@ -405,7 +405,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						int    mp    = (int)mI32.Invoke(r, new object[]{2});
 						double price = (double)mDbl.Invoke(r, new object[]{3});
 						int    qty   = (int)mI32.Invoke(r, new object[]{4});
-						ProcessExecution(mp == 1, price, qty, new DateTime(ticks), acct);
+						ProcessExecution(mp == (int)MarketPosition.Long, price, qty, new DateTime(ticks), acct);
 						count++;
 					}
 					rT.GetMethod("Close").Invoke(r, null);
@@ -590,26 +590,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawRoundTrip(RoundTrip rt)
 		{
-			try
-			{
-				string tag  = "OrcaRT_" + rt.Number + "_";
-				System.Windows.Media.Brush b = rt.TotalPnLDollars >= 0 ? ProfitColor : LossColor;
-				if (ShowIndividualLines)
-				{
-					for (int i = 0; i < rt.Matches.Count; i++)
-					{
-						FillMatch m = rt.Matches[i];
-						Draw.Line(this, tag+"L"+i, false, m.EntryTime, m.EntryPrice, m.ExitTime, m.ExitPrice,
-							m.PnLDollars >= 0 ? ProfitColor : LossColor, DashStyleHelper.Solid, LineWidth);
-					}
-				}
-				else
-				{
-					Draw.Line(this, tag+"L", false, rt.FirstEntryTime, rt.AvgEntryPrice, rt.LastExitTime, rt.AvgExitPrice,
-						b, DashStyleHelper.Solid, LineWidth);
-				}
-			}
-			catch (Exception ex) { Print("OrcaExecLines DrawRT: " + ex.Message); }
+			// Line rendering is offloaded entirely to SharpDX in OnRender to eliminate chart lag
 		}
 
 		private string Fmt(double d) { return (d >= 0 ? "+$" : "-$") + Math.Abs(d).ToString("N2"); }
@@ -679,12 +660,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 			SharpDX.Direct2D1.SolidColorBrush lngBA = ToD2D(LongMarkerColor, 0.65f);
 			SharpDX.Direct2D1.SolidColorBrush shtB  = ToD2D(ShortMarkerColor);
 			SharpDX.Direct2D1.SolidColorBrush shtBA = ToD2D(ShortMarkerColor, 0.65f);
+			SharpDX.Direct2D1.SolidColorBrush prfB  = ToD2D(ProfitColor);
+			SharpDX.Direct2D1.SolidColorBrush lssB  = ToD2D(LossColor);
+
 			try
 			{
 				foreach (var rt in list)
 				{
 					SharpDX.Direct2D1.SolidColorBrush mb  = rt.IsLong ? lngB  : shtB;
 					SharpDX.Direct2D1.SolidColorBrush mba = rt.IsLong ? lngBA : shtBA;
+
+					if (ShowIndividualLines)
+					{
+						foreach (var m in rt.Matches)
+						{
+							float xa,ya,xb,yb;
+							if (TryGetXY(m.EntryTime, m.EntryPrice, chartControl, chartScale, out xa, out ya) && TryGetXY(m.ExitTime, m.ExitPrice, chartControl, chartScale, out xb, out yb))
+								RenderTarget.DrawLine(new Vector2(xa, ya), new Vector2(xb, yb), m.PnLDollars >= 0 ? prfB : lssB, (float)LineWidth);
+						}
+					}
+					else
+					{
+						float xa,ya,xb,yb;
+						if (TryGetXY(rt.FirstEntryTime, rt.AvgEntryPrice, chartControl, chartScale, out xa, out ya) && TryGetXY(rt.LastExitTime, rt.AvgExitPrice, chartControl, chartScale, out xb, out yb))
+							RenderTarget.DrawLine(new Vector2(xa, ya), new Vector2(xb, yb), rt.TotalPnLDollars >= 0 ? prfB : lssB, (float)LineWidth);
+					}
+
 					float x1,y1,x2,y2;
 					if (ShowMarkers &&
 					    TryGetXY(rt.FirstEntryTime, rt.AvgEntryPrice, chartControl, chartScale, out x1, out y1) &&
@@ -702,7 +703,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 				}
 			}
-			finally { lngB?.Dispose(); lngBA?.Dispose(); shtB?.Dispose(); shtBA?.Dispose(); }
+			finally { lngB?.Dispose(); lngBA?.Dispose(); shtB?.Dispose(); shtBA?.Dispose(); prfB?.Dispose(); lssB?.Dispose(); }
 
 			if (hoveredRT == null) return;
 			float hx, hy;

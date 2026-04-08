@@ -41,6 +41,12 @@ namespace NinjaTrader.NinjaScript
 		Dot     = 2,
 		DashDot = 3
 	}
+
+	public enum StepMirrorArrangement
+	{
+		DeltaLeft_VolumeRight,
+		VolumeLeft_DeltaRight
+	}
 }
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -129,6 +135,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RTHEnd                 = DateTime.Parse("16:00:00", System.Globalization.CultureInfo.InvariantCulture);
 
 				// Layout
+				DynamicProfileWidth      = true;
+				FillSpacePercent         = 80;
 				HistoricalProfileWidthPx = 100;
 				ActiveProfileWidthPx     = 150;
 				HistoricalDeltaWidthPx   = 60;
@@ -136,6 +144,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RightOffsetPx            = 60;
 				ProfileBarSpacingPx      = 0;
 				MirrorProfiles           = false;
+				MirrorArrangement        = StepMirrorArrangement.DeltaLeft_VolumeRight;
 
 				// Visibility
 				ShowActiveVolume    = true;
@@ -508,11 +517,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				float spineX = chartControl.GetXByBarIndex(ChartBars, Math.Max(block.StartBarIndex, fromIdx));
 
+				int drawWidth = HistoricalProfileWidthPx;
+				if (DynamicProfileWidth && i + 1 < stepBlocks.Count)
+				{
+					float trueSpineX = chartControl.GetXByBarIndex(ChartBars, block.StartBarIndex);
+					float nextSpineX = chartControl.GetXByBarIndex(ChartBars, stepBlocks[i + 1].StartBarIndex);
+					float availableWidth = nextSpineX - trueSpineX;
+					drawWidth = Math.Max(2, (int)(availableWidth * (FillSpacePercent / 100.0)));
+				}
+
 				if (ShowHistoricalVolume && block.VolByPrice.Count > 0)
-					DrawBlockProfile(chartControl, chartScale, block, spineX, HistoricalProfileWidthPx, HistoricalDeltaWidthPx, panelTop, panelBottom, true, false);
+					DrawBlockProfile(chartControl, chartScale, block, spineX, drawWidth, HistoricalDeltaWidthPx, panelTop, panelBottom, true, false);
 
 				if (ShowHistoricalDelta && block.DeltaByPrice.Count > 0)
-					DrawBlockDelta(chartControl, chartScale, block, spineX, HistoricalProfileWidthPx, HistoricalDeltaWidthPx, panelTop, panelBottom, true, false, dynamicDeltaComp);
+					DrawBlockDelta(chartControl, chartScale, block, spineX, drawWidth, HistoricalDeltaWidthPx, panelTop, panelBottom, true, false, dynamicDeltaComp);
 
 				if (ShowBlockSeparators && blockSepBrushDx != null)
 					RenderTarget.DrawLine(new Vector2(spineX, panelTop), new Vector2(spineX, panelBottom), blockSepBrushDx, 1f);
@@ -582,10 +600,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (barWidth < 0.5f) continue;
 
 					RectangleF rect;
-					if (facingRight) rect = new RectangleF(baseSpineX, drawY, barWidth, rowHeight);
+					if (facingRight) 
+					{
+						if (MirrorProfiles && MirrorArrangement == StepMirrorArrangement.VolumeLeft_DeltaRight)
+							rect = new RectangleF(baseSpineX - barWidth, drawY, barWidth, rowHeight);
+						else
+							rect = new RectangleF(baseSpineX, drawY, barWidth, rowHeight);
+					}
 					else
 					{
-						if (MirrorProfiles) rect = new RectangleF(baseSpineX - profileWidthPx, drawY, barWidth, rowHeight);
+						if (MirrorProfiles) 
+						{
+							if (MirrorArrangement == StepMirrorArrangement.VolumeLeft_DeltaRight)
+								rect = new RectangleF(baseSpineX - deltaWidthPx - barWidth, drawY, barWidth, rowHeight);
+							else
+								rect = new RectangleF(baseSpineX - profileWidthPx, drawY, barWidth, rowHeight);
+						}
 						else rect = new RectangleF(baseSpineX - barWidth, drawY, barWidth, rowHeight);
 					}
 
@@ -615,10 +645,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					float lineLeft, lineRight;
 					int usedDeltaWidth = isActiveProfile ? ActiveDeltaWidthPx : HistoricalDeltaWidthPx;
-					if (facingRight) { lineLeft = MirrorProfiles ? baseSpineX - usedDeltaWidth - 2 : baseSpineX - 2; lineRight = baseSpineX + profileWidthPx + 2; }
+					if (facingRight) 
+					{ 
+						if (MirrorProfiles)
+						{
+							if (MirrorArrangement == StepMirrorArrangement.VolumeLeft_DeltaRight)
+							{
+								lineLeft = baseSpineX - profileWidthPx - 2;
+								lineRight = baseSpineX + usedDeltaWidth + 2;
+							}
+							else
+							{
+								lineLeft = baseSpineX - usedDeltaWidth - 2; 
+								lineRight = baseSpineX + profileWidthPx + 2;
+							}
+						}
+						else { lineLeft = baseSpineX - 2; lineRight = baseSpineX + profileWidthPx + 2; }
+					}
 					else
 					{
-						if (MirrorProfiles) { float shiftedAxisX = baseSpineX - profileWidthPx; lineLeft = shiftedAxisX - usedDeltaWidth - 2; lineRight = shiftedAxisX + profileWidthPx + 2; }
+						if (MirrorProfiles) 
+						{ 
+							if (MirrorArrangement == StepMirrorArrangement.VolumeLeft_DeltaRight)
+							{
+								float splitX = baseSpineX - usedDeltaWidth; 
+								lineLeft = splitX - profileWidthPx - 2; 
+								lineRight = splitX + usedDeltaWidth + 2;
+							}
+							else
+							{
+								float splitX = baseSpineX - profileWidthPx; 
+								lineLeft = splitX - usedDeltaWidth - 2; 
+								lineRight = splitX + profileWidthPx + 2; 
+							}
+						}
 						else { lineLeft = baseSpineX - profileWidthPx - 2; lineRight = baseSpineX + 2; }
 					}
 					float yVAH = chartScale.GetYByValue(vahPrice + volCompHeight);
@@ -655,22 +715,52 @@ namespace NinjaTrader.NinjaScript.Indicators
 				w = Math.Max(w, 0.5f);
 
 				SharpDX.Direct2D1.SolidColorBrush deltaBrush = isActiveProfile ? (kvp.Value >= 0 ? posDeltaBrushDx : negDeltaBrushDx) : (kvp.Value >= 0 ? histPosDeltaBrushDx : histNegDeltaBrushDx);
-				RectangleF rect;
-				if (facingRight) { rect = MirrorProfiles ? new RectangleF(baseSpineX - w, drawY, w, height) : new RectangleF(baseSpineX, drawY, w, height); }
+				
+				float deltaRootX;
+				bool deltaFlowsRight;
+				
+				if (facingRight) 
+				{ 
+					if (MirrorProfiles && MirrorArrangement == StepMirrorArrangement.VolumeLeft_DeltaRight)
+					{ deltaRootX = baseSpineX; deltaFlowsRight = true; }
+					else if (MirrorProfiles)
+					{ deltaRootX = baseSpineX; deltaFlowsRight = false; }
+					else 
+					{ deltaRootX = baseSpineX; deltaFlowsRight = true; }
+				}
 				else
 				{
-					if (MirrorProfiles) rect = new RectangleF(baseSpineX - profileWidthPx - w, drawY, w, height);
-					else rect = new RectangleF(baseSpineX - w, drawY, w, height);
+					if (MirrorProfiles) 
+					{
+						if (MirrorArrangement == StepMirrorArrangement.VolumeLeft_DeltaRight)
+						{ deltaRootX = baseSpineX - deltaWidthPx; deltaFlowsRight = true; }
+						else
+						{ deltaRootX = baseSpineX - profileWidthPx; deltaFlowsRight = false; }
+					}
+					else 
+					{ deltaRootX = baseSpineX; deltaFlowsRight = false; }
 				}
+				
+				RectangleF rect;
+				if (deltaFlowsRight) rect = new RectangleF(deltaRootX, drawY, w, height);
+				else rect = new RectangleF(deltaRootX - w, drawY, w, height);
+				
 				RenderTarget.FillRectangle(rect, deltaBrush);
 
 				if (ShowDeltaText && deltaTextFormatDx != null && deltaTextBrushDx != null && rect.Height >= 6 && Math.Abs(kvp.Value) >= DeltaTextMinThreshold)
 				{
 					string text = kvp.Value > 0 ? $"+{kvp.Value}" : kvp.Value.ToString();
-					RectangleF textRect = rect;
-					textRect.Width = Math.Max(1, deltaWidthPx - 4); 
-					if (facingRight) { if (MirrorProfiles && !isActiveProfile) textRect.X = baseSpineX - deltaWidthPx; }
-					else { if (MirrorProfiles && isActiveProfile) textRect.X = baseSpineX - profileWidthPx - deltaWidthPx; else textRect.X = baseSpineX - deltaWidthPx; }
+					
+					// Dynamically toggle the DirectX bounding box text alignment to stick left or right depending on the flow direction
+					deltaTextFormatDx.TextAlignment = deltaFlowsRight ? SharpDX.DirectWrite.TextAlignment.Leading : SharpDX.DirectWrite.TextAlignment.Trailing;
+					
+					float maxW = 200f; // Excessively wide boundary avoids truncating labels extending beyond tiny delta bars
+					RectangleF textRect;
+					if (deltaFlowsRight)
+						textRect = new RectangleF(deltaRootX + 2, drawY, maxW, height);
+					else
+						textRect = new RectangleF(deltaRootX - maxW - 2, drawY, maxW, height);
+						
 					RenderTarget.DrawText(text, deltaTextFormatDx, textRect, deltaTextBrushDx);
 				}
 			}
@@ -787,6 +877,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public DateTime RTHEnd { get; set; }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Dynamic Profile Width", Description = "Dynamically adjusts historical profile width to fit the space between steps", GroupName = "Layout", Order = 8)]
+		public bool DynamicProfileWidth { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(10, 100)]
+		[Display(Name = "Fill Space Percent", GroupName = "Layout", Order = 9)]
+		public int FillSpacePercent { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(10, 500)]
 		[Display(Name = "Historical Profile Width (px)", GroupName = "Layout", Order = 10)]
 		public int HistoricalProfileWidthPx { get; set; }
@@ -819,6 +918,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty]
 		[Display(Name = "Mirror Profiles", GroupName = "Layout", Order = 16)]
 		public bool MirrorProfiles { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Mirror Arrangement", Description = "When Mirror Profiles is checked, configures the visual arrangement of Delta and Volume.", GroupName = "Layout", Order = 17)]
+		public StepMirrorArrangement MirrorArrangement { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Show Active Volume", GroupName = "Visibility", Order = 20)]

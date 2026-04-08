@@ -1,4 +1,8 @@
-$WorkspaceRoot = "C:\Users\julia\.gemini\antigravity\scratch\Orca Projects"
+param (
+    [string]$Target = "All"
+)
+
+$WorkspaceRoot = "C:\Users\julia\.gemini\antigravity\scratch\Orca\Orca Trades"
 $LiveCustomRoot = "C:\Users\julia\Documents\NinjaTrader 8\bin\Custom"
 
 # Files to sync
@@ -12,6 +16,16 @@ $Indicators = @(
     "PAX30OpeningRange.cs", "PassiveFlowSuite.cs", "VWAPx.cs"
 )
 $AddOns = @("OrcaRiskManagerAddOn.cs")
+
+if ($Target -ne "All") {
+    if ($Target -match "AddOn") {
+        $Indicators = @()
+        $AddOns = @($Target)
+    } else {
+        $Indicators = @($Target)
+        $AddOns = @()
+    }
+}
 
 Write-Host "Deploying Orca Suite Indicators to NinjaTrader 8..."
 foreach ($file in $Indicators) {

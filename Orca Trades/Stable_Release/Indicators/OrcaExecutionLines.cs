@@ -711,7 +711,7 @@ public class OrcaExecutionLines : Indicator
 					double price = (double)method5.Invoke(obj4, new object[1] { 3 });
 					int quantity = (int)method4.Invoke(obj4, new object[1] { 4 });
 					DateTime time = new DateTime(ticks);
-					bool isBuy = num2 == 1;
+					bool isBuy = num2 == (int)MarketPosition.Long;
 					ProcessExecution(isBuy, price, quantity, time, accountName);
 					num++;
 				}

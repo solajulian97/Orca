@@ -19,6 +19,17 @@ using SharpDX.Direct2D1;
 using SharpDX.DirectWrite;
 #endregion
 
+namespace NinjaTrader.NinjaScript
+{
+	public enum VisualOrderAlignment
+	{
+		RightEdge,
+		Center,
+		LeftEdge,
+		RightmostBar
+	}
+}
+
 namespace NinjaTrader.NinjaScript.Indicators
 {
 	public class OrcaVisualOrders : Indicator
@@ -38,14 +49,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private ChartPanel lastChartPanel;
 
 		[NinjaScriptProperty]
-		[Range(50, 2000)]
+		[Range(-2000, 2000)]
 		[Display(Name = "Tag Offset From Right", GroupName = "1. Styling", Order = 0)]
 		public int TagOffsetRight { get; set; }
 
 		[NinjaScriptProperty]
-		[Range(50, 2000)]
+		[Range(-2000, 2000)]
 		[Display(Name = "Order Label Offset Right", GroupName = "1. Styling", Order = 1)]
 		public int OrderLabelOffsetRight { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Label Anchor Point", Description = "Binds the offset logic geometrically to match native anchor setups", GroupName = "1. Styling", Order = 2)]
+		public VisualOrderAlignment LabelAlignment { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(-500, 500)]
+		[Display(Name = "Drag Button Vertical Offset", GroupName = "1. Styling", Order = 3)]
+		public int DragButtonVerticalOffset { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(10, 100)]
+		[Display(Name = "Drag Button Width", GroupName = "1. Styling", Order = 4)]
+		public int DragButtonWidth { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 50)]
+		[Display(Name = "Drag Button Gap", GroupName = "1. Styling", Order = 5)]
+		public int DragButtonGap { get; set; }
 
 		[XmlIgnore]
 		[Display(Name = "TP Button Color", GroupName = "1. Styling", Order = 2)]
@@ -88,6 +118,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ButtonColorSL = System.Windows.Media.Brushes.Salmon;
 				TagOffsetRight = 600;
 				OrderLabelOffsetRight = 600;
+				DragButtonVerticalOffset = 0;
+				DragButtonWidth = 36;
+				DragButtonGap = 4;
+				LabelAlignment = VisualOrderAlignment.RightEdge;
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -226,11 +260,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			showSLButton = !hasStop;
 
 			double yEntry = chartScale.GetYByValue(activeEntryPrice);
+			
 			double rightX = chartControl.CanvasRight;
+			if (LabelAlignment == VisualOrderAlignment.Center) 
+				rightX = chartControl.CanvasLeft + ((chartControl.CanvasRight - chartControl.CanvasLeft) / 2.0);
+			else if (LabelAlignment == VisualOrderAlignment.LeftEdge)
+				rightX = chartControl.CanvasLeft;
+			else if (LabelAlignment == VisualOrderAlignment.RightmostBar && ChartBars != null && ChartBars.Count > 0)
+				rightX = chartControl.GetXByBarIndex(ChartBars, ChartBars.Count - 1);
+				
 			double buttonX = rightX - TagOffsetRight;
 
-			if (showTPButton && !isDraggingTP) { rectTP = new Rect(buttonX, yEntry - 22.0, 36.0, 18.0); DrawButton("TP", rectTP, ButtonColorTP); } else rectTP = Rect.Empty;
-			if (showSLButton && !isDraggingSL) { rectSL = new Rect(buttonX + 40.0, yEntry - 22.0, 36.0, 18.0); DrawButton("SL", rectSL, ButtonColorSL); } else rectSL = Rect.Empty;
+			if (showTPButton && !isDraggingTP) { rectTP = new Rect(buttonX, yEntry - 22.0 + DragButtonVerticalOffset, DragButtonWidth, 18.0); DrawButton("TP", rectTP, ButtonColorTP); } else rectTP = Rect.Empty;
+			if (showSLButton && !isDraggingSL) { rectSL = new Rect(buttonX + DragButtonWidth + DragButtonGap, yEntry - 22.0 + DragButtonVerticalOffset, DragButtonWidth, 18.0); DrawButton("SL", rectSL, ButtonColorSL); } else rectSL = Rect.Empty;
 
 			double tickSize = Instrument.MasterInstrument.TickSize;
 			double pointValue = Instrument.MasterInstrument.PointValue;

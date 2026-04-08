@@ -272,9 +272,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IsOverlay = true;
 				Period = RollingProfilePeriod.Day1;
 				Mode = ProfileOperatingMode.FullSession;
-				MinutesPerDay = 1440;
-				RthStartTime = new TimeSpan(8, 30, 0);
-				RthEndTime = new TimeSpan(15, 15, 0);
+				MinutesPerDay = 1380;
+				RthStartTime = new TimeSpan(9, 30, 0);
+				RthEndTime = new TimeSpan(16, 0, 0);
 				VolumeTickCompression = 4;
 				DeltaTickCompression = 10;
 				ProfileWidthPx = 150;
@@ -307,7 +307,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			else if (State == State.Configure)
 			{
-				AddDataSeries(BarsPeriodType.Minute, 1);
+				AddDataSeries(BarsPeriodType.Tick, 1);
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -420,11 +420,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else totalProfile.VolByPrice[vKey] = volume;
 
 			long delta = 0;
-			if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk >= lastBid)
+			if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
 			{
 				if (price >= lastAsk) delta = volume;
 				else if (price <= lastBid) delta = -volume;
 				else if (!double.IsNaN(prevLast)) delta = (price > prevLast) ? volume : (price < prevLast ? -volume : 0);
+			}
+			else if (!double.IsNaN(prevLast))
+			{
+				delta = (price > prevLast) ? volume : (price < prevLast ? -volume : 0);
 			}
 			prevLast = price;
 
@@ -465,6 +469,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				BuildGradient(VolumeBrush, VolumeOpacity, ref volGradientBrushes);
 				lastBuiltGradientSteps = GradientSteps;
+			}
+			if (UseGradient && ShowValueArea && ShowVAColor && (vaGradientBrushes == null || lastBuiltVAGradientSteps != GradientSteps))
+			{
+				BuildGradient(VABrush, VolumeOpacity, ref vaGradientBrushes);
+				lastBuiltVAGradientSteps = GradientSteps;
 			}
 		}
 
