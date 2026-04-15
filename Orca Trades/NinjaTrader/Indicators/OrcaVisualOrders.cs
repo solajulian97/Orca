@@ -287,8 +287,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (order.Instrument == Instrument && (order.OrderState == OrderState.Working || order.OrderState == OrderState.Accepted))
 				{
-					if (order.OrderType == OrderType.StopMarket || order.OrderType == OrderType.StopLimit) hasStop = true;
 					if (order.OrderType == OrderType.Limit) hasLimit = true;
+					if (order.OrderType == OrderType.StopMarket || order.OrderType == OrderType.StopLimit)
+					{
+						// Only treat this stop as covering the SL if it is on the CLOSING side of the current position.
+						// A Sell stop when Long = true SL. A Sell stop when Short = adding to position, not an SL.
+						bool isClosingStop = (activeSide == MarketPosition.Long  && (order.OrderAction == OrderAction.Sell || order.OrderAction == OrderAction.SellShort))
+						                  || (activeSide == MarketPosition.Short && (order.OrderAction == OrderAction.Buy  || order.OrderAction == OrderAction.BuyToCover));
+						if (isClosingStop) hasStop = true;
+					}
 					if (!string.IsNullOrEmpty(order.Oco) && order.Oco.StartsWith("OrcaOCO_")) activeOcoId = order.Oco;
 				}
 			}
@@ -314,6 +321,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double tickSize = Instrument.MasterInstrument.TickSize;
 			double pointValue = Instrument.MasterInstrument.PointValue;
 			var groups = new Dictionary<string, Tuple<bool, double, int>>();
+			// Tracks which group keys are add-to-position stops (determined by order action, not price)
+			var addingStopKeys = new HashSet<string>();
 
 			foreach (Order o in activeAccount.Orders)
 			{
@@ -326,6 +335,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 					string key = (isL ? "L_" : "S_") + p;
 					if (groups.ContainsKey(key)) groups[key] = new Tuple<bool, double, int>(isL, p, groups[key].Item3 + rem);
 					else groups[key] = new Tuple<bool, double, int>(isL, p, rem);
+
+					// A stop is "adding to position" only if its order action is on the SAME side as the current position:
+					// Sell stop when Short = scale in. Buy stop when Long = scale in.
+					// Anything else (Buy stop when Short, Sell stop when Long) is a closing stop.
+					if (!isL)
+					{
+						bool isAddingOrder = (activeSide == MarketPosition.Short && (o.OrderAction == OrderAction.Sell || o.OrderAction == OrderAction.SellShort))
+						                  || (activeSide == MarketPosition.Long  && (o.OrderAction == OrderAction.Buy  || o.OrderAction == OrderAction.BuyToCover));
+						if (isAddingOrder) addingStopKeys.Add(key);
+					}
 				}
 			}
 
@@ -335,11 +354,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float y = chartScale.GetYByValue(pr);
 				double pts = Math.Round(Math.Abs(pr - activeEntryPrice), 2);
 				double val = (Math.Abs(pr - activeEntryPrice) / tickSize) * tickSize * pointValue * qty;
+				// isProf: true if this order is in profitable territory relative to the entry
 				bool isProf = (activeSide == MarketPosition.Long && pr > activeEntryPrice) || (activeSide == MarketPosition.Short && pr < activeEntryPrice);
-				double rMultiple = val / 500.0;
-				string txt = string.Format("{0}: ${1:N0} | {2:F2}pts | {3:F1}R", (isLim && isProf ? "PROFIT" : "RISK"), val, pts, rMultiple);
+				// isAddingStop: determined by order action recorded during the scan — NOT price position
+				bool isAddingStop = !isLim && addingStopKeys.Contains(g.Key);
 
-				DrawPill(txt, new Vector2((float)rightX - OrderLabelOffsetRight, y + LabelVerticalOffset), (isLim && isProf ? ButtonColorTP : ButtonColorSL));
+				if (isAddingStop)
+				{
+					// Scale-in stop: neutral ADD label
+					string addTxt = string.Format("ADD {0} @ {1:F2}", qty, pr);
+					DrawPill(addTxt, new Vector2((float)rightX - OrderLabelOffsetRight, y + LabelVerticalOffset), ButtonColorTP);
+				}
+				else
+				{
+					// Closing order (limit TP, stop loss, or stop in profit)
+					// Show PROFIT in green when in profitable territory, RISK in red when in loss territory
+					double rMultiple = val / 500.0;
+					string label = isProf ? "PROFIT" : "RISK";
+					string txt = string.Format("{0}: ${1:N0} | {2:F2}pts | {3:F1}R", label, val, pts, rMultiple);
+					DrawPill(txt, new Vector2((float)rightX - OrderLabelOffsetRight, y + LabelVerticalOffset), isProf ? ButtonColorTP : ButtonColorSL);
+				}
 			}
 
 			if (isDraggingTP || isDraggingSL)

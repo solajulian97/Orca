@@ -25,13 +25,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int		lastDirection;
 
 		private List<double>	barTickDelta;
+		private List<double>	barMaxDelta;
+		private List<double>	barMinDelta;
 		private List<bool>		barHasData;
 
 		private SharpDX.Direct2D1.Brush	dxVolumeBrush;
 		private SharpDX.Direct2D1.Brush	dxPositiveBrush;
 		private SharpDX.Direct2D1.Brush	dxNegativeBrush;
-		private SharpDX.Direct2D1.Brush	dxEffPosBrush;
-		private SharpDX.Direct2D1.Brush	dxEffNegBrush;
+		private SharpDX.Direct2D1.Brush	dxFinPosBrush;
+		private SharpDX.Direct2D1.Brush	dxFinNegBrush;
+		private SharpDX.Direct2D1.Brush	dxRangeBrush;
+		private SharpDX.Direct2D1.Brush	dxTimeBrush;
 		private SharpDX.Direct2D1.Brush	dxTextBrush;
 		private SharpDX.DirectWrite.TextFormat	dxTextFormat;
 		private SharpDX.DirectWrite.Factory dwFactory;
@@ -41,31 +45,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Name						= "OrcaTimeStatistics";
-				Description					= "Displays Time Statistics (Volume, Delta, Delta Efficiency) at the bottom of the chart.";
+				Description					= "Displays per-bar statistics (Volume, Delta, Delta Efficiency, Range, Time) as a panel below the chart.";
 				Calculate					= Calculate.OnEachTick;
 				IsOverlay					= false;
-				DisplayInDataBox			= true;
+				DisplayInDataBox			= false;
 				IsSuspendedWhileInactive	= true;
 				BarsRequiredToPlot			= 0;
+				DrawHorizontalGridLines		= false;
+				DrawVerticalGridLines		= false;
+				IsAutoScale					= false;
 
 				VolumeColor          = Brushes.SkyBlue;
 				PositiveDeltaColor   = Brushes.LimeGreen;
 				NegativeDeltaColor   = Brushes.Crimson;
-				EfficiencyPosColor   = Brushes.MediumOrchid;
-				EfficiencyNegColor   = Brushes.OrangeRed;
+				FinishDeltaPosColor  = Brushes.MediumOrchid;
+				FinishDeltaNegColor  = Brushes.OrangeRed;
+				RangeColor           = Brushes.DodgerBlue;
+				TimeColor            = Brushes.SlateGray;
 				TextColor            = Brushes.Black;
 				BaseOpacity          = 0.25;
 				FontSize             = 11;
 
 				ShowVolume           = true;
 				ShowDelta            = true;
-				ShowDeltaEfficiency  = true;
+				ShowFinishDelta      = true;
+				ShowRange            = true;
+				ShowTime             = true;
 
-				AddPlot(new Stroke(Brushes.Transparent, 1), PlotStyle.Line, "TimeStatsDummy");
 			}
 			else if (State == State.DataLoaded)
 			{
 				barTickDelta   = new List<double>(4096);
+				barMaxDelta    = new List<double>(4096);
+				barMinDelta    = new List<double>(4096);
 				barHasData     = new List<bool>(4096);
 				lastBid        = double.NaN;
 				lastAsk        = double.NaN;
@@ -83,6 +95,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			while (barTickDelta.Count <= idx)
 			{
 				barTickDelta.Add(0);
+				barMaxDelta.Add(0);
+				barMinDelta.Add(0);
 				barHasData.Add(false);
 			}
 		}
@@ -131,6 +145,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						EnsureBarLists(primaryIdx);
 						barTickDelta[primaryIdx] += signed;
+						barMaxDelta[primaryIdx] = Math.Max(barMaxDelta[primaryIdx], barTickDelta[primaryIdx]);
+						barMinDelta[primaryIdx] = Math.Min(barMinDelta[primaryIdx], barTickDelta[primaryIdx]);
 						barHasData[primaryIdx] = true;
 					}
 				}
@@ -143,15 +159,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				EnsureBarLists(CurrentBar);
 				if (Bars.IsFirstBarOfSession) { lastBid = double.NaN; lastAsk = double.NaN; prevLast = double.NaN; }
-				if (CurrentBar < barHasData.Count && barHasData[CurrentBar]) Value[0] = barTickDelta[CurrentBar];
-				else Value[0] = double.NaN;
 			}
 		}
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			if (chartControl == null || chartScale == null || Bars == null || ChartBars == null) return;
-			int rowCount = (ShowVolume ? 1 : 0) + (ShowDelta ? 1 : 0) + (ShowDeltaEfficiency ? 1 : 0);
+			int rowCount = (ShowVolume ? 1 : 0) + (ShowDelta ? 1 : 0) + (ShowFinishDelta ? 1 : 0)
+						+ (ShowRange ? 1 : 0) + (ShowTime ? 1 : 0);
 			if (rowCount == 0) return;
 
 			int fromIdx = ChartBars.FromIndex;
@@ -166,22 +181,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float rowH = panelH / rowCount;
 
 			var rows = new List<KeyValuePair<string, int>>();
-			if (ShowVolume) rows.Add(new KeyValuePair<string, int>("Volume", 0));
-			if (ShowDelta) rows.Add(new KeyValuePair<string, int>("Delta", 1));
-			if (ShowDeltaEfficiency) rows.Add(new KeyValuePair<string, int>("\u0394 Efficiency", 2));
+			if (ShowVolume)      rows.Add(new KeyValuePair<string, int>("Volume",       0));
+			if (ShowDelta)       rows.Add(new KeyValuePair<string, int>("Delta",        1));
+			if (ShowFinishDelta) rows.Add(new KeyValuePair<string, int>("Finish \u0394",  2));
+			if (ShowRange)       rows.Add(new KeyValuePair<string, int>("Range",        3));
+			if (ShowTime)        rows.Add(new KeyValuePair<string, int>("Time",         4));
 
-			double maxVol = 1, maxDel = 1, maxEff = 1;
+			double maxVol = 1, maxDel = 1, maxRange = 1;
 			double tickSize = Math.Max(0.00000001, Instrument.MasterInstrument.TickSize);
 
 			for (int i = fromIdx; i <= toIdx; i++)
 			{
 				if (i >= Bars.Count) continue;
 				if (ShowVolume) maxVol = Math.Max(maxVol, Bars.GetVolume(i));
+				if (ShowRange)  maxRange = Math.Max(maxRange, Bars.GetHigh(i) - Bars.GetLow(i));
 				if (i < barTickDelta.Count && barHasData[i])
 				{
 					if (ShowDelta) maxDel = Math.Max(maxDel, Math.Abs(barTickDelta[i]));
-					if (ShowDeltaEfficiency && (Bars.GetHigh(i) - Bars.GetLow(i)) > 0)
-						maxEff = Math.Max(maxEff, Math.Abs(barTickDelta[i]) / ((Bars.GetHigh(i) - Bars.GetLow(i)) / tickSize));
 				}
 			}
 
@@ -196,38 +212,61 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (i >= Bars.Count) continue;
 				float x = chartControl.GetXByBarIndex(ChartBars, i);
 				float barSpacing = (i < toIdx) ? (chartControl.GetXByBarIndex(ChartBars, i + 1) - x) : ((i > fromIdx) ? (x - chartControl.GetXByBarIndex(ChartBars, i - 1)) : (float)chartControl.BarWidth);
-				float boxW = Math.Max(2f, barSpacing * 0.9f);
+				float boxW = Math.Max(2f, barSpacing);
 
 				bool hasDelta = (i < barTickDelta.Count && barHasData[i]);
-				double vol = Bars.GetVolume(i);
-				double del = hasDelta ? barTickDelta[i] : 0;
-				double range = (Bars.GetHigh(i) - Bars.GetLow(i)) / tickSize;
+				double vol   = Bars.GetVolume(i);
+				double del   = hasDelta ? barTickDelta[i] : 0;
+				double range = Bars.GetHigh(i) - Bars.GetLow(i); // points (H-L)
+				double open  = Bars.GetOpen(i);
+				double close = Bars.GetClose(i);
 
 				for (int r = 0; r < rows.Count; r++)
 				{
 					float rowY = panelY + r * rowH;
-					RectangleF rect = new RectangleF(x - boxW / 2, rowY + 1f, boxW, rowH - 2f);
+					RectangleF rect = new RectangleF(x - boxW / 2, rowY, boxW, rowH);
 					switch (rows[r].Value)
 					{
-						case 0:
+						case 0: // Volume
 							dxVolumeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (vol / maxVol));
 							RenderTarget.FillRectangle(rect, dxVolumeBrush);
 							if (boxW >= 20) DrawCenteredText(FormatVolume(vol), rect);
 							break;
-						case 1:
+						case 1: // Delta
 							if (!hasDelta) break;
 							var dBrush = del >= 0 ? dxPositiveBrush : dxNegativeBrush;
 							dBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (Math.Abs(del) / maxDel));
 							RenderTarget.FillRectangle(rect, dBrush);
 							if (boxW >= 20) DrawCenteredText(FormatDelta(del), rect);
 							break;
-						case 2:
-							if (!hasDelta || range <= 0) break;
-							double eff = del / range;
-							var eBrush = eff >= 0 ? dxEffPosBrush : dxEffNegBrush;
-							eBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (Math.Abs(eff) / maxEff));
-							RenderTarget.FillRectangle(rect, eBrush);
-							if (boxW >= 20) DrawCenteredText(eff.ToString("+0.00;-0.00;0.00"), rect);
+						case 2: // Finish Delta = (Current Delta - Extreme Delta)
+							if (!hasDelta) break;
+							double curDel = barTickDelta[i];
+							double extreme = (curDel >= 0) ? barMaxDelta[i] : barMinDelta[i];
+							double finDelta = curDel - extreme;
+							var fBrush = finDelta >= 0 ? dxFinPosBrush : dxFinNegBrush;
+							// Scale opacity based on absolute value relative to absolute max delta (or some fixed scale)
+							fBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, Math.Abs(finDelta) / maxDel));
+							RenderTarget.FillRectangle(rect, fBrush);
+							if (boxW >= 20) DrawCenteredText(finDelta.ToString("+#;-#;0"), rect);
+							break;
+						case 3: // Range (H-L in ticks)
+							dxRangeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (range / maxRange));
+							RenderTarget.FillRectangle(rect, dxRangeBrush);
+							if (boxW >= 20) DrawCenteredText(range.ToString("0.#"), rect);
+							break;
+						case 4: // Time — bar duration formatted as "Xm Y" or "Xs"
+							dxTimeBrush.Opacity = (float)BaseOpacity;
+							RenderTarget.FillRectangle(rect, dxTimeBrush);
+							if (boxW >= 28)
+							{
+								int durationSecs;
+								if (i < Bars.Count - 1)
+									durationSecs = (int)Math.Abs((Bars.GetTime(i + 1) - Bars.GetTime(i)).TotalSeconds);
+								else
+									durationSecs = (int)Math.Max(0, (DateTime.Now - Bars.GetTime(i)).TotalSeconds);
+								DrawCenteredText(FormatDuration(durationSecs), rect);
+							}
 							break;
 					}
 				}
@@ -236,12 +275,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			for (int r = 0; r < rows.Count; r++)
 				DrawRightLabel(rows[r].Key, ChartPanel.X + ChartPanel.W - 5f, panelY + r * rowH, rowH);
 
+
 			RenderTarget.AntialiasMode = oldAA;
 			RenderTarget.TextAntialiasMode = oldTAA;
 		}
 
 		private string FormatVolume(double vol) { return vol >= 1000 ? (vol / 1000.0).ToString("0.##") + "K" : vol.ToString("0.##"); }
 		private string FormatDelta(double delta) { return delta.ToString("#,##0"); }
+		private string FormatDuration(int totalSecs)
+		{
+			if (totalSecs < 60) return totalSecs + "s";
+			int m = totalSecs / 60, s = totalSecs % 60;
+			return s > 0 ? m + "m " + s : m + "m";
+		}
 
 		private void DrawCenteredText(string text, RectangleF rect)
 		{
@@ -268,13 +314,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void EnsureDxResources()
 		{
 			if (RenderTarget == null || dxVolumeBrush != null) return;
-			dxVolumeBrush = CreateSolidBrush(VolumeColor, 1.0f);
+			dxVolumeBrush   = CreateSolidBrush(VolumeColor, 1.0f);
 			dxPositiveBrush = CreateSolidBrush(PositiveDeltaColor, 1.0f);
 			dxNegativeBrush = CreateSolidBrush(NegativeDeltaColor, 1.0f);
-			dxEffPosBrush = CreateSolidBrush(EfficiencyPosColor, 1.0f);
-			dxEffNegBrush = CreateSolidBrush(EfficiencyNegColor, 1.0f);
-			dxTextBrush = CreateSolidBrush(TextColor, 1.0f);
-			dwFactory = new SharpDX.DirectWrite.Factory();
+			dxFinPosBrush   = CreateSolidBrush(FinishDeltaPosColor, 1.0f);
+			dxFinNegBrush   = CreateSolidBrush(FinishDeltaNegColor, 1.0f);
+			dxRangeBrush    = CreateSolidBrush(RangeColor, 1.0f);
+			dxTimeBrush     = CreateSolidBrush(TimeColor, 1.0f);
+			dxTextBrush     = CreateSolidBrush(TextColor, 1.0f);
+			dwFactory    = new SharpDX.DirectWrite.Factory();
 			dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
 		}
 
@@ -286,26 +334,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DisposeDxResources()
 		{
-			if (dxVolumeBrush != null) { dxVolumeBrush.Dispose(); dxVolumeBrush = null; }
+			if (dxVolumeBrush != null)   { dxVolumeBrush.Dispose();   dxVolumeBrush = null; }
 			if (dxPositiveBrush != null) { dxPositiveBrush.Dispose(); dxPositiveBrush = null; }
 			if (dxNegativeBrush != null) { dxNegativeBrush.Dispose(); dxNegativeBrush = null; }
-			if (dxEffPosBrush != null) { dxEffPosBrush.Dispose(); dxEffPosBrush = null; }
-			if (dxEffNegBrush != null) { dxEffNegBrush.Dispose(); dxEffNegBrush = null; }
-			if (dxTextBrush != null) { dxTextBrush.Dispose(); dxTextBrush = null; }
-			if (dxTextFormat != null) { dxTextFormat.Dispose(); dxTextFormat = null; }
-			if (dwFactory != null) { dwFactory.Dispose(); dwFactory = null; }
+			if (dxFinPosBrush != null)   { dxFinPosBrush.Dispose();   dxFinPosBrush = null; }
+			if (dxFinNegBrush != null)   { dxFinNegBrush.Dispose();   dxFinNegBrush = null; }
+			if (dxRangeBrush != null)      { dxRangeBrush.Dispose();      dxRangeBrush = null; }
+			if (dxTimeBrush != null)       { dxTimeBrush.Dispose();       dxTimeBrush = null; }
+			if (dxTextBrush != null)       { dxTextBrush.Dispose();       dxTextBrush = null; }
+			if (dxTextFormat != null)      { dxTextFormat.Dispose();      dxTextFormat = null; }
+			if (dwFactory != null)         { dwFactory.Dispose();         dwFactory = null; }
 		}
 
 		public override void OnRenderTargetChanged() { DisposeDxResources(); base.OnRenderTargetChanged(); }
 
-		[Display(Name = "Show Volume", Order = 1, GroupName = "Rows")]
+		[Display(Name = "Show Volume",           Order = 1, GroupName = "Rows")]
 		public bool ShowVolume { get; set; }
 
-		[Display(Name = "Show Delta", Order = 2, GroupName = "Rows")]
+		[Display(Name = "Show Delta",            Order = 2, GroupName = "Rows")]
 		public bool ShowDelta { get; set; }
 
-		[Display(Name = "Show Delta Efficiency", Order = 3, GroupName = "Rows")]
-		public bool ShowDeltaEfficiency { get; set; }
+		[Display(Name = "Show Finish Delta", Order = 3, GroupName = "Rows")]
+		public bool ShowFinishDelta { get; set; }
+
+		[Display(Name = "Show Range",            Order = 4, GroupName = "Rows")]
+		public bool ShowRange { get; set; }
+
+		[Display(Name = "Show Time",             Order = 5, GroupName = "Rows")]
+		public bool ShowTime { get; set; }
 
 		[XmlIgnore]
 		[Display(Name = "1. Volume Color", Order = 1, GroupName = "Visual")]
@@ -326,29 +382,41 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public string NegativeDeltaColorSerialize { get { return Serialize.BrushToString(NegativeDeltaColor); } set { NegativeDeltaColor = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "4. Efficiency (+) Color", Order = 4, GroupName = "Visual")]
-		public System.Windows.Media.Brush EfficiencyPosColor { get; set; }
+		[Display(Name = "4. Finish Delta (+) Color", Order = 4, GroupName = "Visual")]
+		public System.Windows.Media.Brush FinishDeltaPosColor { get; set; }
 		[Browsable(false)]
-		public string EfficiencyPosColorSerialize { get { return Serialize.BrushToString(EfficiencyPosColor); } set { EfficiencyPosColor = Serialize.StringToBrush(value); } }
+		public string FinishDeltaPosColorSerialize { get { return Serialize.BrushToString(FinishDeltaPosColor); } set { FinishDeltaPosColor = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "5. Efficiency (-) Color", Order = 5, GroupName = "Visual")]
-		public System.Windows.Media.Brush EfficiencyNegColor { get; set; }
+		[Display(Name = "5. Finish Delta (-) Color", Order = 5, GroupName = "Visual")]
+		public System.Windows.Media.Brush FinishDeltaNegColor { get; set; }
 		[Browsable(false)]
-		public string EfficiencyNegColorSerialize { get { return Serialize.BrushToString(EfficiencyNegColor); } set { EfficiencyNegColor = Serialize.StringToBrush(value); } }
+		public string FinishDeltaNegColorSerialize { get { return Serialize.BrushToString(FinishDeltaNegColor); } set { FinishDeltaNegColor = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "6. Text Color", Order = 6, GroupName = "Visual")]
+		[Display(Name = "6. Range Color", Order = 6, GroupName = "Visual")]
+		public System.Windows.Media.Brush RangeColor { get; set; }
+		[Browsable(false)]
+		public string RangeColorSerialize { get { return Serialize.BrushToString(RangeColor); } set { RangeColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "7. Time Color", Order = 7, GroupName = "Visual")]
+		public System.Windows.Media.Brush TimeColor { get; set; }
+		[Browsable(false)]
+		public string TimeColorSerialize { get { return Serialize.BrushToString(TimeColor); } set { TimeColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "8. Text Color", Order = 8, GroupName = "Visual")]
 		public System.Windows.Media.Brush TextColor { get; set; }
 		[Browsable(false)]
 		public string TextColorSerialize { get { return Serialize.BrushToString(TextColor); } set { TextColor = Serialize.StringToBrush(value); } }
 
 		[Range(0.0, 1.0)]
-		[Display(Name = "7. Base Opacity", Order = 7, GroupName = "Visual")]
+		[Display(Name = "9. Base Opacity", Order = 9, GroupName = "Visual")]
 		public double BaseOpacity { get; set; }
 
 		[Range(6, 24)]
-		[Display(Name = "8. Font Size", Order = 8, GroupName = "Visual")]
+		[Display(Name = "10. Font Size", Order = 10, GroupName = "Visual")]
 		public int FontSize { get; set; }
 	}
 }

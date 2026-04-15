@@ -25,3 +25,6 @@ obj/
 *.tmp
 otm_il.txt
 BuildLogs/
+
+# Tool-specific folders
+.claude/

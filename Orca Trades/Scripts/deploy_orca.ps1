@@ -11,6 +11,7 @@ $Indicators = @(
     "FastCandleHighlight.cs", "LegToLegDeltaProfile.cs", "OrcaAbsorptionCandles.cs", 
     "OrcaAnchoredVWAPs.cs", "OrcaCandleVolumeProfile.cs", "OrcaCumulativeDelta.cs", 
     "OrcaExecutionLines.cs", "OrcaExecutionLines2.cs", "OrcaLegtoLegProfile.cs", 
+    "OrcaMGIDaily.cs", "OrcaMGIStatistics.cs", "OrcaMGIWeekly.cs",
     "OrcaRollingProfiles.cs", "OrcaStepProfile.cs", "OrcaTickDirectionIndex.cs", 
     "OrcaTimeStatistics.cs", "OrcaTimeVWAPs.cs", "OrcaVisualOrders.cs", 
     "PAX30OpeningRange.cs", "PassiveFlowSuite.cs", "VWAPx.cs"

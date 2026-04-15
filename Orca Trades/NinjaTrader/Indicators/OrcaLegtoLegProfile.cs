@@ -444,6 +444,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawLegProfiles(ChartControl chartControl, ChartScale chartScale, NinjaTrader.Gui.Chart.ChartPanel panel, PriceLeg leg, float originX, int vWidth, int dWidth, bool isCurrent, bool forceHideDelta, int volCompTicks, int deltaCompTicks)
 		{
+			// Snapshot gradient palettes up front to avoid a null-swap race with OnRenderTargetChanged() mid-render
+			var localVolGrad = volGradientBrushes;
+			var localVAGrad  = vaGradientBrushes;
 			if (ShowCurrentLegBox && isCurrent)
 			{
 				int topY = chartScale.GetYByValue(leg.HighPrice), bottomY = chartScale.GetYByValue(leg.LowPrice);
@@ -494,7 +497,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 							if (ShowPOC && Math.Abs(kvp.Key - pocPrice) < TickSize * 0.01) brush = pocBrushDx;
 							else if (UseGradient)
 							{
-								var palette = (ShowValueArea && ShowVAColor && insideVA && vaGradientBrushes != null) ? vaGradientBrushes : volGradientBrushes;
+								var palette = (ShowValueArea && ShowVAColor && insideVA && localVAGrad != null) ? localVAGrad : localVolGrad;
 								if (palette != null)
 								{
 									int gradIdx = Math.Min(palette.Length - 1, Math.Max(0, (int)((kvp.Value / (double)maxVol) * (palette.Length - 1))));

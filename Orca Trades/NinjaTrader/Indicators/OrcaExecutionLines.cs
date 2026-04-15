@@ -315,6 +315,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (next == 0 && st.CurrentRT != null)
 					{
 						st.CurrentRT.IsComplete = true;
+						CalculateMAEMFE(st.CurrentRT); // calculate immediately so hover tooltip is ready the moment the trade closes
 						while (st.RoundTrips.Count > MaxTradesToShow) st.RoundTrips.RemoveAt(0);
 						st.CurrentRT = null;
 						if (EnableShotClock && shotClockIsLive) { shotClockEnd = DateTime.UtcNow.AddSeconds(ShotClockSeconds); shotClockActive = true; }
@@ -541,7 +542,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			System.Windows.Media.Brush clk = rem <= 30 ? ShotClockWarningColor : ShotClockColor;
 			Draw.TextFixed(this, "OrcaShotClock",
-				string.Format("â± Shot Clock  {0}:{1:D2}", (int)(rem/60), (int)(rem%60)),
+				string.Format("Shot Clock  {0}:{1:D2}", (int)(rem/60), (int)(rem%60)),
 				ShotClockPosition, clk,
 				new SimpleFont("Arial", 14){ Bold=true },
 				System.Windows.Media.Brushes.Transparent,
@@ -767,7 +768,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				               + "\n" + ticks.ToString("+0.##;-0.##;0") + " ticks | " + Fmt(dollars);
 				if (RiskAmount > 0) label += " | " + (dollars/RiskAmount).ToString("+0.##;-0.##;0") + "R";
 				if (!isFill && ShowMAEMFE && rt.MAEMFECalculated)
-					label += "\n" + (dollars>=0 ? "MDD: "+Fmt(rt.MaxAdverseExcursion) : "Peak: "+Fmt(rt.MaxFavorableExcursion));
+					label += "\nPeak: " + Fmt(rt.MaxFavorableExcursion) + "  |  MDD: " + Fmt(rt.MaxAdverseExcursion);
 
 				bool   pos  = dollars >= 0;
 				Color4 fg   = pos ? new Color4(0f,1f,0f,1f)       : new Color4(1f,0.5f,0.5f,1f);

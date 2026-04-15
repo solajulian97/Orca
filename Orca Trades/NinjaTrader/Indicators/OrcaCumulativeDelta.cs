@@ -24,15 +24,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 		TickDirection
 	}
 
+	public enum DeltaScopeMode
+	{
+		Cumulative,  // Runs as a running total across the full session (resets each new session)
+		BarDelta     // Resets to zero at the start of every bar ("Bar Delta" / per-bar delta)
+	}
+
 	public class OrcaCumulativeDelta : Indicator
 	{
 		#region Private Fields
 		private double	lastBid;
 		private double	lastAsk;
 		private double	prevLast;
-		private double	runningDelta;
-		private int		lastPrimaryBarProcessed;
-		private int		lastDirection;  // +1 or -1, carries forward for unchanged ticks
+		private double	         runningDelta;
+		private int		         lastPrimaryBarProcessed;
+		private int		         lastDirection;         // +1 or -1, carries forward for unchanged ticks
+		private volatile bool    pendingSessionReset;   // set on primary-bar thread, consumed on tick thread
 
 		private List<double>	barDeltaOpen;
 		private List<double>	barDeltaHigh;
@@ -77,6 +84,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowPriceLine		= true;
 				PriceLineWidth		= 1;
 				DeltaMode			= CumulativeDeltaMode.BidAsk;
+				DeltaScope			= DeltaScopeMode.Cumulative;
 
 				// DeltaClose is Values[0] so NT's right-side live label tracks the current delta close.
 				// DeltaHigh / DeltaLow are Values[1]/[2] to ensure the scale covers the full range.
@@ -100,9 +108,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastBid			= double.NaN;
 				lastAsk			= double.NaN;
 				prevLast		= double.NaN;
-				runningDelta	= 0;
+				runningDelta		    = 0;
 				lastPrimaryBarProcessed = -1;
-				lastDirection	= 0;
+				lastDirection		    = 0;
+				pendingSessionReset	    = false;
 			}
 			else if (State == State.Terminated)
 			{
@@ -155,6 +164,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (primaryIdx < 0) return;
 
 				EnsureBarLists(primaryIdx);
+
+				// Session reset: primary bar thread sets the flag via IsFirstBarOfSession;
+				// we consume it here on the tick thread BEFORE accumulating this tick.
+				// This avoids the race where the primary thread zeroed runningDelta while
+				// the tick thread was still mid-accumulation.
+				if (pendingSessionReset)
+				{
+					runningDelta	    = 0;
+					prevLast		    = double.NaN;
+					pendingSessionReset = false;
+				}
+
+				// Bar Delta mode: reset to zero at the start of each new primary bar
+				if (DeltaScope == DeltaScopeMode.BarDelta && primaryIdx != lastPrimaryBarProcessed)
+					runningDelta = 0;
 
 				// Track bar transitions
 				if (primaryIdx != lastPrimaryBarProcessed)
@@ -221,12 +245,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			EnsureBarLists(CurrentBar);
 
-			// Session reset using NinjaTrader's proper session detection
-			if (Bars.IsFirstBarOfSession)
-			{
-				runningDelta = 0;
-				prevLast = double.NaN;
-			}
+			// Signal the tick thread to reset runningDelta at the next tick (safe: volatile write).
+			// Only relevant in Cumulative mode; BarDelta mode resets every bar on the tick thread.
+			if (DeltaScope == DeltaScopeMode.Cumulative && Bars.IsFirstBarOfSession)
+				pendingSessionReset = true;
 
 			// Values[0]=DeltaClose drives the live right-axis label; [1]=High, [2]=Low drive scale range.
 			if (CurrentBar < barDeltaClose.Count && barHasData[CurrentBar])
@@ -467,9 +489,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Zero Line Width", Order = 2, GroupName = "Reference Levels")]
 		public int ZeroLineWidth { get; set; }
 
+		[NinjaScriptProperty]
 		[Display(Name = "Delta Mode", Order = 1, GroupName = "Delta Calculation",
 			Description = "BidAsk: classifies each trade against the bid/ask spread (most accurate live). TickDirection: classifies by whether price moved up or down tick-to-tick (works historically and live).")]
 		public CumulativeDeltaMode DeltaMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Delta Scope", Order = 2, GroupName = "Delta Calculation",
+			Description = "Cumulative: running total across the full session, resetting each new session (classic cumulative delta). BarDelta: resets to zero at the start of every bar, showing per-bar net delta only.")]
+		public DeltaScopeMode DeltaScope { get; set; }
 
 		#endregion
 	}

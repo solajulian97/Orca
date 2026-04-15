@@ -30,6 +30,14 @@ namespace NinjaTrader.NinjaScript
 	public enum MgiPlotStyle { Regular, Edge }
 	public enum MgiORDuration { Min1 = 1, Min5 = 5, Min15 = 15, Min30 = 30 }
 	public enum MgiDashStyle { Solid, Dash, Dot, DashDot }
+
+	/// <summary>
+	/// Determines which price is treated as the Prior Day Close (PDC).
+	/// Equities4PM  : 4:00 PM — equities market close, common benchmark
+	/// CME415PM     : 4:15 PM — CME futures RTH official close
+	/// Globex5PM    : 5:00 PM — last price before the 1-hour CME maintenance break
+	/// </summary>
+	public enum MgiPdcMode { Equities4PM, CME415PM, Globex5PM }
 }
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -52,9 +60,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public Dictionary<double, double> VolByPrice = new Dictionary<double, double>();
 			public VwapAccum Vwap = new VwapAccum();
 			public void ResetPrices() { Open = High = Low = Close = Mid = VAH = VAL = POC = double.NaN; VolByPrice.Clear(); Vwap.Reset(); }
-			public void UpdateHL(double h, double l, double c)
+			public void UpdateHL(double h, double l, double c, double openPrice = double.NaN)
 			{
-				if (double.IsNaN(Open)) Open = c;
+				// If open is explicitly provided (crossing bar), capture it; else default to close
+				if (double.IsNaN(Open))
+					Open = double.IsNaN(openPrice) ? c : openPrice;
 				if (double.IsNaN(High) || h > High) High = h;
 				if (double.IsNaN(Low) || l < Low) Low = l;
 				Close = c;
@@ -130,6 +140,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int lastBarIdx = -1;
 
 		private Series<double> rthMidSeries, ethMidSeries;
+
+		// Translates PriorDayCloseMode enum to the TimeSpan used for the PDC capture boundary.
+		// Independent of RTHCloseTime which controls the RTH session window for H/L/VA tracking.
+		private TimeSpan PdcTimeSpan
+		{
+			get
+			{
+				switch (PriorDayCloseMode)
+				{
+					case MgiPdcMode.Equities4PM: return new TimeSpan(16,  0, 0);
+					case MgiPdcMode.CME415PM:    return new TimeSpan(16, 15, 0);
+					case MgiPdcMode.Globex5PM:   return new TimeSpan(17,  0, 0);
+					default:                     return new TimeSpan(16, 15, 0);
+				}
+			}
+		}
 		#endregion
 
 		protected override void OnStateChange()
@@ -186,9 +212,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowSessionLine = false;
 				AbbreviateLabels = true;
 				ShowPriceInLabel = false;
+
+				PriorDayCloseMode = MgiPdcMode.CME415PM; // default: CME futures RTH close at 4:15 PM
 				
 				ShowRthMid = true; RthMidColor = WpfBrushes.DarkGoldenrod;
 				ShowEthMid = true; EthMidColor = WpfBrushes.DarkSlateBlue;
+
+				// Default custom labels (users can rename any of these)
+				LblONH = "ONH"; LblONL = "ONL"; LblONM = "ONM";
+				LblOVAH = "OVAH"; LblOVAL = "OVAL"; LblOPOC = "OPOC";
+				LblORH = "ORH"; LblORL = "ORL"; LblORM = "ORM";
+				LblIBH = "IBH"; LblIBL = "IBL"; LblIBM = "IBM";
+				LblRTHO = "RTHO"; LblRTHH = "RTHH"; LblRTHL = "RTHL";
+				LblETHO = "ETH.Open"; LblETHH = "ETHH"; LblETHL = "ETHL";
+				LblPDH = "PDH"; LblPDL = "PDL"; LblPDC = "PDC"; LblPDO = "PDO"; LblPDM = "PDM";
+				LblPEH = "PEH"; LblPEL = "PEL"; LblPEC = "PEC";
+				LblRVAH = "RVAH"; LblRVAL = "RVAL"; LblRPOC = "RPOC";
+				LblEVAH = "EVAH"; LblEVAL = "EVAL"; LblEPOC = "EPOC";
+				LblPRVAH = "pRVAH"; LblPRVAL = "pRVAL"; LblPRPOC = "pRPOC";
+				LblPEVAH = "pEVAH"; LblPEVAL = "pEVAL"; LblPEPOC = "pEPOC";
+				LblVWAP = "VWAP"; LblEVWAP = "eVWAP"; LblHGAP = "½GAP";
 
 				AddPlot(new Stroke(WpfBrushes.Transparent, 1), PlotStyle.Line, "MGIDummy");
 			}
@@ -255,8 +298,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#region Session Detection & OnBarUpdate
 		private bool IsInTimeWindow(TimeSpan barTime, TimeSpan start, TimeSpan end)
 		{
-			if (start < end) return barTime >= start && barTime < end;
-			return barTime >= start || barTime < end;
+			// Use > start so we don't grab the prior session's closing bar,
+			// and <= end so we DO include bars timestamped exactly at the close.
+			if (start < end) return barTime > start && barTime <= end;
+			return barTime > start || barTime <= end;
 		}
 
 		protected override void OnBarUpdate()
@@ -273,12 +318,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 			bool rthCrossed = CrossedTime(prevTod, tod, RTHOpenTime);
 			bool ethCrossed = CrossedTime(prevTod, tod, ETHOpenTime);
 
+			if (ethCrossed)
+			{
+				// At Globex 18:00 boundary, also update priorRTH so PDH reflects today's completed RTH.
+				CopyRthToPrior();
+
+				// Snapshot the full-day ETH into priorETH BEFORE resetting
+				CopyEthToPrior();
+
+				// Reset curETH for the new full-day session starting now
+				curETH.ResetPrices();
+				// Capture exact open price from the crossing bar
+				curETH.UpdateHL(h, l, c, Open[0]);
+				inETH = true;
+				if (curSessionInfo == null || curSessionInfo.Date != t.Date)
+				{
+					curSessionInfo = new SessionInfo { Date = t.Date, EthOpenIdx = CurrentBar };
+					sessionHistory.Add(curSessionInfo);
+				}
+				else curSessionInfo.EthOpenIdx = CurrentBar;
+			}
+
 			if (rthCrossed)
 			{
-				// Snapshot prior day
-				CopyToPrior();
+				// Snapshot RTH into priorRTH
+				CopyRthToPrior();
 
-				// Reset current session
+				// Reset RTH for the new session
 				curRTH.ResetPrices(); overnight.ResetPrices();
 				orHigh = orLow = orMid = ibHigh = ibLow = ibMid = double.NaN;
 				orComplete = false; ibComplete = false;
@@ -289,9 +355,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				curSessionDate = t.Date;
 
 				// Cache Session Info
-				curSessionInfo = new SessionInfo { Date = t.Date, RthOpenIdx = CurrentBar };
-				sessionHistory.Add(curSessionInfo);
+				if (curSessionInfo == null || curSessionInfo.Date != t.Date)
+				{
+					curSessionInfo = new SessionInfo { Date = t.Date, RthOpenIdx = CurrentBar };
+					sessionHistory.Add(curSessionInfo);
+				}
+				else curSessionInfo.RthOpenIdx = CurrentBar;
 				if (sessionHistory.Count > 50) sessionHistory.RemoveAt(0);
+
+				// Seed the new curRTH with the crossing bar's exact Open price.
+				// NinjaTrader timestamps bars at their CLOSE, so this bar's Open[0] is
+				// the actual first trade of the RTH session.
+				curRTH.UpdateHL(h, l, c, Open[0]);
+				curRTH.Vwap.Add(typPrice, vol);
+				DistributeVolume(curRTH, h, l, vol);
 
 				// Half gap calc
 				if (!double.IsNaN(priorRTH.Close))
@@ -300,18 +377,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (Math.Abs(gap) > TickSize * 2)
 						halfGap = priorRTH.Close + gap * 0.5;
 				}
-			}
-
-			if (ethCrossed)
-			{
-				curETH.ResetPrices();
-				inETH = true;
-				if (curSessionInfo == null || curSessionInfo.Date != t.Date)
-				{
-					curSessionInfo = new SessionInfo { Date = t.Date, EthOpenIdx = CurrentBar };
-					sessionHistory.Add(curSessionInfo);
-				}
-				else curSessionInfo.EthOpenIdx = CurrentBar;
 			}
 			
 			// Detect IB End (10:30)
@@ -325,14 +390,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			inRTH = IsInTimeWindow(tod, RTHOpenTime, RTHCloseTime);
 			bool isOvernight = !inRTH;
 
-			// RTH close crossing
-			if (CrossedTime(prevTod, tod, RTHCloseTime))
+			// RTH close crossing — use PdcTimeSpan (independent of RTHCloseTime which defines the session window)
+			if (CrossedTime(prevTod, tod, PdcTimeSpan))
 			{
 				curRTH.Close = c;
 			}
 
 			// Update current levels
-			if (inRTH)
+			if (inRTH && !rthCrossed)  // rthCrossed bar is already handled above
 			{
 				curRTH.UpdateHL(h, l, c);
 				curRTH.Vwap.Add(typPrice, vol);
@@ -342,7 +407,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (!orComplete)
 				{
 					TimeSpan orEnd = RTHOpenTime + TimeSpan.FromMinutes((int)ORDuration);
-					if (tod < orEnd)
+					if (tod <= orEnd)
 					{
 						if (double.IsNaN(orHigh) || h > orHigh) orHigh = h;
 						if (double.IsNaN(orLow) || l < orLow) orLow = l;
@@ -355,7 +420,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (!ibComplete)
 				{
 					TimeSpan ibEnd = RTHOpenTime + TimeSpan.FromMinutes(60);
-					if (tod < ibEnd)
+					if (tod <= ibEnd)
 					{
 						if (double.IsNaN(ibHigh) || h > ibHigh) ibHigh = h;
 						if (double.IsNaN(ibLow) || l < ibLow) ibLow = l;
@@ -365,10 +430,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			// ETH tracking
-			curETH.UpdateHL(h, l, c);
-			curETH.Vwap.Add(typPrice, vol);
-			DistributeVolume(curETH, h, l, vol);
+			// ETH full-day tracking (already updated on ethCrossed above; don't double-count)
+			if (!ethCrossed)
+			{
+				curETH.UpdateHL(h, l, c);
+				curETH.Vwap.Add(typPrice, vol);
+				DistributeVolume(curETH, h, l, vol);
+			}
+			else
+			{
+				// Already called UpdateHL above for the crossing bar; still add vol
+				curETH.Vwap.Add(typPrice, vol);
+				DistributeVolume(curETH, h, l, vol);
+			}
 
 			// Overnight tracking (between prior RTH close and current RTH open)
 			if (isOvernight)
@@ -404,12 +478,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return false;
 		}
 
-		private void CopyToPrior()
+		// Snapshot RTH only (called at RTH open)
+		private void CopyRthToPrior()
 		{
 			priorRTH.Open = curRTH.Open; priorRTH.High = curRTH.High; priorRTH.Low = curRTH.Low;
 			priorRTH.Close = curRTH.Close; priorRTH.Mid = curRTH.Mid;
 			priorRTH_VAH = curRTH.VAH; priorRTH_VAL = curRTH.VAL; priorRTH_POC = curRTH.POC;
+		}
 
+		// Snapshot ETH only (called at ETH open = start of new full day)
+		private void CopyEthToPrior()
+		{
 			priorETH.Open = curETH.Open; priorETH.High = curETH.High; priorETH.Low = curETH.Low;
 			priorETH.Close = curETH.Close; priorETH.Mid = curETH.Mid;
 			priorETH_VAH = curETH.VAH; priorETH_VAL = curETH.VAL; priorETH_POC = curETH.POC;
@@ -419,21 +498,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			for (int i = 0; i < LVL_COUNT; i++) levelCache[i].Enabled = false;
 
-			if (ShowONRange) { SetLvl(L_ONH, overnight.High, "ONH", 0); SetLvl(L_ONL, overnight.Low, "ONL", 0); SetLvl(L_ONMID, overnight.Mid, "ONM", 0); }
-			if (ShowONVA) { SetLvl(L_ONVAH, overnight.VAH, "OVAH", 1); SetLvl(L_ONVAL, overnight.VAL, "OVAL", 1); SetLvl(L_ONPOC, overnight.POC, "OPOC", 1); }
-			if (ShowOR) { SetLvl(L_ORH, orHigh, "ORH", 2); SetLvl(L_ORL, orLow, "ORL", 2); SetLvl(L_ORMID, orMid, "ORM", 2); }
-			if (ShowIB) { SetLvl(L_IBH, ibHigh, "IBH", 3); SetLvl(L_IBL, ibLow, "IBL", 3); SetLvl(L_IBMID, ibMid, "IBM", 3); }
-			if (ShowCurRTH) { SetLvl(L_CRTH_O, curRTH.Open, "RTHO", 4); SetLvl(L_CRTH_H, curRTH.High, "RTHH", 4); SetLvl(L_CRTH_L, curRTH.Low, "RTHL", 4); }
-			if (ShowCurETH) { SetLvl(L_CETH_O, curETH.Open, "ETHO", 5); SetLvl(L_CETH_H, curETH.High, "ETHH", 5); SetLvl(L_CETH_L, curETH.Low, "ETHL", 5); }
-			if (ShowPriorRTH) { SetLvl(L_PDH, priorRTH.High, "PDH", 6); SetLvl(L_PDL, priorRTH.Low, "PDL", 6); SetLvl(L_PDC, priorRTH.Close, "PDC", 6); SetLvl(L_PDO, priorRTH.Open, "PDO", 6); SetLvl(L_PDMID, priorRTH.Mid, "PDM", 6); }
-			if (ShowPriorETH) { SetLvl(L_PETH_H, priorETH.High, "PEH", 7); SetLvl(L_PETH_L, priorETH.Low, "PEL", 7); SetLvl(L_PETH_C, priorETH.Close, "PEC", 7); }
-			if (ShowCurRTHVA) { SetLvl(L_CRVAH, curRTH.VAH, "RVAH", 8); SetLvl(L_CRVAL, curRTH.VAL, "RVAL", 8); SetLvl(L_CRPOC, curRTH.POC, "RPOC", 8); }
-			if (ShowCurETHVA) { SetLvl(L_CEVAH, curETH.VAH, "EVAH", 9); SetLvl(L_CEVAL, curETH.VAL, "EVAL", 9); SetLvl(L_CEPOC, curETH.POC, "EPOC", 9); }
-			if (ShowPriorRTHVA) { SetLvl(L_PRVAH, priorRTH_VAH, "pRVAH", 10); SetLvl(L_PRVAL, priorRTH_VAL, "pRVAL", 10); SetLvl(L_PRPOC, priorRTH_POC, "pRPOC", 10); }
-			if (ShowPriorETHVA) { SetLvl(L_PEVAH, priorETH_VAH, "pEVAH", 11); SetLvl(L_PEVAL, priorETH_VAL, "pEVAL", 11); SetLvl(L_PEPOC, priorETH_POC, "pEPOC", 11); }
-			if (ShowRTHVwap) SetLvl(L_RVWAP, curRTH.Vwap.Value, "VWAP", 12);
-			if (ShowETHVwap) SetLvl(L_EVWAP, curETH.Vwap.Value, "eVWAP", 13);
-			if (ShowHalfGap) SetLvl(L_HGAP, halfGap, "½GAP", 14);
+			if (ShowONRange)  { SetLvl(L_ONH,    overnight.High,    LblONH,    0); SetLvl(L_ONL,    overnight.Low,    LblONL,    0); SetLvl(L_ONMID,  overnight.Mid,    LblONM,    0); }
+			if (ShowONVA)     { SetLvl(L_ONVAH,  overnight.VAH,    LblOVAH,   1); SetLvl(L_ONVAL,  overnight.VAL,    LblOVAL,   1); SetLvl(L_ONPOC,  overnight.POC,    LblOPOC,   1); }
+			if (ShowOR)       { SetLvl(L_ORH,    orHigh,           LblORH,    2); SetLvl(L_ORL,    orLow,            LblORL,    2); SetLvl(L_ORMID,  orMid,            LblORM,    2); }
+			if (ShowIB)       { SetLvl(L_IBH,    ibHigh,           LblIBH,    3); SetLvl(L_IBL,    ibLow,            LblIBL,    3); SetLvl(L_IBMID,  ibMid,            LblIBM,    3); }
+			if (ShowCurRTH)   { SetLvl(L_CRTH_O, curRTH.Open,      LblRTHO,   4); SetLvl(L_CRTH_H, curRTH.High,      LblRTHH,   4); SetLvl(L_CRTH_L, curRTH.Low,       LblRTHL,   4); }
+			if (ShowCurETH)   { SetLvl(L_CETH_O, curETH.Open,      LblETHO,   5); SetLvl(L_CETH_H, curETH.High,      LblETHH,   5); SetLvl(L_CETH_L, curETH.Low,       LblETHL,   5); }
+			if (ShowPriorRTH) { SetLvl(L_PDH,    priorRTH.High,    LblPDH,    6); SetLvl(L_PDL,    priorRTH.Low,     LblPDL,    6); SetLvl(L_PDC,    priorRTH.Close,   LblPDC,    6); SetLvl(L_PDO,    priorRTH.Open,    LblPDO,    6); SetLvl(L_PDMID,  priorRTH.Mid,    LblPDM,    6); }
+			if (ShowPriorETH) { SetLvl(L_PETH_H, priorETH.High,    LblPEH,    7); SetLvl(L_PETH_L, priorETH.Low,     LblPEL,    7); SetLvl(L_PETH_C, priorETH.Close,   LblPEC,    7); }
+			if (ShowCurRTHVA) { SetLvl(L_CRVAH,  curRTH.VAH,       LblRVAH,   8); SetLvl(L_CRVAL,  curRTH.VAL,       LblRVAL,   8); SetLvl(L_CRPOC,  curRTH.POC,       LblRPOC,   8); }
+			if (ShowCurETHVA) { SetLvl(L_CEVAH,  curETH.VAH,       LblEVAH,   9); SetLvl(L_CEVAL,  curETH.VAL,       LblEVAL,   9); SetLvl(L_CEPOC,  curETH.POC,       LblEPOC,   9); }
+			if (ShowPriorRTHVA) { SetLvl(L_PRVAH, priorRTH_VAH,    LblPRVAH, 10); SetLvl(L_PRVAL,  priorRTH_VAL,    LblPRVAL, 10); SetLvl(L_PRPOC,  priorRTH_POC,    LblPRPOC, 10); }
+			if (ShowPriorETHVA) { SetLvl(L_PEVAH, priorETH_VAH,    LblPEVAH, 11); SetLvl(L_PEVAL,  priorETH_VAL,    LblPEVAL, 11); SetLvl(L_PEPOC,  priorETH_POC,    LblPEPOC, 11); }
+			if (ShowRTHVwap) SetLvl(L_RVWAP, curRTH.Vwap.Value, LblVWAP,  12);
+			if (ShowETHVwap) SetLvl(L_EVWAP, curETH.Vwap.Value, LblEVWAP, 13);
+			if (ShowHalfGap) SetLvl(L_HGAP,  halfGap,           LblHGAP,  14);
 		}
 
 		private void SetLvl(int idx, double price, string label, int colorGroup)
@@ -481,7 +560,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ShowSessionLine && rthX > 0 && dxBrushes.Length > 16 && dxBrushes[16] != null)
 				RenderTarget.DrawLine(new Vector2(rthX, pT), new Vector2(rthX, pB), dxBrushes[16], 1f);
 
-			// Draw levels
+			// Draw levels -- Pass 1: lines only, collect labels for stagger pass
+			var pendingLabels = ShowLabels && dxLabelFormat != null
+				? new System.Collections.Generic.List<(float y, float eX, int bi, string text)>()
+				: null;
+
 			for (int i = 0; i < LVL_COUNT; i++)
 			{
 				if (!levelCache[i].Enabled) continue;
@@ -492,26 +575,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (bi >= dxBrushes.Length || dxBrushes[bi] == null) continue;
 
 				float sX = -1, eX = nowX;
-				
+
 				// 1. Overnight Range / VA
 				if (i >= L_ONH && i <= L_ONPOC)
-				{ 
-					sX = ethX > 0 ? ethX : pL; 
-					// Extended at user request: Follow to current candle
-					eX = nowX; 
-				}
-				// 2. IB Levels: Start 10:30
+				{ sX = ethX > 0 ? ethX : pL; eX = nowX; }
+				// 2. IB Levels
 				else if (i == L_IBH || i == L_IBL || i == L_IBMID)
-				{ 
-					if (si.IbEndIdx == -1) continue;
-					sX = ibEX; eX = nowX; 
-				}
+				{ if (si.IbEndIdx == -1) continue; sX = ibEX; eX = nowX; }
 				// 3. Opening Range
 				else if (i >= L_ORH && i <= L_ORMID)
 				{ sX = rthX > 0 ? rthX : -1; eX = nowX; }
 				// 4. Everything else (RTH, Prior Day, VWAP, Half Gap)
-				else 
-				{ sX = effectiveStartX; eX = nowX; }
+				else { sX = effectiveStartX; eX = nowX; }
 
 				if (sX < 0 || sX > CR) continue;
 
@@ -523,12 +598,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				RenderTarget.DrawLine(new Vector2(sX, y), new Vector2(eX, y), dxBrushes[bi], w, stroke);
 
-				// Label anchored to the right of the line end (current bar)
-				if (ShowLabels && dxLabelFormat != null)
+				// Collect label for Pass 2
+				pendingLabels?.Add((y, eX, bi, levelCache[i].Label));
+			}
+
+			// Draw levels -- Pass 2: labels with horizontal stagger for overlaps.
+			// Sort by Y pixel position then cascade nearby labels to the right.
+			if (pendingLabels != null && pendingLabels.Count > 0)
+			{
+				pendingLabels.Sort((a, b) => a.y.CompareTo(b.y));
+
+				float overlapThreshold = LabelFontSize * 1.5f;
+				float colStep = LabelFontSize * 5.5f;
+				float lastY = float.MinValue;
+				int col = 0;
+
+				foreach (var lbl in pendingLabels)
 				{
-					float txtX = eX + LabelXOffset;
-					var rect = new RectangleF(txtX, y - LabelFontSize - 1, 135, LabelFontSize + 4);
-					RenderTarget.DrawText(levelCache[i].Label, dxLabelFormat, rect, dxBrushes[bi]);
+					if (lbl.bi >= dxBrushes.Length || dxBrushes[lbl.bi] == null) continue;
+
+					if (Math.Abs(lbl.y - lastY) < overlapThreshold)
+						col++;
+					else
+						col = 0;
+
+					lastY = lbl.y;
+					float txtX = lbl.eX + LabelXOffset + col * colStep;
+					var rect = new RectangleF(txtX, lbl.y - LabelFontSize - 1, 200, LabelFontSize + 4);
+					RenderTarget.DrawText(lbl.text, dxLabelFormat, rect, dxBrushes[lbl.bi]);
 				}
 			}
 
@@ -728,6 +825,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public WpfBrush PriorETHColor { get; set; }
 		[Browsable(false)] public string PriorETHColorS { get { return Serialize.BrushToString(PriorETHColor); } set { PriorETHColor = Serialize.StringToBrush(value); } }
 
+		[NinjaScriptProperty]
+		[Display(Name = "Prior Day Close Definition",
+			Description = "Which close price to use as PDC. Equities4PM = 4:00 PM equities close. CME415PM = 4:15 PM CME RTH futures close. Globex5PM = 5:00 PM, last price before the 1-hour CME maintenance break.",
+			Order = 3, GroupName = "08. Prior Day RTH")]
+		public MgiPdcMode PriorDayCloseMode { get; set; }
+
 		// --- 10-13. Value Areas ---
 		[Display(Name="Show Current RTH VA", Order=1, GroupName="10. Current RTH VA")]
 		public bool ShowCurRTHVA { get; set; }
@@ -830,6 +933,48 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[XmlIgnore][Display(Name="ETH Mid Color", Order=4, GroupName="19. Mid Levels")]
 		public WpfBrush EthMidColor { get; set; }
 		[Browsable(false)] public string EthMidColorS { get { return Serialize.BrushToString(EthMidColor); } set { EthMidColor = Serialize.StringToBrush(value); } }
+		// --- 20. Custom Labels ---
+		[Display(Name="ON High",         Order=1,  GroupName="20. Custom Labels")] public string LblONH   { get; set; }
+		[Display(Name="ON Low",          Order=2,  GroupName="20. Custom Labels")] public string LblONL   { get; set; }
+		[Display(Name="ON Mid",          Order=3,  GroupName="20. Custom Labels")] public string LblONM   { get; set; }
+		[Display(Name="ON VAH",          Order=4,  GroupName="20. Custom Labels")] public string LblOVAH  { get; set; }
+		[Display(Name="ON VAL",          Order=5,  GroupName="20. Custom Labels")] public string LblOVAL  { get; set; }
+		[Display(Name="ON POC",          Order=6,  GroupName="20. Custom Labels")] public string LblOPOC  { get; set; }
+		[Display(Name="OR High",         Order=7,  GroupName="20. Custom Labels")] public string LblORH   { get; set; }
+		[Display(Name="OR Low",          Order=8,  GroupName="20. Custom Labels")] public string LblORL   { get; set; }
+		[Display(Name="OR Mid",          Order=9,  GroupName="20. Custom Labels")] public string LblORM   { get; set; }
+		[Display(Name="IB High",         Order=10, GroupName="20. Custom Labels")] public string LblIBH   { get; set; }
+		[Display(Name="IB Low",          Order=11, GroupName="20. Custom Labels")] public string LblIBL   { get; set; }
+		[Display(Name="IB Mid",          Order=12, GroupName="20. Custom Labels")] public string LblIBM   { get; set; }
+		[Display(Name="RTH Open",        Order=13, GroupName="20. Custom Labels")] public string LblRTHO  { get; set; }
+		[Display(Name="RTH High",        Order=14, GroupName="20. Custom Labels")] public string LblRTHH  { get; set; }
+		[Display(Name="RTH Low",         Order=15, GroupName="20. Custom Labels")] public string LblRTHL  { get; set; }
+		[Display(Name="ETH Open",        Order=16, GroupName="20. Custom Labels")] public string LblETHO  { get; set; }
+		[Display(Name="ETH High",        Order=17, GroupName="20. Custom Labels")] public string LblETHH  { get; set; }
+		[Display(Name="ETH Low",         Order=18, GroupName="20. Custom Labels")] public string LblETHL  { get; set; }
+		[Display(Name="Prior Day High",  Order=19, GroupName="20. Custom Labels")] public string LblPDH   { get; set; }
+		[Display(Name="Prior Day Low",   Order=20, GroupName="20. Custom Labels")] public string LblPDL   { get; set; }
+		[Display(Name="Prior Day Close", Order=21, GroupName="20. Custom Labels")] public string LblPDC   { get; set; }
+		[Display(Name="Prior Day Open",  Order=22, GroupName="20. Custom Labels")] public string LblPDO   { get; set; }
+		[Display(Name="Prior Day Mid",   Order=23, GroupName="20. Custom Labels")] public string LblPDM   { get; set; }
+		[Display(Name="Prior ETH High",  Order=24, GroupName="20. Custom Labels")] public string LblPEH   { get; set; }
+		[Display(Name="Prior ETH Low",   Order=25, GroupName="20. Custom Labels")] public string LblPEL   { get; set; }
+		[Display(Name="Prior ETH Close", Order=26, GroupName="20. Custom Labels")] public string LblPEC   { get; set; }
+		[Display(Name="RTH VAH",         Order=27, GroupName="20. Custom Labels")] public string LblRVAH  { get; set; }
+		[Display(Name="RTH VAL",         Order=28, GroupName="20. Custom Labels")] public string LblRVAL  { get; set; }
+		[Display(Name="RTH POC",         Order=29, GroupName="20. Custom Labels")] public string LblRPOC  { get; set; }
+		[Display(Name="ETH VAH",         Order=30, GroupName="20. Custom Labels")] public string LblEVAH  { get; set; }
+		[Display(Name="ETH VAL",         Order=31, GroupName="20. Custom Labels")] public string LblEVAL  { get; set; }
+		[Display(Name="ETH POC",         Order=32, GroupName="20. Custom Labels")] public string LblEPOC  { get; set; }
+		[Display(Name="Prior RTH VAH",   Order=33, GroupName="20. Custom Labels")] public string LblPRVAH { get; set; }
+		[Display(Name="Prior RTH VAL",   Order=34, GroupName="20. Custom Labels")] public string LblPRVAL { get; set; }
+		[Display(Name="Prior RTH POC",   Order=35, GroupName="20. Custom Labels")] public string LblPRPOC { get; set; }
+		[Display(Name="Prior ETH VAH",   Order=36, GroupName="20. Custom Labels")] public string LblPEVAH { get; set; }
+		[Display(Name="Prior ETH VAL",   Order=37, GroupName="20. Custom Labels")] public string LblPEVAL { get; set; }
+		[Display(Name="Prior ETH POC",   Order=38, GroupName="20. Custom Labels")] public string LblPEPOC { get; set; }
+		[Display(Name="RTH VWAP",        Order=39, GroupName="20. Custom Labels")] public string LblVWAP  { get; set; }
+		[Display(Name="ETH VWAP",        Order=40, GroupName="20. Custom Labels")] public string LblEVWAP { get; set; }
+		[Display(Name="Half Gap",        Order=41, GroupName="20. Custom Labels")] public string LblHGAP  { get; set; }
 		#endregion
 	}
 }

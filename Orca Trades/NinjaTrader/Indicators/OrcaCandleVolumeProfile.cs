@@ -75,6 +75,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SolidColorBrush deltaTextBrushDx;
 		private TextFormat      textFormatDx;
 		private Dictionary<string, float> textWidthCache = new Dictionary<string, float>();
+
+		// Synchronizes all writes to barVolumeMaps/barDeltaMaps/barVACache list growth.
+		// The tick thread (OnBarUpdate/ProcessTick) grows these lists; the render thread reads them.
+		private readonly object _dataLock = new object();
 		#endregion
 
 		protected override void OnStateChange()
@@ -232,14 +236,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void EnsureBarMaps(int primaryBarIndex)
 		{
-			while (barVolumeMaps.Count <= primaryBarIndex)
-				barVolumeMaps.Add(new Dictionary<double, long>());
+			lock (_dataLock)
+			{
+				while (barVolumeMaps.Count <= primaryBarIndex)
+					barVolumeMaps.Add(new Dictionary<double, long>());
 
-			while (barDeltaMaps.Count <= primaryBarIndex)
-				barDeltaMaps.Add(new Dictionary<double, long>());
-				
-			while (barVACache.Count <= primaryBarIndex)
-				barVACache.Add(new double[] { double.NaN, double.NaN, double.NaN, 0 });
+				while (barDeltaMaps.Count <= primaryBarIndex)
+					barDeltaMaps.Add(new Dictionary<double, long>());
+
+				while (barVACache.Count <= primaryBarIndex)
+					barVACache.Add(new double[] { double.NaN, double.NaN, double.NaN, 0 });
+			}
 		}
 
 		private void ProcessTickIntoPrimaryBar()
@@ -366,12 +373,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int fromIdx = ChartBars.FromIndex;
 			int toIdx   = ChartBars.ToIndex;
 
+			// Snapshot the safe list bounds once under the data lock.
+			// The tick thread may be growing these lists concurrently; using a snapshot
+			// prevents TOCTOU races where a bound check passes but the list shrinks before access.
+			int safeVolCount, safeVACount;
+			lock (_dataLock)
+			{
+				safeVolCount = barVolumeMaps.Count;
+				safeVACount  = barVACache.Count;
+			}
+
 			float panelTop    = ChartPanel.Y;
 			float panelBottom = ChartPanel.Y + ChartPanel.H;
 
 			for (int barIdx = fromIdx; barIdx <= toIdx; barIdx++)
 			{
 				if (barIdx < 0 || barIdx >= BarsArray[0].Count) continue;
+				if (barIdx >= safeVolCount || barIdx >= safeVACount) continue;
 
 				float barCenterX = chartControl.GetXByBarIndex(ChartBars, barIdx);
 
@@ -422,7 +440,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					bodyBrush);
 
 				// --- Draw Volume Profile ---
-				if (barIdx < barVolumeMaps.Count && barVolumeMaps[barIdx].Count > 0)
+				if (barIdx < safeVolCount && barIdx < safeVACount && barVolumeMaps[barIdx].Count > 0)
 				{
 					float drawProfileWidth = ProfileWidthPx;
 
@@ -449,7 +467,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 						drawProfileWidth = Math.Max(2f, availableWidth - 1f);
 					}
 
-					DrawBarVolumeProfile(chartScale, barIdx, candleRight + CandleProfileGapPx, panelTop, panelBottom, drawProfileWidth);
+					// Per-bar try-catch: a concurrent Dictionary resize on the active bar can throw
+					// IndexOutOfRangeException inside the dict's internal hash table. Catching it here
+					// silently skips just this bar for this frame — next frame it renders normally.
+					try
+					{
+						DrawBarVolumeProfile(chartScale, barIdx, candleRight + CandleProfileGapPx, panelTop, panelBottom, drawProfileWidth);
+					}
+					catch { }
 				}
 			}
 		}
