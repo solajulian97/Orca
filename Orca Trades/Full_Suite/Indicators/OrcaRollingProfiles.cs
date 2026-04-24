@@ -655,12 +655,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (ShowDelta && totalProfile.DeltaByPrice.Count > 0)
 				{
 					double deltaComp = dynamicDeltaComp * TickSize;
+					var volumeBucketsForDelta = new HashSet<double>();
+					foreach (var kvp in totalProfile.VolByPrice)
+					{
+						double startPrice = Math.Floor(kvp.Key / deltaComp + 1E-06) * deltaComp;
+						double endPrice = Math.Floor((kvp.Key + vTick - TickSize) / deltaComp + 1E-06) * deltaComp;
+						for (double bPrice = startPrice; bPrice <= endPrice + 1E-07; bPrice += deltaComp)
+							volumeBucketsForDelta.Add(bPrice);
+					}
 
-					// Re-bucket the raw 1-tick delta into dynamic bucket size
+					// Re-bucket delta only where the active rolling volume profile still exists.
 					var groupedDelta = new Dictionary<double, long>();
 					foreach (var kvp in totalProfile.DeltaByPrice)
 					{
 						double bPrice = Math.Floor(kvp.Key / deltaComp + 1E-06) * deltaComp;
+						if (!volumeBucketsForDelta.Contains(bPrice)) continue;
+
 						if (groupedDelta.ContainsKey(bPrice)) groupedDelta[bPrice] += kvp.Value;
 						else groupedDelta[bPrice] = kvp.Value;
 					}
@@ -679,15 +689,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 							float h = Math.Max(1, Math.Abs(y2 - y1) - ProfileBarSpacingPx);
 							float y = Math.Min(y1, y2) + (float)ProfileBarSpacingPx / 2f;
 							float w = (float)(DeltaWidthPx * ((double)Math.Abs(kvp.Value) / (double)maxDelta));
+							if (w < 1f) continue;
 
 							SharpDX.Direct2D1.SolidColorBrush brush = kvp.Value >= 0 ? posDeltaBrushDx : negDeltaBrushDx;
-							if (w >= 0.5f)
-								RenderTarget.FillRectangle(new RectangleF(canvasX, y, w, h), brush);
+							RenderTarget.FillRectangle(new RectangleF(canvasX, y, w, h), brush);
 
 							if (ShowDeltaText && Math.Abs(kvp.Value) >= DeltaTextMinThreshold && h >= DeltaTextFontSize + 2)
 							{
 								string lbl = kvp.Value.ToString("+#;-#;0");
 								float textWidth = MeasureTextWidth(lbl);
+								if (w < textWidth + 4f) continue;
+
 								// Place label inside the bar, anchored at canvasX + 2
 								float tX = canvasX + 2f;
 								float tY = y + (h / 2f) - (DeltaTextFontSize / 2f);
