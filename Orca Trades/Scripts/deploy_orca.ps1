@@ -2,7 +2,7 @@ param (
     [string]$Target = "All"
 )
 
-$WorkspaceRoot = "C:\Users\julia\.gemini\antigravity\scratch\Orca\Orca Trades"
+$WorkspaceRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $LiveCustomRoot = "C:\Users\julia\Documents\NinjaTrader 8\bin\Custom"
 
 # Files to sync
@@ -12,6 +12,8 @@ $Indicators = @(
     "OrcaAnchoredVWAPs.cs", "OrcaCandleVolumeProfile.cs", "OrcaCumulativeDelta.cs", 
     "OrcaExecutionLines.cs", "OrcaExecutionLines2.cs", "OrcaLegtoLegProfile.cs", 
     "OrcaMGIDaily.cs", "OrcaMGIStatistics.cs", "OrcaMGIWeekly.cs",
+    "OrcaPrints.cs", "OrcaPrints.Engine.cs", "OrcaPrints.Models.cs",
+    "OrcaPrints.Rendering.cs", "OrcaPrints.Scoring.cs",
     "OrcaRollingProfiles.cs", "OrcaStepProfile.cs", "OrcaTickDirectionIndex.cs", 
     "OrcaTimeStatistics.cs", "OrcaTimeVWAPs.cs", "OrcaVisualOrders.cs", 
     "PAX30OpeningRange.cs", "PassiveFlowSuite.cs", "VWAPx.cs"

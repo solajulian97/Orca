@@ -1,14 +1,14 @@
-$WorkspaceRoot = "C:\Users\Owner\.gemini\antigravity\scratch\Orca"
-$FullSuiteIndicators = "$WorkspaceRoot\Full_Suite\Indicators"
-$FullSuiteAddOns     = "$WorkspaceRoot\Full_Suite\AddOns"
-$LocalIndicators     = "$WorkspaceRoot\NinjaTrader\Indicators"
-$LocalAddOns         = "$WorkspaceRoot\NinjaTrader\AddOns"
-$LiveCustomRoot      = "C:\Users\Owner\Documents\NinjaTrader 8\bin\Custom"
+$WorkspaceRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$FullSuiteIndicators = Join-Path $WorkspaceRoot "Full_Suite\Indicators"
+$FullSuiteAddOns     = Join-Path $WorkspaceRoot "Full_Suite\AddOns"
+$LocalIndicators     = Join-Path $WorkspaceRoot "NinjaTrader\Indicators"
+$LocalAddOns         = Join-Path $WorkspaceRoot "NinjaTrader\AddOns"
+$LiveCustomRoot      = Join-Path $env:USERPROFILE "Documents\NinjaTrader 8\bin\Custom"
 $LiveIndicators      = "$LiveCustomRoot\Indicators"
 $LiveAddOns          = "$LiveCustomRoot\AddOns"
 
 Write-Host "=== Step 1: Git Pull ===" -ForegroundColor Cyan
-Set-Location $WorkspaceRoot
+Set-Location (Resolve-Path (Join-Path $WorkspaceRoot ".."))
 git pull
 Write-Host ""
 
