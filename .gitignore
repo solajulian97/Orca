@@ -25,6 +25,7 @@ obj/
 *.tmp
 otm_il.txt
 BuildLogs/
+Orca Trades/Live_Backups/
 
 # Tool-specific folders
 .claude/

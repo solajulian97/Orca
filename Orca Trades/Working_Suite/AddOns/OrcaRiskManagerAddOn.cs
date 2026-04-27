@@ -332,15 +332,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 				var text = new System.Windows.Controls.TextBlock {
 					Text = t,
 					TextAlignment = TextAlignment.Center,
-					HorizontalAlignment = HorizontalAlignment.Stretch,
+					TextWrapping = TextWrapping.Wrap,
+					HorizontalAlignment = HorizontalAlignment.Center,
 					VerticalAlignment = VerticalAlignment.Center
 				};
-				var btn = new System.Windows.Controls.Button { 
-					Content = text, 
-					Background = b, Foreground = System.Windows.Media.Brushes.GhostWhite, 
-					FontWeight = FontWeights.Normal, Margin = new Thickness(1), Padding = new Thickness(0, 5, 0, 5), 
+				var btn = new System.Windows.Controls.Button {
+					Content = text,
+					Background = b, Foreground = System.Windows.Media.Brushes.GhostWhite,
+					FontWeight = FontWeights.Normal, Margin = new Thickness(1), Padding = new Thickness(0, 5, 0, 5),
 					BorderThickness = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Stretch,
-					HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Center
+					HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center
 				};
 				if (h != null) btn.Click += h; return btn;
 			}
