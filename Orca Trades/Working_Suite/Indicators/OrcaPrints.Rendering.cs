@@ -149,7 +149,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (printEvent.Price < chartScale.MinValue || printEvent.Price > chartScale.MaxValue)
 					continue;
 
-				float x = chartControl.GetXByTime(printEvent.Time);
+				float x = GetPrintX(chartControl, printEvent);
 				if (x < left - padding || x > right + padding)
 					continue;
 
@@ -212,15 +212,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (fillBrush == null)
 					continue;
 
+				bool drawPriceLevelSquare = ShapeMode == NinjaTrader.NinjaScript.Indicators.ShapeMode.DistinguishClusters && printEvent.IsPriceLevel;
 				DxEllipse ellipse = new DxEllipse(new SharpDX.Vector2(x, y), radius, radius);
-				RenderTarget.FillEllipse(ellipse, fillBrush);
+				SharpDX.RectangleF square = new SharpDX.RectangleF(x - radius, y - radius, diameter, diameter);
+
+				if (drawPriceLevelSquare)
+					RenderTarget.FillRectangle(square, fillBrush);
+				else
+					RenderTarget.FillEllipse(ellipse, fillBrush);
 
 				if (BorderEnabled)
 				{
 					int borderArgb = GetBrushArgb(BorderColor, 1.0, GetAlphaFactor());
 					DxSolidColorBrush borderBrush = GetDxBrush(borderArgb);
 					if (borderBrush != null)
-						RenderTarget.DrawEllipse(ellipse, borderBrush, 1.0f);
+					{
+						if (drawPriceLevelSquare)
+							RenderTarget.DrawRectangle(square, borderBrush, 1.0f);
+						else
+							RenderTarget.DrawEllipse(ellipse, borderBrush, 1.0f);
+					}
 				}
 
 				if (ShapeMode == NinjaTrader.NinjaScript.Indicators.ShapeMode.DistinguishClusters && printEvent.IsCluster)
@@ -251,7 +262,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			string text = BuildTooltipText(printEvent);
 			int lineCount = CountTooltipLines(text);
-			float width = printEvent.IsCluster ? 250.0f : 170.0f;
+			float width = printEvent.IsCluster || printEvent.IsPriceLevel ? 250.0f : 170.0f;
 			float height = Math.Max(38.0f, 18.0f + lineCount * 15.0f);
 			float tipX = x + radius + 10.0f;
 			float tipY = y - height - radius - 6.0f;
@@ -279,6 +290,85 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RenderTarget.DrawText(text, tooltipTextFormat, textRect, textBrush);
 		}
 
+		private float GetPrintX(ChartControl chartControl, PrintEvent printEvent)
+		{
+			float x = chartControl.GetXByTime(printEvent.Time);
+
+			if (HorizontalAnchor != OrcaPrintHorizontalAnchor.ExactPrintTime && Bars != null && ChartBars != null)
+			{
+				try
+				{
+					int barIndex = Bars.GetBar(printEvent.Time);
+					if (barIndex >= 0 && barIndex < Bars.Count)
+					{
+						x = chartControl.GetXByBarIndex(ChartBars, barIndex);
+						if (HorizontalAnchor == OrcaPrintHorizontalAnchor.OrcaCandleVolumeProfileLeft || HorizontalAnchor == OrcaPrintHorizontalAnchor.OrcaCandleVolumeProfileCenter)
+						{
+							float profileX;
+							if (TryGetOrcaCandleVolumeProfileX(chartControl, barIndex, x, HorizontalAnchor == OrcaPrintHorizontalAnchor.OrcaCandleVolumeProfileCenter, out profileX))
+								x = profileX;
+						}
+					}
+				}
+				catch { }
+			}
+
+			return x + HorizontalOffsetPx;
+		}
+
+		private bool TryGetOrcaCandleVolumeProfileX(ChartControl chartControl, int barIndex, float barCenterX, bool centerProfile, out float x)
+		{
+			x = barCenterX;
+			OrcaCandleVolumeProfile profile = null;
+
+			try
+			{
+				if (chartControl != null && chartControl.Indicators != null)
+				{
+					foreach (object indicator in chartControl.Indicators)
+					{
+						profile = indicator as OrcaCandleVolumeProfile;
+						if (profile != null)
+							break;
+					}
+				}
+			}
+			catch { profile = null; }
+
+			if (profile == null)
+				return false;
+
+			float halfCandle = Math.Max(0.0f, profile.CandleWidthPx * 0.5f);
+			float profileLeft = barCenterX + halfCandle + Math.Max(0.0f, profile.CandleProfileGapPx);
+			x = profileLeft;
+
+			if (!centerProfile)
+				return true;
+
+			float profileWidth = Math.Max(2.0f, profile.ProfileWidthPx);
+			if (profile.DynamicProfileWidth && ChartBars != null)
+			{
+				try
+				{
+					float nextBarCenterX;
+					if (barIndex + 1 < ChartBars.Count)
+						nextBarCenterX = chartControl.GetXByBarIndex(ChartBars, barIndex + 1);
+					else if (barIndex > 0)
+						nextBarCenterX = barCenterX + (barCenterX - chartControl.GetXByBarIndex(ChartBars, barIndex - 1));
+					else
+						nextBarCenterX = barCenterX + profile.ProfileWidthPx;
+
+					float nextCandleLeft = nextBarCenterX - halfCandle;
+					float availableWidth = nextCandleLeft - profileLeft;
+					profileWidth = Math.Max(2.0f, availableWidth - 1.0f);
+				}
+				catch { }
+			}
+
+			x = profileLeft + profileWidth * 0.5f;
+			return true;
+		}
+
 		private void EnsureTooltipTextFormat()
 		{
 			if (tooltipTextFormat != null)
@@ -301,6 +391,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string BuildTooltipText(PrintEvent printEvent)
 		{
 			string side = printEvent.Side == AggressorSide.Buy ? "Buy" : "Sell";
+			PriceLevelEvent priceLevel = printEvent as PriceLevelEvent;
+			if (priceLevel != null)
+			{
+				return "Price level accumulation" + Environment.NewLine
+					+ side + " dominant  " + priceLevel.DominantPercent.ToString("0") + "%" + Environment.NewLine
+					+ "S: " + priceLevel.SellVolume.ToString("N0") + "  B: " + priceLevel.BuyVolume.ToString("N0") + "  V: " + priceLevel.Volume.ToString("N0") + Environment.NewLine
+					+ priceLevel.ChildCount.ToString("N0") + " prints at " + priceLevel.Price.ToString("0.00");
+			}
+
 			ClusterEvent cluster = printEvent as ClusterEvent;
 			if (cluster == null)
 			{
@@ -370,12 +469,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private int GetEventArgb(PrintEvent printEvent, double volumeRank, double brightnessMultiplier)
 		{
-			WpfBrush brush = printEvent.Side == AggressorSide.Buy ? BuyAggressorColor : SellAggressorColor;
+			WpfBrush buyBrush = printEvent.IsPriceLevel ? PriceLevelBuyColor : BuyAggressorColor;
+			WpfBrush sellBrush = printEvent.IsPriceLevel ? PriceLevelSellColor : SellAggressorColor;
+			WpfBrush brush = printEvent.Side == AggressorSide.Buy ? buyBrush : sellBrush;
 			double intensity = 1.0;
 			if (UseVariableIntensity)
 			{
 				double minIntensity = Clamp01(MinIntensityPct / 100.0);
-				intensity = minIntensity + (1.0 - minIntensity) * Clamp01(volumeRank);
+				double rank = Clamp01(volumeRank);
+				PriceLevelEvent priceLevel = printEvent as PriceLevelEvent;
+				if (priceLevel != null)
+					rank = Clamp01((priceLevel.DominantPercent - 50.0) / 50.0);
+				intensity = minIntensity + (1.0 - minIntensity) * rank;
 			}
 
 			intensity = Clamp01(intensity * brightnessMultiplier);

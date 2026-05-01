@@ -16,10 +16,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			tickBuffer = new List<OrcaPrintTick>(4096);
 			printEvents = new List<PrintEvent>(2048);
 			clusterCooldowns = new Dictionary<string, DateTime>();
+			priceLevelAccumulators = new Dictionary<double, PriceLevelAccumulator>();
 			printLock = new System.Threading.ReaderWriterLockSlim();
 			currentBid = double.NaN;
 			currentAsk = double.NaN;
 			lastSessionResetBar = -1;
+			priceLevelAccumulatorBarIndex = -1;
 		}
 
 		private void TerminateOrcaPrintsEngine()
@@ -33,6 +35,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (tickBuffer != null) tickBuffer.Clear();
 					if (printEvents != null) printEvents.Clear();
 					if (clusterCooldowns != null) clusterCooldowns.Clear();
+					if (priceLevelAccumulators != null) priceLevelAccumulators.Clear();
 				}
 				finally
 				{
@@ -46,6 +49,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			tickBuffer = null;
 			printEvents = null;
 			clusterCooldowns = null;
+			priceLevelAccumulators = null;
 		}
 
 		private void ClearOrcaPrintsState()
@@ -60,8 +64,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (tickBuffer != null) tickBuffer.Clear();
 				if (printEvents != null) printEvents.Clear();
 				if (clusterCooldowns != null) clusterCooldowns.Clear();
+				if (priceLevelAccumulators != null) priceLevelAccumulators.Clear();
 				currentBid = double.NaN;
 				currentAsk = double.NaN;
+				priceLevelAccumulatorBarIndex = -1;
 			}
 			finally
 			{
@@ -97,7 +103,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				currentBid = e.Bid;
 
 			long size = e.Volume;
-			if (size < MinTradeSize)
+			if (size <= 0)
 				return;
 
 			AggressorSide side = AggressorSide.Unknown;
@@ -111,6 +117,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			DateTime time = e.Time == DateTime.MinValue ? Time[0] : e.Time;
 			OrcaPrintTick tick = new OrcaPrintTick(time, e.Price, size, side);
+			bool includeInSingleAndCluster = size >= MinTradeSize;
 
 			System.Threading.ReaderWriterLockSlim localLock = printLock;
 			if (localLock == null || tickBuffer == null || printEvents == null)
@@ -119,7 +126,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			localLock.EnterWriteLock();
 			try
 			{
-				ProcessIncomingPrintTick(tick);
+				ProcessIncomingPrintTick(tick, includeInSingleAndCluster);
 			}
 			finally
 			{
@@ -127,28 +134,119 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void ProcessIncomingPrintTick(OrcaPrintTick tick)
+		private void ProcessIncomingPrintTick(OrcaPrintTick tick, bool includeInSingleAndCluster)
 		{
-			tickBuffer.Add(tick);
-			EvictOldTicks(tick.Time);
+			if (EnablePriceLevelAccumulation)
+				UpdatePriceLevelAccumulation(tick);
 
-			if (EnableSinglePrints && tick.Size >= SinglePrintMinSize)
+			if (includeInSingleAndCluster)
 			{
-				PrintEvent printEvent = new PrintEvent
+				tickBuffer.Add(tick);
+				EvictOldTicks(tick.Time);
+
+				if (EnableSinglePrints && tick.Size >= SinglePrintMinSize)
 				{
-					Time = tick.Time,
-					Price = tick.Price,
-					Volume = tick.Size,
-					Side = tick.Side,
-					Kind = OrcaPrintEventKind.Single
-				};
-				AddPrintEvent(printEvent);
+					PrintEvent printEvent = new PrintEvent
+					{
+						Time = tick.Time,
+						Price = tick.Price,
+						Volume = tick.Size,
+						Side = tick.Side,
+						Kind = OrcaPrintEventKind.Single
+					};
+					AddPrintEvent(printEvent);
+				}
+
+				if (EnableClusters)
+					TryEmitCluster(tick);
 			}
 
-			if (EnableClusters)
-				TryEmitCluster(tick);
-
 			TrimStoredEvents();
+		}
+
+		private void UpdatePriceLevelAccumulation(OrcaPrintTick tick)
+		{
+			if (priceLevelAccumulators == null || CurrentBar < 0)
+				return;
+
+			if (priceLevelAccumulatorBarIndex != CurrentBar)
+			{
+				priceLevelAccumulators.Clear();
+				priceLevelAccumulatorBarIndex = CurrentBar;
+			}
+
+			double priceKey = NormalizePriceToTick(tick.Price);
+			PriceLevelAccumulator accumulator;
+			if (!priceLevelAccumulators.TryGetValue(priceKey, out accumulator) || accumulator == null)
+			{
+				accumulator = new PriceLevelAccumulator
+				{
+					StartTime = tick.Time,
+					EndTime = tick.Time,
+					Price = priceKey
+				};
+				priceLevelAccumulators[priceKey] = accumulator;
+			}
+
+			accumulator.EndTime = tick.Time;
+			accumulator.ChildCount++;
+			if (tick.Side == AggressorSide.Buy)
+				accumulator.BuyVolume += tick.Size;
+			else if (tick.Side == AggressorSide.Sell)
+				accumulator.SellVolume += tick.Size;
+
+			bool passesVolume = accumulator.TotalVolume >= PriceLevelMinVolume;
+			bool passesDominance = !PriceLevelRequireMinDominance || GetPriceLevelDominantPercent(accumulator) >= PriceLevelMinDominancePercent;
+			if (!passesVolume || !passesDominance)
+			{
+				if (accumulator.Event != null)
+				{
+					RemovePrintEvent(accumulator.Event);
+					accumulator.Event = null;
+				}
+				return;
+			}
+
+			if (accumulator.Event == null)
+			{
+				accumulator.Event = new PriceLevelEvent();
+				AddPrintEvent(accumulator.Event);
+			}
+
+			UpdatePriceLevelEvent(accumulator);
+		}
+
+		private double GetPriceLevelDominantPercent(PriceLevelAccumulator accumulator)
+		{
+			if (accumulator == null || accumulator.TotalVolume <= 0)
+				return 0.0;
+
+			return 100.0 * Math.Max(accumulator.BuyVolume, accumulator.SellVolume) / accumulator.TotalVolume;
+		}
+
+		private void UpdatePriceLevelEvent(PriceLevelAccumulator accumulator)
+		{
+			if (accumulator == null || accumulator.Event == null)
+				return;
+
+			PriceLevelEvent printEvent = accumulator.Event;
+			printEvent.StartTime = accumulator.StartTime;
+			printEvent.EndTime = accumulator.EndTime;
+			printEvent.Time = accumulator.EndTime;
+			printEvent.Price = accumulator.Price;
+			printEvent.Volume = accumulator.TotalVolume;
+			printEvent.BuyVolume = accumulator.BuyVolume;
+			printEvent.SellVolume = accumulator.SellVolume;
+			printEvent.ChildCount = accumulator.ChildCount;
+			printEvent.Side = accumulator.BuyVolume >= accumulator.SellVolume ? AggressorSide.Buy : AggressorSide.Sell;
+		}
+
+		private double NormalizePriceToTick(double price)
+		{
+			if (TickSize <= 0)
+				return price;
+
+			return Math.Round(price / TickSize) * TickSize;
 		}
 
 		private void EvictOldTicks(DateTime currentTime)
@@ -333,6 +431,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (printEvents != null && printEvent != null)
 				printEvents.Add(printEvent);
+		}
+
+		private void RemovePrintEvent(PrintEvent printEvent)
+		{
+			if (printEvents != null && printEvent != null)
+				printEvents.Remove(printEvent);
 		}
 
 		private void TrimStoredEvents()

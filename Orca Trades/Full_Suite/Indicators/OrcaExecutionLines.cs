@@ -137,7 +137,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				Description = "Automatic execution lines with FIFO round-trip matching, SQLite history, and R-multiple tracking";
 				Name        = "OrcaExecutionLines";
-				Calculate   = Calculate.OnEachTick;
+				Calculate   = Calculate.OnPriceChange;
 				IsOverlay   = true;
 				DisplayInDataBox      = false;
 				DrawOnPricePanel      = true;
@@ -492,6 +492,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void UpdateLiveMAEMFE()
 		{
 			if (!ShowMAEMFE) return;
+			if (Instrument == null || Instrument.MasterInstrument == null || CurrentBar < 0) return;
 			lock (tradeLock)
 			{
 				if (string.IsNullOrEmpty(activeAccountName) || !accountStates.ContainsKey(activeAccountName)) return;
@@ -645,11 +646,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 					else
 					{
-						float x1,y1,x2,y2;
-						if (TryGetXY(rt.FirstEntryTime, rt.AvgEntryPrice, chartControl, chartScale, out x1, out y1) &&
-						    TryGetXY(rt.LastExitTime,  rt.AvgExitPrice,  chartControl, chartScale, out x2, out y2))
+						foreach (var m in rt.Matches)
 						{
-							double d = DistSq(mx,my,x1,y1,x2,y2);
+							float x1,y1,x2,y2;
+							if (TryGetXY(m.EntryTime, m.EntryPrice, chartControl, chartScale, out x1, out y1) &&
+							    TryGetXY(m.ExitTime,  m.ExitPrice,  chartControl, chartScale, out x2, out y2))
+							{
+								double d = DistSq(mx,my,x1,y1,x2,y2);
+								if (d < best) { best=d; hoveredRT=rt; hoveredFill=null; }
+							}
+						}
+
+						float ax1,ay1,ax2,ay2;
+						if (TryGetXY(rt.FirstEntryTime, rt.AvgEntryPrice, chartControl, chartScale, out ax1, out ay1) &&
+						    TryGetXY(rt.LastExitTime,  rt.AvgExitPrice,  chartControl, chartScale, out ax2, out ay2))
+						{
+							double d = DistSq(mx,my,ax1,ay1,ax2,ay2);
 							if (d < best) { best=d; hoveredRT=rt; hoveredFill=null; }
 						}
 					}
@@ -761,10 +773,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				bool isFill = m != null;
 				double ticks   = isFill ? m.PnLTicks   : (rt.EntryQtyTotal>0 ? rt.TotalPnLTicks/(double)rt.EntryQtyTotal : 0);
+				double points  = ticks * TickSize;
 				double dollars = isFill ? m.PnLDollars  : rt.TotalPnLDollars;
 				int    qty     = isFill ? m.Quantity     : rt.EntryQtyTotal;
 				string label   = "#" + rt.Number + (isFill?" (Fill)":"") + " " + (rt.IsLong?"Long":"Short") + (qty>1?" x"+qty:"")
-				               + "\n" + ticks.ToString("+0.##;-0.##;0") + " ticks | " + Fmt(dollars);
+				               + "\n" + points.ToString("+0.##;-0.##;0") + " pts | " + Fmt(dollars);
 				if (RiskAmount > 0) label += " | " + (dollars/RiskAmount).ToString("+0.##;-0.##;0") + "R";
 				if (!isFill && ShowMAEMFE && rt.MAEMFECalculated)
 					label += "\nPeak: " + Fmt(rt.MaxFavorableExcursion) + "  |  MDD: " + Fmt(rt.MaxAdverseExcursion);

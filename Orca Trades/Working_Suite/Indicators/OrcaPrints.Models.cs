@@ -31,10 +31,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 		DistinguishClusters
 	}
 
+	public enum OrcaPrintHorizontalAnchor
+	{
+		ExactPrintTime,
+		BarCenter,
+		OrcaCandleVolumeProfileLeft,
+		OrcaCandleVolumeProfileCenter
+	}
+
 	internal enum OrcaPrintEventKind
 	{
 		Single,
-		Cluster
+		Cluster,
+		PriceLevel
 	}
 
 	internal struct OrcaPrintTick
@@ -64,6 +73,46 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool IsCluster
 		{
 			get { return Kind == OrcaPrintEventKind.Cluster; }
+		}
+
+		public bool IsPriceLevel
+		{
+			get { return Kind == OrcaPrintEventKind.PriceLevel; }
+		}
+	}
+
+	internal class PriceLevelEvent : PrintEvent
+	{
+		public DateTime StartTime;
+		public DateTime EndTime;
+		public long BuyVolume;
+		public long SellVolume;
+		public int ChildCount;
+
+		public double DominantPercent
+		{
+			get { return Volume > 0 ? 100.0 * Math.Max(BuyVolume, SellVolume) / Volume : 0.0; }
+		}
+
+		public PriceLevelEvent()
+		{
+			Kind = OrcaPrintEventKind.PriceLevel;
+		}
+	}
+
+	internal class PriceLevelAccumulator
+	{
+		public DateTime StartTime;
+		public DateTime EndTime;
+		public double Price;
+		public long BuyVolume;
+		public long SellVolume;
+		public int ChildCount;
+		public PriceLevelEvent Event;
+
+		public long TotalVolume
+		{
+			get { return BuyVolume + SellVolume; }
 		}
 	}
 

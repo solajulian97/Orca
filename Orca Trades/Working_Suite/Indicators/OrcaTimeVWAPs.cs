@@ -25,6 +25,7 @@ namespace NinjaTrader.NinjaScript
 {
 	public enum RollingVwapPeriod 
 	{
+		Min5 = 5,
 		Min15 = 15,
 		Min30 = 30,
 		Hour1 = 60,

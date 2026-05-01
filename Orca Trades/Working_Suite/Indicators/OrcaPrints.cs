@@ -24,10 +24,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private List<OrcaPrintTick> tickBuffer;
 		private List<PrintEvent> printEvents;
 		private Dictionary<string, DateTime> clusterCooldowns;
+		private Dictionary<double, PriceLevelAccumulator> priceLevelAccumulators;
 		private ReaderWriterLockSlim printLock;
 		private double currentBid = double.NaN;
 		private double currentAsk = double.NaN;
 		private int lastSessionResetBar = -1;
+		private int priceLevelAccumulatorBarIndex = -1;
 
 		protected override void OnStateChange()
 		{
@@ -57,6 +59,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				MinAggressorPercent = 70;
 				ClusterCooldownSec = 1.0;
 
+				EnablePriceLevelAccumulation = false;
+				PriceLevelMinVolume = 75;
+				PriceLevelRequireMinDominance = true;
+				PriceLevelMinDominancePercent = 60;
+
 				ParentConfidenceMode = NinjaTrader.NinjaScript.Indicators.ParentConfidenceMode.Score;
 				MinParentConfidence = 60;
 				WeightAggressorConsistency = 0.30;
@@ -69,12 +76,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DotSizeScale = NinjaTrader.NinjaScript.Indicators.DotSizeScale.Logarithmic;
 				BuyAggressorColor = WpfBrushes.LimeGreen;
 				SellAggressorColor = WpfBrushes.OrangeRed;
+				PriceLevelBuyColor = WpfBrushes.DeepSkyBlue;
+				PriceLevelSellColor = WpfBrushes.Magenta;
 				UseVariableIntensity = true;
 				MinIntensityPct = 35;
 				BorderEnabled = true;
 				BorderColor = WpfBrushes.Black;
 				TransparencyPct = 20;
 				ShapeMode = NinjaTrader.NinjaScript.Indicators.ShapeMode.DistinguishClusters;
+				HorizontalAnchor = OrcaPrintHorizontalAnchor.ExactPrintTime;
+				HorizontalOffsetPx = 0;
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -158,6 +169,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public double ClusterCooldownSec { get; set; }
 		#endregion
 
+		#region 03B. Price Levels
+		[NinjaScriptProperty]
+		[Display(Name = "Enable Price Levels", Order = 1, GroupName = "03B. Price Levels")]
+		public bool EnablePriceLevelAccumulation { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 1000000000)]
+		[Display(Name = "Price Level Min Volume", Order = 2, GroupName = "03B. Price Levels")]
+		public long PriceLevelMinVolume { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Require Min Dominance", Order = 3, GroupName = "03B. Price Levels")]
+		public bool PriceLevelRequireMinDominance { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(50, 100)]
+		[Display(Name = "Min Dominance Percent", Order = 4, GroupName = "03B. Price Levels")]
+		public int PriceLevelMinDominancePercent { get; set; }
+		#endregion
+
 		#region 04. Parent Confidence
 		[NinjaScriptProperty]
 		[Display(Name = "Parent Confidence Mode", Order = 1, GroupName = "04. Parent Confidence")]
@@ -226,21 +257,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 			set { SellAggressorColor = Serialize.StringToBrush(value); }
 		}
 
+		[XmlIgnore]
+		[Display(Name = "Price Level Buy Color", Order = 6, GroupName = "05. Rendering")]
+		public WpfBrush PriceLevelBuyColor { get; set; }
+
+		[Browsable(false)]
+		public string PriceLevelBuyColorSerializable
+		{
+			get { return Serialize.BrushToString(PriceLevelBuyColor); }
+			set { PriceLevelBuyColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "Price Level Sell Color", Order = 7, GroupName = "05. Rendering")]
+		public WpfBrush PriceLevelSellColor { get; set; }
+
+		[Browsable(false)]
+		public string PriceLevelSellColorSerializable
+		{
+			get { return Serialize.BrushToString(PriceLevelSellColor); }
+			set { PriceLevelSellColor = Serialize.StringToBrush(value); }
+		}
+
 		[NinjaScriptProperty]
-		[Display(Name = "Use Variable Intensity", Order = 6, GroupName = "05. Rendering")]
+		[Display(Name = "Use Variable Intensity", Order = 8, GroupName = "05. Rendering")]
 		public bool UseVariableIntensity { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "Min Intensity Pct", Order = 7, GroupName = "05. Rendering")]
+		[Display(Name = "Min Intensity Pct", Order = 9, GroupName = "05. Rendering")]
 		public int MinIntensityPct { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Border Enabled", Order = 8, GroupName = "05. Rendering")]
+		[Display(Name = "Border Enabled", Order = 10, GroupName = "05. Rendering")]
 		public bool BorderEnabled { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "Border Color", Order = 9, GroupName = "05. Rendering")]
+		[Display(Name = "Border Color", Order = 11, GroupName = "05. Rendering")]
 		public WpfBrush BorderColor { get; set; }
 
 		[Browsable(false)]
@@ -252,12 +305,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 99)]
-		[Display(Name = "Transparency Pct", Order = 10, GroupName = "05. Rendering")]
+		[Display(Name = "Transparency Pct", Order = 12, GroupName = "05. Rendering")]
 		public int TransparencyPct { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Shape Mode", Order = 11, GroupName = "05. Rendering")]
+		[Display(Name = "Shape Mode", Order = 13, GroupName = "05. Rendering")]
 		public ShapeMode ShapeMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Horizontal Anchor", Order = 14, GroupName = "05. Rendering")]
+		public OrcaPrintHorizontalAnchor HorizontalAnchor { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(-500, 500)]
+		[Display(Name = "Horizontal Offset Px", Order = 15, GroupName = "05. Rendering")]
+		public int HorizontalOffsetPx { get; set; }
 		#endregion
 	}
 }

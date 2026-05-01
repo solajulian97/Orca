@@ -226,6 +226,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private class LegTracker
 		{
 			private OrcaLegtoLegProfile parent;
+			public readonly object SyncObj = new object();
 			public int TickReversalThreshold;
 			public List<PriceLeg> CompletedLegs = new List<PriceLeg>();
 			public PriceLeg CurrentLeg;
@@ -316,8 +317,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (Math.Abs(CurrentLeg.HighPrice - CurrentLeg.LowPrice) / parent.TickSize >= parent.MinimumLegTicks)
 				{
-					CompletedLegs.Add(CurrentLeg);
-					if (CompletedLegs.Count > parent.LegsToDisplay) CompletedLegs.RemoveAt(0);
+					lock (SyncObj)
+					{
+						CompletedLegs.Add(CurrentLeg);
+						while (CompletedLegs.Count > parent.LegsToDisplay) CompletedLegs.RemoveAt(0);
+					}
 				}
 
 				legDir = newDir;
@@ -391,9 +395,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			base.OnRender(chartControl, chartScale);
-			if (currentTracker?.CurrentLeg == null) return;
+			if (RenderTarget == null || chartControl == null || chartScale == null || currentTracker?.CurrentLeg == null) return;
+			NinjaTrader.Gui.Chart.ChartPanel panel;
+			if (!TryGetRenderPanel(chartControl, chartScale, out panel)) return;
 			EnsureDxResources();
-			var panel = chartControl.ChartPanels[chartScale.PanelIndex];
 
 			int dynamicVolComp = VolumeTickCompression;
 			int dynamicDeltaComp = DeltaTickCompression;
@@ -431,30 +436,87 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float rightmostEdge = chartControl.CanvasRight - RightOffsetPx - VolumeProfileWidthPx;
 			DrawLegProfiles(chartControl, chartScale, panel, currentTracker.CurrentLeg, rightmostEdge, VolumeProfileWidthPx, DeltaProfileWidthPx, true, false, dynamicVolComp, dynamicDeltaComp);
 
-			if (LegsToDisplay > 0 && pastTracker?.CompletedLegs.Count > 0)
+			List<PriceLeg> completedLegs = GetCompletedLegSnapshot(pastTracker);
+			if (LegsToDisplay > 0 && completedLegs.Count > 0)
 			{
-				for (int i = pastTracker.CompletedLegs.Count - 1; i >= 0; i--)
+				for (int i = completedLegs.Count - 1; i >= 0; i--)
 				{
-					var leg = pastTracker.CompletedLegs[i];
-					float originX = chartControl.GetXByTime(leg.StartTime);
+					var leg = completedLegs[i];
+					float originX;
+					if (!TryGetXByTime(chartControl, leg.StartTime, out originX)) continue;
 					DrawLegProfiles(chartControl, chartScale, panel, leg, originX, PastVolumeWidthPx, PastDeltaWidthPx, false, !ShowPastDelta, dynamicVolComp, dynamicDeltaComp);
 				}
 			}
 		}
 
+		private bool TryGetRenderPanel(ChartControl chartControl, ChartScale chartScale, out NinjaTrader.Gui.Chart.ChartPanel panel)
+		{
+			panel = null;
+			try
+			{
+				if (chartControl == null || chartScale == null) return false;
+				int panelIndex = chartScale.PanelIndex;
+				if (chartControl.ChartPanels != null && panelIndex >= 0 && panelIndex < chartControl.ChartPanels.Count)
+					panel = chartControl.ChartPanels[panelIndex];
+				else
+					panel = this.ChartPanel;
+
+				return panel != null && panel.W > 0 && panel.H > 0;
+			}
+			catch { return false; }
+		}
+
+		private List<PriceLeg> GetCompletedLegSnapshot(LegTracker tracker)
+		{
+			if (tracker == null) return new List<PriceLeg>();
+			lock (tracker.SyncObj)
+				return tracker.CompletedLegs != null ? new List<PriceLeg>(tracker.CompletedLegs) : new List<PriceLeg>();
+		}
+
+		private bool TryGetXByTime(ChartControl chartControl, DateTime time, out float x)
+		{
+			x = 0f;
+			try
+			{
+				if (chartControl == null || time == DateTime.MinValue) return false;
+				x = chartControl.GetXByTime(time);
+				return !float.IsNaN(x) && !float.IsInfinity(x);
+			}
+			catch { return false; }
+		}
+
 		private void DrawLegProfiles(ChartControl chartControl, ChartScale chartScale, NinjaTrader.Gui.Chart.ChartPanel panel, PriceLeg leg, float originX, int vWidth, int dWidth, bool isCurrent, bool forceHideDelta, int volCompTicks, int deltaCompTicks)
 		{
-			if (ShowCurrentLegBox && isCurrent)
+			if (chartControl == null || chartScale == null || panel == null || leg == null || TickSize <= 0) return;
+			volCompTicks = Math.Max(1, volCompTicks);
+			deltaCompTicks = Math.Max(1, deltaCompTicks);
+			vWidth = Math.Max(1, vWidth);
+			dWidth = Math.Max(1, dWidth);
+
+			double highPrice, lowPrice;
+			Dictionary<double, long> volSnapshot = null;
+			Dictionary<double, long> deltaSnapshot = null;
+			lock (leg.SyncObj)
 			{
-				int topY = chartScale.GetYByValue(leg.HighPrice), bottomY = chartScale.GetYByValue(leg.LowPrice);
+				highPrice = leg.HighPrice;
+				lowPrice = leg.LowPrice;
+				if (ShowVolume && leg.VolByPrice.Count > 0)
+					volSnapshot = new Dictionary<double, long>(leg.VolByPrice);
+				if (ShowDelta && !forceHideDelta && leg.DeltaByPrice.Count > 0)
+					deltaSnapshot = new Dictionary<double, long>(leg.DeltaByPrice);
+			}
+
+			if (ShowCurrentLegBox && isCurrent && !double.IsNaN(highPrice) && !double.IsNaN(lowPrice))
+			{
+				int topY = chartScale.GetYByValue(highPrice), bottomY = chartScale.GetYByValue(lowPrice);
 				RenderTarget.DrawRectangle(new RectangleF(originX - dWidth - 5, topY - 5, vWidth + dWidth + 10, (bottomY - topY) + 10), legBoxBrushDx, 1f);
 			}
 
 			float spineX = MirrorProfile ? originX + vWidth : originX;
-			if (ShowVolume && leg.VolByPrice.Count > 0)
+			if (ShowVolume && volSnapshot != null && volSnapshot.Count > 0)
 			{
 				Dictionary<double, long> targetVolMap;
-				lock (leg.SyncObj) targetVolMap = isCurrent ? new Dictionary<double, long>(leg.VolByPrice) : leg.VolByPrice;
+				targetVolMap = volSnapshot;
 				long maxVol = 0; double pocPrice = double.NaN;
 				bool haveVA = false; double vahPrice = double.NaN, valPrice = double.NaN;
 
@@ -495,7 +557,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 							else if (UseGradient)
 							{
 								var palette = (ShowValueArea && ShowVAColor && insideVA && vaGradientBrushes != null) ? vaGradientBrushes : volGradientBrushes;
-								if (palette != null)
+								if (palette != null && palette.Length > 0)
 								{
 									int gradIdx = Math.Min(palette.Length - 1, Math.Max(0, (int)((kvp.Value / (double)maxVol) * (palette.Length - 1))));
 									brush = palette[gradIdx];
@@ -521,12 +583,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			if (ShowDelta && !forceHideDelta && leg.DeltaByPrice.Count > 0)
+			if (ShowDelta && !forceHideDelta && deltaSnapshot != null && deltaSnapshot.Count > 0)
 			{
 				double deltaComp = deltaCompTicks * TickSize;
 				var groupedDelta = new Dictionary<double, long>();
 				Dictionary<double, long> targetDeltaMap;
-				lock (leg.SyncObj) targetDeltaMap = isCurrent ? new Dictionary<double, long>(leg.DeltaByPrice) : leg.DeltaByPrice;
+				targetDeltaMap = deltaSnapshot;
 				foreach (var kvp in targetDeltaMap)
 				{
 					double bPrice = Math.Floor(kvp.Key / deltaComp + 0.000001) * deltaComp;
