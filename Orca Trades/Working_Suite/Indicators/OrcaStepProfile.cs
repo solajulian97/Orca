@@ -110,6 +110,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		// Text resources
 		private SharpDX.Direct2D1.SolidColorBrush deltaTextBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush negativeDeltaTextBrushDx;
 		private SharpDX.DirectWrite.TextFormat    deltaTextFormatDx;
 		private Dictionary<string, float> textWidthCache = new Dictionary<string, float>();
 		private int lastDynamicDeltaComp = -1;
@@ -130,6 +131,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DeltaTickCompression   = 10;
 				UseDynamicAggregation  = false;
 				DynamicAggregationMultiplier = 1.0;
+				DeltaDynamicRowMinPixels = 10;
 				RTHOnly                = false;
 				RTHStart               = DateTime.Parse("09:30:00", System.Globalization.CultureInfo.InvariantCulture);
 				RTHEnd                 = DateTime.Parse("16:00:00", System.Globalization.CultureInfo.InvariantCulture);
@@ -189,7 +191,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// Delta Text
 				ShowDeltaText = true;
 				DeltaTextMinThreshold = 10;
-				DeltaTextBrush = WpfBrushes.White;
+				DeltaTextBrush = WpfBrushes.LightGreen;
+				NegativeDeltaTextBrush = WpfBrushes.LightCoral;
 				DeltaTextFontSize = 11f;
 			}
 			else if (State == State.Configure)
@@ -221,6 +224,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (vaVolBrushDx != null) vaVolBrushDx.Dispose();
 				if (vaLineBrushDx != null) vaLineBrushDx.Dispose();
 				if (vaLineStrokeDx != null) vaLineStrokeDx.Dispose();
+				if (deltaTextBrushDx != null) deltaTextBrushDx.Dispose();
+				if (negativeDeltaTextBrushDx != null) negativeDeltaTextBrushDx.Dispose();
+				if (deltaTextFormatDx != null) deltaTextFormatDx.Dispose();
 
 				if (volGradientBrushes != null)
 					for (int i = 0; i < volGradientBrushes.Length; i++)
@@ -250,6 +256,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				vaGradientBrushes  = null;
 				histVaGradientBrushes = null;
 				deltaTextBrushDx   = null;
+				negativeDeltaTextBrushDx = null;
 				deltaTextFormatDx  = null;
 				lastBuiltGradientSteps   = -1;
 				lastBuiltVAGradientSteps = -1;
@@ -481,7 +488,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				var panel = chartControl.ChartPanels[chartScale.PanelIndex];
 				double visibleTicks = (chartScale.MaxValue - chartScale.MinValue) / TickSize;
 				double ticksPerPixel = visibleTicks / Math.Max(1, panel.H);
-				double desiredTicks = ticksPerPixel * (DeltaTextFontSize + 4) * DynamicAggregationMultiplier;
+				double desiredTicks = ticksPerPixel * Math.Max(1, DeltaDynamicRowMinPixels) * DynamicAggregationMultiplier;
 
 				if (desiredTicks <= 1) dynamicDeltaComp = 1;
 				else if (desiredTicks <= 2) dynamicDeltaComp = 2;
@@ -747,7 +754,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				
 				RenderTarget.FillRectangle(rect, deltaBrush);
 
-				if (ShowDeltaText && deltaTextFormatDx != null && deltaTextBrushDx != null && rect.Height >= 6 && Math.Abs(kvp.Value) >= DeltaTextMinThreshold)
+				SharpDX.Direct2D1.SolidColorBrush labelBrush = kvp.Value >= 0 ? deltaTextBrushDx : negativeDeltaTextBrushDx;
+				if (ShowDeltaText && deltaTextFormatDx != null && labelBrush != null && rect.Height >= 6 && Math.Abs(kvp.Value) >= DeltaTextMinThreshold)
 				{
 					string text = kvp.Value > 0 ? $"+{kvp.Value}" : kvp.Value.ToString();
 					
@@ -761,7 +769,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					else
 						textRect = new RectangleF(deltaRootX - maxW - 2, drawY, maxW, height);
 						
-					RenderTarget.DrawText(text, deltaTextFormatDx, textRect, deltaTextBrushDx);
+					RenderTarget.DrawText(text, deltaTextFormatDx, textRect, labelBrush);
 				}
 			}
 		}
@@ -795,6 +803,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				vaLineStrokeDx = new SharpDX.Direct2D1.StrokeStyle(RenderTarget.Factory, new StrokeStyleProperties { DashStyle = ds });
 			}
 			if (deltaTextBrushDx == null) deltaTextBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(DeltaTextBrush, 1f));
+			if (negativeDeltaTextBrushDx == null) negativeDeltaTextBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(NegativeDeltaTextBrush, 1f));
 			if (deltaTextFormatDx == null)
 			{
 				deltaTextFormatDx = new SharpDX.DirectWrite.TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, FontStretch.Normal, DeltaTextFontSize)
@@ -863,7 +872,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public double DynamicAggregationMultiplier { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "RTH Only", GroupName = "Data", Order = 4)]
+		[Range(2, 40)]
+		[Display(Name = "Delta Dynamic Row Min Pixels", GroupName = "Data", Order = 5)]
+		public int DeltaDynamicRowMinPixels { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "RTH Only", GroupName = "Data", Order = 6)]
 		public bool RTHOnly { get; set; }
 
 		[NinjaScriptProperty]
@@ -1062,10 +1076,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public float DeltaTextFontSize { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "Text Color", GroupName = "Delta Text", Order = 63)]
+		[Display(Name = "Positive Text Color", GroupName = "Delta Text", Order = 63)]
 		public WpfBrush DeltaTextBrush { get; set; }
 		[Browsable(false)]
 		public string DeltaTextBrushSerialize { get { return Serialize.BrushToString(DeltaTextBrush); } set { DeltaTextBrush = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Negative Text Color", GroupName = "Delta Text", Order = 64)]
+		public WpfBrush NegativeDeltaTextBrush { get; set; }
+		[Browsable(false)]
+		public string NegativeDeltaTextBrushSerialize { get { return Serialize.BrushToString(NegativeDeltaTextBrush); } set { NegativeDeltaTextBrush = Serialize.StringToBrush(value); } }
 		#endregion
 	}
 }

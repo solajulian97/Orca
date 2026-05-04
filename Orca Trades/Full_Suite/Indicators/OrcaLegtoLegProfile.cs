@@ -60,7 +60,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double prevLast = double.NaN;
 
 		private TextFormat textFormat;
-		private SolidColorBrush posBrushDx, negBrushDx, textBrushDx, volBrushDx, labelBgBrushDx, legBoxBrushDx;
+		private SolidColorBrush posBrushDx, negBrushDx, textBrushDx, negativeTextBrushDx, volBrushDx, labelBgBrushDx, legBoxBrushDx;
 		private SolidColorBrush pocBrushDx, vaVolBrushDx, vaLineBrushDx;
 		private StrokeStyle vaLineStrokeDx;
 		private SolidColorBrush[] volGradientBrushes;
@@ -89,6 +89,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				LegsToDisplay = 3;
 				UseDynamicAggregation = false;
 				DynamicAggregationMultiplier = 1.0;
+				DeltaDynamicRowMinPixels = 10;
 				VolumeTickCompression = 6;
 				DeltaTickCompression = 6;
 				VolumeProfileWidthPx = 150;
@@ -112,7 +113,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				PositiveBrush = WpfBrushes.Lime;
 				NegativeBrush = WpfBrushes.Red;
 				VolumeBrush = WpfBrushes.RoyalBlue;
-				TextBrush = WpfBrushes.White;
+				TextBrush = WpfBrushes.LightGreen;
+				NegativeTextBrush = WpfBrushes.LightCoral;
 				LabelBgBrush = WpfBrushes.Black;
 				LegBoxBrush = WpfBrushes.Yellow;
 
@@ -155,6 +157,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				posBrushDx?.Dispose();
 				negBrushDx?.Dispose();
 				textBrushDx?.Dispose();
+				negativeTextBrushDx?.Dispose();
 				volBrushDx?.Dispose();
 				labelBgBrushDx?.Dispose();
 				legBoxBrushDx?.Dispose();
@@ -168,7 +171,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch { }
 			finally
 			{
-				textFormat = null; posBrushDx = null; negBrushDx = null; textBrushDx = null;
+				textFormat = null; posBrushDx = null; negBrushDx = null; textBrushDx = null; negativeTextBrushDx = null;
 				volBrushDx = null; labelBgBrushDx = null; legBoxBrushDx = null;
 				pocBrushDx = null; vaVolBrushDx = null; vaLineBrushDx = null; vaLineStrokeDx = null;
 				volGradientBrushes = null; vaGradientBrushes = null;
@@ -406,7 +409,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				double visibleTicks = (chartScale.MaxValue - chartScale.MinValue) / TickSize;
 				double ticksPerPixel = visibleTicks / Math.Max(1, panel.H);
-				double desiredTicks = ticksPerPixel * (DeltaLabelFontSize + 4) * DynamicAggregationMultiplier;
+				double desiredTicks = ticksPerPixel * Math.Max(1, DeltaDynamicRowMinPixels) * DynamicAggregationMultiplier;
 
 				if (desiredTicks <= 1) dynamicDeltaComp = 1;
 				else if (desiredTicks <= 2) dynamicDeltaComp = 2;
@@ -612,7 +615,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 								string lbl = kvp.Value.ToString("+#;-#;0");
 								float textWidth = MeasureTextWidth(lbl), tX = MirrorProfile ? (spineX + 2) : (spineX - textWidth - 2), tY = drawY + (height / 2f) - (DeltaLabelFontSize / 2f);
 								if (ShowDeltaLabelBackground) RenderTarget.FillRectangle(new RectangleF(tX - 1, tY - 1, textWidth + 2, DeltaLabelFontSize + 2), labelBgBrushDx);
-								RenderTarget.DrawText(lbl, textFormat, new RectangleF(tX, tY, textWidth, DeltaLabelFontSize + 2), textBrushDx);
+								SolidColorBrush labelBrush = kvp.Value >= 0 ? textBrushDx : negativeTextBrushDx;
+								if (labelBrush != null)
+									RenderTarget.DrawText(lbl, textFormat, new RectangleF(tX, tY, textWidth, DeltaLabelFontSize + 2), labelBrush);
 							}
 						}
 					}
@@ -625,6 +630,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (posBrushDx == null) posBrushDx = new SolidColorBrush(RenderTarget, ToDx(PositiveBrush, DeltaOpacity));
 			if (negBrushDx == null) negBrushDx = new SolidColorBrush(RenderTarget, ToDx(NegativeBrush, DeltaOpacity));
 			if (textBrushDx == null) textBrushDx = new SolidColorBrush(RenderTarget, ToDx(TextBrush, 1f));
+			if (negativeTextBrushDx == null) negativeTextBrushDx = new SolidColorBrush(RenderTarget, ToDx(NegativeTextBrush, 1f));
 			if (volBrushDx == null) volBrushDx = new SolidColorBrush(RenderTarget, ToDx(VolumeBrush, VolumeOpacity));
 			if (labelBgBrushDx == null) labelBgBrushDx = new SolidColorBrush(RenderTarget, ToDx(LabelBgBrush, 1f));
 			if (legBoxBrushDx == null) legBoxBrushDx = new SolidColorBrush(RenderTarget, ToDx(LegBoxBrush, 1f));
@@ -693,16 +699,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty] [Range(0, 50)] [Display(Name="Legs To Display", GroupName="Layout", Order=4)] public int LegsToDisplay { get; set; }
 		[NinjaScriptProperty] [Display(Name="Use Dynamic Aggregation", Description="Automatically adjust profile compression upon zoom", GroupName="Layout", Order=5)] public bool UseDynamicAggregation { get; set; }
 		[NinjaScriptProperty] [Range(0.1, 10.0)] [Display(Name="Dynamic Aggregation Multiplier", Description="Lower value = more granular blocks (fewer aggregated ticks)", GroupName="Layout", Order=6)] public double DynamicAggregationMultiplier { get; set; }
-		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Vol Compression (Ticks)", GroupName="Layout", Order=6)] public int VolumeTickCompression { get; set; }
-		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Delta Compression (Ticks)", GroupName="Layout", Order=7)] public int DeltaTickCompression { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Vol Width", GroupName="Layout", Order=7)] public int VolumeProfileWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Delta Width", GroupName="Layout", Order=8)] public int DeltaProfileWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Vol Width", GroupName="Layout", Order=9)] public int PastVolumeWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Delta Width", GroupName="Layout", Order=10)] public int PastDeltaWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(-500, 500)] [Display(Name="Right Offset (px)", GroupName="Layout", Order=11)] public int RightOffsetPx { get; set; }
-		[NinjaScriptProperty] [Range(0, 500)] [Display(Name="Separation", GroupName="Layout", Order=12)] public int ProfileSeparationPx { get; set; }
-		[NinjaScriptProperty] [Range(0, 10)] [Display(Name="Profile Bar Spacing", GroupName="Layout", Order=13)] public int ProfileBarSpacingPx { get; set; }
-		[NinjaScriptProperty] [Display(Name="Mirror Profile", Description="Flip the profile so the spine is on the right and bars point left", GroupName="Layout", Order=14)] public bool MirrorProfile { get; set; }
+		[NinjaScriptProperty] [Range(2, 40)] [Display(Name="Delta Dynamic Row Min Pixels", Description="Target minimum delta row height used before applying the aggregation multiplier", GroupName="Layout", Order=7)] public int DeltaDynamicRowMinPixels { get; set; }
+		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Vol Compression (Ticks)", GroupName="Layout", Order=8)] public int VolumeTickCompression { get; set; }
+		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Delta Compression (Ticks)", GroupName="Layout", Order=9)] public int DeltaTickCompression { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Vol Width", GroupName="Layout", Order=10)] public int VolumeProfileWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Delta Width", GroupName="Layout", Order=11)] public int DeltaProfileWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Vol Width", GroupName="Layout", Order=12)] public int PastVolumeWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Delta Width", GroupName="Layout", Order=13)] public int PastDeltaWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(-500, 500)] [Display(Name="Right Offset (px)", GroupName="Layout", Order=14)] public int RightOffsetPx { get; set; }
+		[NinjaScriptProperty] [Range(0, 500)] [Display(Name="Separation", GroupName="Layout", Order=15)] public int ProfileSeparationPx { get; set; }
+		[NinjaScriptProperty] [Range(0, 10)] [Display(Name="Profile Bar Spacing", GroupName="Layout", Order=16)] public int ProfileBarSpacingPx { get; set; }
+		[NinjaScriptProperty] [Display(Name="Mirror Profile", Description="Flip the profile so the spine is on the right and bars point left", GroupName="Layout", Order=17)] public bool MirrorProfile { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Volume", GroupName="Visibility", Order=14)] public bool ShowVolume { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Delta", GroupName="Visibility", Order=15)] public bool ShowDelta { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Past Delta", GroupName="Visibility", Order=16)] public bool ShowPastDelta { get; set; }
@@ -727,17 +734,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Browsable(false)] public string NegativeBrushSerialize { get { return Serialize.BrushToString(NegativeBrush); } set { NegativeBrush = Serialize.StringToBrush(value); } }
 		[XmlIgnore] [Display(Name="Vol Color", GroupName="Colors", Order=35)] public WpfBrush VolumeBrush { get; set; }
 		[Browsable(false)] public string VolumeBrushSerialize { get { return Serialize.BrushToString(VolumeBrush); } set { VolumeBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Text Color", GroupName="Colors", Order=36)] public WpfBrush TextBrush { get; set; }
+		[XmlIgnore] [Display(Name="Positive Label Color", GroupName="Colors", Order=36)] public WpfBrush TextBrush { get; set; }
 		[Browsable(false)] public string TextBrushSerialize { get { return Serialize.BrushToString(TextBrush); } set { TextBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Label BG Color", GroupName="Colors", Order=37)] public WpfBrush LabelBgBrush { get; set; }
+		[XmlIgnore] [Display(Name="Negative Label Color", GroupName="Colors", Order=37)] public WpfBrush NegativeTextBrush { get; set; }
+		[Browsable(false)] public string NegativeTextBrushSerialize { get { return Serialize.BrushToString(NegativeTextBrush); } set { NegativeTextBrush = Serialize.StringToBrush(value); } }
+		[XmlIgnore] [Display(Name="Label BG Color", GroupName="Colors", Order=38)] public WpfBrush LabelBgBrush { get; set; }
 		[Browsable(false)] public string LabelBgBrushSerialize { get { return Serialize.BrushToString(LabelBgBrush); } set { LabelBgBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Leg Box Color", GroupName="Colors", Order=38)] public WpfBrush LegBoxBrush { get; set; }
+		[XmlIgnore] [Display(Name="Leg Box Color", GroupName="Colors", Order=39)] public WpfBrush LegBoxBrush { get; set; }
 		[Browsable(false)] public string LegBoxBrushSerialize { get { return Serialize.BrushToString(LegBoxBrush); } set { LegBoxBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="POC Color", GroupName="Colors", Order=39)] public WpfBrush POCBrush { get; set; }
+		[XmlIgnore] [Display(Name="POC Color", GroupName="Colors", Order=40)] public WpfBrush POCBrush { get; set; }
 		[Browsable(false)] public string POCBrushSerialize { get { return Serialize.BrushToString(POCBrush); } set { POCBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="VA Color", GroupName="Colors", Order=40)] public WpfBrush VABrush { get; set; }
+		[XmlIgnore] [Display(Name="VA Color", GroupName="Colors", Order=41)] public WpfBrush VABrush { get; set; }
 		[Browsable(false)] public string VABrushSerialize { get { return Serialize.BrushToString(VABrush); } set { VABrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="VA Line Color", GroupName="Colors", Order=41)] public WpfBrush VALineBrush { get; set; }
+		[XmlIgnore] [Display(Name="VA Line Color", GroupName="Colors", Order=42)] public WpfBrush VALineBrush { get; set; }
 		[Browsable(false)] public string VALineBrushSerialize { get { return Serialize.BrushToString(VALineBrush); } set { VALineBrush = Serialize.StringToBrush(value); } }
 		#endregion
 	}

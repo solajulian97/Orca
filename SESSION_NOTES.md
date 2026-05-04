@@ -19,7 +19,9 @@
 - Added independent delta colors through `DeltaPositiveColor` and `DeltaNegativeColor`; defaults are SteelBlue for positive delta and IndianRed for negative delta.
 - Fixed the Tick Replay delta classifier in `OrcaVisibleRangeVolumeProfile`: `MarketDataType.Last` now refreshes bid/ask from `e.Ask`/`e.Bid`, and same-price prints now carry the last uptick/downtick direction instead of being forced positive. This matches the suite pattern used by Orca cumulative delta and absorption tools.
 - Added delta value labels inside the visible-range delta profile. `ShowDeltaLabels`, `DeltaLabelFontSize`, `DeltaPositiveLabelColor`, and `DeltaNegativeLabelColor` control whether labels render, their font size, and separate positive/negative label colors. Defaults are LightGreen and LightCoral so the text stays visible while blending with the profile.
-- `OrcaRollingProfiles.cs` and `OrcaLegtoLegProfile.cs` both had pre-existing uncommitted edits before this task. I did not modify those active files. Follow-up refactor opportunity: once those edits are validated, migrate their duplicate inlined value-area functions to `OrcaVolumeProfileCore`.
+- Added matching positive/negative delta text colors to `OrcaRollingProfiles.cs`, `OrcaLegtoLegProfile.cs`, and `OrcaStepProfile.cs`. Existing single text-color properties now act as the positive label color; new negative label color properties default to LightCoral. New positive defaults are LightGreen, matching the clean visible-range label style.
+- The previous note about pre-existing uncommitted `OrcaRollingProfiles.cs` and `OrcaLegtoLegProfile.cs` edits is no longer current; `git status` was clean at the start of this pass.
+- Standardized dynamic delta aggregation across Rolling, Leg-to-Leg, Step, and Visible Range profiles. Rolling, Leg-to-Leg, and Step now expose `Delta Dynamic Row Min Pixels` and use `ticksPerPixel * DeltaDynamicRowMinPixels * DynamicAggregationMultiplier`, instead of deriving row height from delta label font size. Defaults are 10 pixels to match visible range delta.
 
 ## Test Plan
 
@@ -32,5 +34,27 @@
 - Change `DeltaPositiveColor` and `DeltaNegativeColor` in the indicator dialog and confirm the delta histogram updates without changing volume profile colors.
 - With Tick Replay enabled, confirm positive and negative delta rows both appear on sell/buy sequences, especially across repeated same-price prints.
 - Toggle `ShowDeltaLabels`, adjust `DeltaLabelFontSize`, and change positive/negative label colors to confirm labels appear only on rows with enough height/width and do not overlap.
+- On Rolling, Leg-to-Leg, and Step profiles, enable delta text and confirm positive delta labels use the positive text/label color while negative delta labels use the negative text/label color.
+- On Rolling, Leg-to-Leg, Step, and Visible Range profiles, set dynamic multiplier and delta dynamic row-min-pixels to matching values and confirm delta row heights visually align at the same chart zoom.
 - Toggle every display/color property in the indicator dialog.
 - Run the standard 6-chart MNQ/NQ/ES/MES layout and confirm no visible lag while panning and zooming.
+
+## OrcaMGIDaily
+
+- Changed the default prior RTH labels from the old `PRTH*` family to the clearer `RTH PDH`, `RTH PDL`, `RTH PDC`, `RTH PDO`, and `RTH PDM` acronyms, with legacy label normalization so old templates migrate to the new defaults.
+- Added True Daily Open (`TDO`) as a current-day level. It captures the `Open[0]` of the first bar that crosses midnight Eastern and exposes show/color/label properties.
+- Added Daily Open as an independent current-day level using the 18:00 Globex/ETH open. The default label is `Daily Open`.
+- Split open-boundary detection from close-boundary detection. RTH Open, Daily Open, and TDO now seed from the first bar after the configured open boundary so minute bars use the actual opening bar `Open[0]` instead of the prior bar that closed at the boundary.
+- Fixed ETH session bookkeeping so the 18:00 ETH open is assigned to the next RTH trading date. This keeps ETH-anchored rendering, including ETH Mid, connected after RTH begins.
+- Tightened overnight tracking to only aggregate from ETH open through RTH open. The overnight range/value area now freezes during RTH instead of resetting at RTH open or including the post-RTH maintenance/post-close stretch.
+- Routed dynamic mid labels through the same staggered label pass as normal levels so ON Mid and ETH Mid no longer overlap when they resolve to the same price.
+
+## MGI Daily Test Plan
+
+- Deploy `OrcaMGIDaily` from `Working_Suite`, press F5 in NinjaTrader, and confirm the indicator compiles cleanly.
+- On minute and tick charts, verify `RTH PDC` appears where `PRTHC` used to appear and old templates migrate correctly.
+- Verify `RTH PDO` matches the actual 09:30 RTH opening bar open on minute charts instead of the 09:29-09:30 closing bar.
+- Load a chart across midnight and confirm `TDO` matches the opening print of the midnight candle.
+- Confirm `Daily Open` appears at the 18:00 Globex open and can be toggled independently from current-day high/low.
+- Verify ONH/ONL/ONM/ONVAH/ONVAL/ONPOC build only between ETH open and RTH open, then remain fixed after RTH begins.
+- Confirm ETH Mid continues plotting after RTH open, reflects the full current day including overnight and RTH action, and staggers its label when overlapping ON Mid.
