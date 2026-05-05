@@ -1,5 +1,11 @@
 # Session Notes
 
+## DPI-Safe Coordinates And Risk Panel Tabs
+
+- Branch `codex/dpi-safe-chart-coordinates` preserves the tested Working_Suite DPI-safe chart coordinate fix for OrcaPrint hover, OrcaVisualOrders TP/SL drag/labels, and Orca Risk Manager routed/drag overlays.
+- The same branch intentionally includes the Working_Suite per-tab Risk Manager visibility fix. The changes around `ShouldShowPanel`, `TogglePanelVisibility`, `CleanupInactivePanels`, `IsPanelVisible`, and the filtered `SelectionChanged` handler keep each chart tab's Risk Manager open/closed state independent so toggling one tab does not open or close another tab.
+- Do not promote this branch to Full_Suite until the desktop review confirms both the DPI coordinate behavior and the per-tab Risk Manager visibility behavior.
+
 ## OrcaVisibleRangeVolumeProfile
 
 - Added `Orca Trades/Working_Suite/Indicators/OrcaVisibleRangeVolumeProfile.cs`.
