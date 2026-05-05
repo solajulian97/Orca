@@ -25,6 +25,28 @@ using NinjaTrader.NinjaScript.DrawingTools;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
+	public static class OrcaChartCoordinateRegistry
+	{
+		private static readonly Dictionary<ChartControl, ChartScale> priceScalesByChart = new Dictionary<ChartControl, ChartScale>();
+
+		public static void Update(ChartControl chartControl, ChartScale chartScale)
+		{
+			if (chartControl == null || chartScale == null)
+				return;
+
+			priceScalesByChart[chartControl] = chartScale;
+		}
+
+		public static ChartScale Get(ChartControl chartControl)
+		{
+			if (chartControl == null)
+				return null;
+
+			ChartScale chartScale;
+			return priceScalesByChart.TryGetValue(chartControl, out chartScale) ? chartScale : null;
+		}
+	}
+
 	public sealed class OrcaRiskManagerAddOn : NinjaTrader.NinjaScript.AddOnBase
 	{
 		private readonly Dictionary<ChartTab, bool> panelVisibilityByTab = new Dictionary<ChartTab, bool>();
@@ -70,7 +92,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			chartWindow.Dispatcher.InvokeAsync(() => {
 				if (chartWindow.MainTabControl != null) {
-					chartWindow.MainTabControl.SelectionChanged += (s, e) => { RefreshChartWindowPanels(chartWindow); };
+					chartWindow.MainTabControl.SelectionChanged += (s, e) => {
+						if (!object.ReferenceEquals(e.OriginalSource, chartWindow.MainTabControl)) return;
+						RefreshChartWindowPanels(chartWindow);
+					};
 				}
 			});
 		}
@@ -86,9 +111,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (tab.Content is System.Windows.Controls.Grid tabGrid) {
 				OrcaRiskPanel currentPanel = GetCurrentPanel(tabGrid);
 				if (currentPanel != null) {
-					bool shouldShow = !(panelVisibilityByTab.TryGetValue(tab, out bool isVisible) && isVisible);
+					bool shouldShow = !IsPanelVisible(tabGrid, currentPanel);
 					panelVisibilityByTab[tab] = shouldShow;
-					SetPanelVisibility(tabGrid, currentPanel, shouldShow);
+					if (shouldShow) SetPanelVisibility(tabGrid, currentPanel, true);
+					else RemoveRiskPanels(tabGrid);
 					return;
 				}
 
@@ -158,9 +184,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private bool ShouldShowPanel(ChartTab tab)
 		{
+			if (tab == null) return false;
 			if (panelVisibilityByTab.TryGetValue(tab, out bool isVisible)) return isVisible;
-			panelVisibilityByTab[tab] = true;
-			return true;
+			return false;
 		}
 
 		private void SweepStalePanels(Chart chartWindow)
@@ -178,6 +204,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				ChartTab tab = item as ChartTab;
 				if (tab == null && item is TabItem tabItem) tab = tabItem.Content as ChartTab;
 				if (tab == null || object.ReferenceEquals(tab, activeTab)) continue;
+				panelVisibilityByTab[tab] = false;
 				if (tab.Content is System.Windows.Controls.Grid tabGrid) RemoveRiskPanels(tabGrid);
 			}
 		}
@@ -189,6 +216,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 					return panel;
 			}
 			return null;
+		}
+
+		private bool IsPanelVisible(System.Windows.Controls.Grid tabGrid, OrcaRiskPanel panel)
+		{
+			int col = System.Windows.Controls.Grid.GetColumn(panel);
+			if (col < 0 || col >= tabGrid.ColumnDefinitions.Count) return false;
+			return panel.Visibility == Visibility.Visible && tabGrid.ColumnDefinitions[col].Width.Value > 0;
 		}
 
 		private void SetPanelVisibility(System.Windows.Controls.Grid tabGrid, OrcaRiskPanel panel, bool isVisible)
@@ -232,14 +266,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private ChartTab GetActiveChartTab(Chart chartWindow, object eventSource)
 		{
-			ChartTab tab = GetChartTabFromWindowProperty(chartWindow);
-			if (tab != null) return tab;
-
-			tab = GetSelectedChartTab(chartWindow);
+			ChartTab tab = GetSelectedChartTab(chartWindow);
 			if (tab != null) return tab;
 
 			tab = FindOwningChartTab(eventSource as DependencyObject);
-			if (tab != null && IsTabVisible(tab)) return tab;
+			if (tab != null) return tab;
+
+			tab = GetChartTabFromWindowProperty(chartWindow);
+			if (tab != null) return tab;
 
 			tab = GetVisibleChartTab(chartWindow);
 			if (tab != null) return tab;
@@ -348,6 +382,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private System.Windows.Controls.TextBlock cEntryTxt, cStopTxt, cTargetTxt;
 		private EventHandler renderHandler;
 		private readonly List<Rect> routedLabelSlots = new List<Rect>();
+		private readonly HashSet<string> routedNativeActiveTags = new HashSet<string>();
+		private readonly HashSet<string> routedNativeFrameTags = new HashSet<string>();
+		private NinjaScriptBase routedNativeOwner = null;
 
 		public OrcaRiskPanel(ChartTab tab) { attachedTab = tab; BuildUI(); pnlTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) }; pnlTimer.Tick += UpdatePnL; pnlTimer.Start(); routedOverlayTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) }; routedOverlayTimer.Tick += UpdateRoutedOverlayFast; routedOverlayTimer.Start(); }
 		public void Cleanup() { if (pnlTimer != null) pnlTimer.Stop(); if (routedOverlayTimer != null) routedOverlayTimer.Stop(); RemoveCalculator(); RemoveRoutedOrderOverlay(); }
@@ -468,17 +505,148 @@ namespace NinjaTrader.NinjaScript.AddOns
 		}
 		private void ExecuteTrade(OrderType t) { try { Account acc = GetActiveAccount(); Instrument ins = GetActiveInstrument(); if (acc == null || ins == null) return; int q = 1; int.TryParse(txtContracts.Text, out q); OrderAction act = isLongSelected ? OrderAction.Buy : OrderAction.SellShort; double ent = hEntry?.StartAnchor.Price ?? 0, stp = hStop?.StartAnchor.Price ?? 0, tar = hTarget?.StartAnchor.Price ?? 0; if (stp != 0) { pendingStopPrice=stp; pendingTargetPrice=tar; } string id = "Orca_" + Guid.NewGuid().ToString("N"); if (t == OrderType.Market) acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, q, 0, 0, "", id, DateTime.MaxValue, null) }); else acc.Submit(new[] { acc.CreateOrder(ins, act, t, OrderEntry.Manual, TimeInForce.Day, q, t==OrderType.Limit?ent:0, t==OrderType.StopMarket?ent:0, "", id, DateTime.MaxValue, null) }); pendingEntryName = id; } catch { } }
 		private void ExecuteFastCommand(string c) { try { Account acc = GetActiveAccount(); Instrument ins = GetActiveInstrument(); if (acc == null || ins == null) return; int q = 1; int.TryParse(txtContracts.Text, out q); string id = "Fast_" + Guid.NewGuid().ToString("N"); OrderAction act = c.StartsWith("Sell")? OrderAction.Sell : OrderAction.Buy; if (c.EndsWith("Mkt")) acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, q, 0, 0, "", id, DateTime.MaxValue, null) }); else acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, q, GetActivePrice() + (c=="BuyAsk"?ins.MasterInstrument.TickSize:-ins.MasterInstrument.TickSize), 0, "", id, DateTime.MaxValue, null) }); } catch { } }
-		private void StartDragOrder(string t) { if (attachedTab?.Content is System.Windows.Controls.Grid r) { if (isDragOrderActive) { bool isSame = dragOrderType == t; CancelDragOrder(); if (isSame) return; } isDragOrderActive = true; dragOrderType = t; dragCanvas = new System.Windows.Controls.Canvas { Background = System.Windows.Media.Brushes.Transparent, Cursor = Cursors.Cross }; System.Windows.Controls.Panel.SetZIndex(dragCanvas, 9999); System.Windows.Media.Brush br = t.StartsWith("Sell") ? System.Windows.Media.Brushes.Salmon : System.Windows.Media.Brushes.LimeGreen; dragLine = new System.Windows.Shapes.Line { X1 = 0, X2 = attachedTab.ChartControl.ActualWidth, Stroke = br, StrokeThickness = 2 }; dragLabelTxt = new System.Windows.Controls.TextBlock { Foreground = System.Windows.Media.Brushes.Black, FontWeight = FontWeights.SemiBold }; dragLabelPill = new System.Windows.Controls.Border{Background=br, CornerRadius=new CornerRadius(4), Padding=new Thickness(4), Child=dragLabelTxt}; dragCanvas.Children.Add(dragLine); dragCanvas.Children.Add(dragLabelPill); dragCanvas.MouseMove += (s, e) => { if (isDragOrderActive) { Point p = e.GetPosition(attachedTab.ChartControl); double pr = GetPriceByY(p.Y); if (attachedTab?.ChartControl?.Instrument != null) { double tk = attachedTab.ChartControl.Instrument.MasterInstrument.TickSize; pr = Math.Round(pr/tk)*tk; double sY = GetYByPrice(pr); if(sY!=0) p.Y=sY; } dragLine.X2 = attachedTab.ChartControl.ActualWidth; dragLine.Y1 = dragLine.Y2 = p.Y; int q = 1; int.TryParse(txtContracts.Text, out q); string act = dragOrderType.StartsWith("Buy") ? "BUY" : "SELL"; string typ = dragOrderType.EndsWith("Limit") ? "LMT" : "STP"; dragLabelTxt.Text=$"{act} {q} {typ} @ {pr:F2}"; System.Windows.Controls.Canvas.SetRight(dragLabelPill, 65); System.Windows.Controls.Canvas.SetTop(dragLabelPill, p.Y-12); } }; dragCanvas.MouseLeftButtonDown += (s, e) => { PlaceDragOrderAt(GetPriceByY(e.GetPosition(attachedTab.ChartControl).Y)); CancelDragOrder(); }; r.Children.Add(dragCanvas); var w = Window.GetWindow(attachedTab.ChartControl); if(w!=null) w.PreviewKeyDown += Window_PreviewKeyDown_CancelDrag; } }
-		private double GetPriceByY(double y) { try { var s = attachedTab?.ChartControl?.ChartPanels.FirstOrDefault()?.Scales.FirstOrDefault(); if (s != null) return s.GetValueByY((float)y); } catch { } return 0; }
-		private double GetYByPrice(double p) { try { var s = attachedTab?.ChartControl?.ChartPanels.FirstOrDefault()?.Scales.FirstOrDefault(); if (s != null) return s.GetYByValue(p); } catch { } return 0; }
+		private void StartDragOrder(string t) {
+			if (attachedTab?.Content is System.Windows.Controls.Grid r) {
+				if (isDragOrderActive) {
+					bool isSame = dragOrderType == t;
+					CancelDragOrder();
+					if (isSame) return;
+				}
+				if (attachedTab.ChartControl == null) return;
+				isDragOrderActive = true;
+				dragOrderType = t;
+				dragCanvas = new System.Windows.Controls.Canvas { Background = System.Windows.Media.Brushes.Transparent, Cursor = Cursors.Cross };
+				AlignOverlayCanvasToChartControl(dragCanvas);
+				System.Windows.Controls.Panel.SetZIndex(dragCanvas, 9999);
+				System.Windows.Media.Brush br = t.StartsWith("Sell") ? System.Windows.Media.Brushes.Salmon : System.Windows.Media.Brushes.LimeGreen;
+				dragLine = new System.Windows.Shapes.Line { X1 = 0, X2 = GetOverlayWidth(dragCanvas), Stroke = br, StrokeThickness = 2 };
+				dragLabelTxt = new System.Windows.Controls.TextBlock { Foreground = System.Windows.Media.Brushes.Black, FontWeight = FontWeights.SemiBold };
+				dragLabelPill = new System.Windows.Controls.Border { Background = br, CornerRadius = new CornerRadius(4), Padding = new Thickness(4), Child = dragLabelTxt };
+				dragCanvas.Children.Add(dragLine);
+				dragCanvas.Children.Add(dragLabelPill);
+				dragCanvas.MouseMove += (s, e) => {
+					if (isDragOrderActive) {
+						Point p = e.GetPosition(dragCanvas);
+						double pr = GetPriceByOverlayY(dragCanvas, p.Y);
+						if (attachedTab?.ChartControl?.Instrument != null) {
+							double tk = attachedTab.ChartControl.Instrument.MasterInstrument.TickSize;
+							pr = Math.Round(pr / tk) * tk;
+							double sY = GetOverlayYByPrice(dragCanvas, pr);
+							if (sY != 0) p.Y = sY;
+						}
+						dragLine.X2 = GetOverlayWidth(dragCanvas);
+						dragLine.Y1 = dragLine.Y2 = p.Y;
+						int q = 1;
+						int.TryParse(txtContracts.Text, out q);
+						string act = dragOrderType.StartsWith("Buy") ? "BUY" : "SELL";
+						string typ = dragOrderType.EndsWith("Limit") ? "LMT" : "STP";
+						dragLabelTxt.Text = $"{act} {q} {typ} @ {pr:F2}";
+						System.Windows.Controls.Canvas.SetRight(dragLabelPill, 65);
+						System.Windows.Controls.Canvas.SetTop(dragLabelPill, p.Y - 12);
+					}
+				};
+				dragCanvas.MouseLeftButtonDown += (s, e) => {
+					PlaceDragOrderAt(GetPriceByOverlayY(dragCanvas, e.GetPosition(dragCanvas).Y));
+					CancelDragOrder();
+				};
+				r.Children.Add(dragCanvas);
+				var w = Window.GetWindow(attachedTab.ChartControl);
+				if (w != null) w.PreviewKeyDown += Window_PreviewKeyDown_CancelDrag;
+			}
+		}
+		private ChartScale GetActiveChartScale() {
+			try {
+				ChartControl chartControl = attachedTab?.ChartControl;
+				ChartScale registeredScale = OrcaChartCoordinateRegistry.Get(chartControl);
+				if (registeredScale != null) return registeredScale;
+				ChartPanel panel = chartControl?.ChartPanels.FirstOrDefault();
+				if (panel == null || panel.Scales == null) return null;
+				double activePrice = GetActivePrice();
+				ChartScale fallback = null;
+				foreach (ChartScale scale in panel.Scales) {
+					if (scale == null || scale.MaxValue <= scale.MinValue) continue;
+					if (fallback == null) fallback = scale;
+					if (activePrice > 0 && activePrice >= scale.MinValue && activePrice <= scale.MaxValue)
+						return scale;
+				}
+				return fallback;
+			} catch { return null; }
+		}
+		private double GetPriceByY(double y) { try { ChartScale s = GetActiveChartScale(); if (s != null) return s.GetValueByYWpf(y); } catch { } return 0; }
+		private double GetYByPrice(double p) { try { ChartScale s = GetActiveChartScale(); if (s != null) return s.GetYByValueWpf(p); } catch { } return 0; }
+		private double ConvertDeviceXToWpf(double x) {
+			try {
+				if (attachedTab?.ChartControl?.PresentationSource != null)
+					return ChartingExtensions.ConvertFromHorizontalPixels((int)Math.Round(x), attachedTab.ChartControl.PresentationSource);
+			} catch { }
+			return x;
+		}
+		private double ConvertDeviceYToWpf(double y) {
+			try {
+				if (attachedTab?.ChartControl?.PresentationSource != null)
+					return ChartingExtensions.ConvertFromVerticalPixels((int)Math.Round(y), attachedTab.ChartControl.PresentationSource);
+			} catch { }
+			return y;
+		}
+		private Point TranslateChartPointToOverlay(System.Windows.Controls.Canvas canvas, double x, double y) {
+			try {
+				if (canvas != null && attachedTab?.ChartControl != null)
+					return attachedTab.ChartControl.TranslatePoint(new Point(x, y), canvas);
+			} catch { }
+			return new Point(x, y);
+		}
+		private Point TranslateOverlayPointToChart(System.Windows.Controls.Canvas canvas, double x, double y) {
+			try {
+				if (canvas != null && attachedTab?.ChartControl != null)
+					return canvas.TranslatePoint(new Point(x, y), attachedTab.ChartControl);
+			} catch { }
+			return new Point(x, y);
+		}
+		private double GetPriceByOverlayY(System.Windows.Controls.Canvas canvas, double y) {
+			return GetPriceByY(TranslateOverlayPointToChart(canvas, 0, y).Y);
+		}
+		private double GetOverlayYByPrice(System.Windows.Controls.Canvas canvas, double price) {
+			return TranslateChartPointToOverlay(canvas, 0, GetYByPrice(price)).Y;
+		}
+		private double GetOverlayPlotRightX(System.Windows.Controls.Canvas canvas) {
+			return TranslateChartPointToOverlay(canvas, GetPlotRightX(), 0).X;
+		}
+		private void AlignOverlayCanvasToChartControl(System.Windows.Controls.Canvas canvas) {
+			if (canvas == null || attachedTab?.ChartControl == null) return;
+			canvas.HorizontalAlignment = HorizontalAlignment.Stretch;
+			canvas.VerticalAlignment = VerticalAlignment.Stretch;
+			canvas.Width = double.NaN;
+			canvas.Height = double.NaN;
+			double width = attachedTab.ChartControl.ActualWidth;
+			double height = attachedTab.ChartControl.ActualHeight;
+			if (width > 0) canvas.MinWidth = width;
+			if (height > 0) canvas.MinHeight = height;
+			System.Windows.Controls.Grid.SetRow(canvas, System.Windows.Controls.Grid.GetRow(attachedTab.ChartControl));
+			System.Windows.Controls.Grid.SetColumn(canvas, System.Windows.Controls.Grid.GetColumn(attachedTab.ChartControl));
+			System.Windows.Controls.Grid.SetRowSpan(canvas, System.Windows.Controls.Grid.GetRowSpan(attachedTab.ChartControl));
+			System.Windows.Controls.Grid.SetColumnSpan(canvas, System.Windows.Controls.Grid.GetColumnSpan(attachedTab.ChartControl));
+		}
+		private double GetOverlayWidth(System.Windows.Controls.Canvas canvas) {
+			double width = canvas?.ActualWidth ?? 0;
+			if (width > 0) return width;
+			return attachedTab?.ChartControl?.ActualWidth ?? 0;
+		}
 		private bool TryGetPrimaryPricePanelBounds(out double top, out double bottom) {
 			top = 0;
 			bottom = attachedTab?.ChartControl?.ActualHeight ?? 0;
 			try {
+				ChartScale scale = GetActiveChartScale();
+				if (scale != null && scale.MaxValue > scale.MinValue) {
+					double topY = scale.GetYByValueWpf(scale.MaxValue);
+					double bottomY = scale.GetYByValueWpf(scale.MinValue);
+					top = Math.Min(topY, bottomY);
+					bottom = Math.Max(topY, bottomY);
+					if (bottom > top) return true;
+				}
 				ChartPanel panel = attachedTab?.ChartControl?.ChartPanels.FirstOrDefault();
 				if (panel == null || panel.H <= 0) return bottom > top;
-				top = panel.Y;
-				bottom = panel.Y + panel.H;
+				top = ConvertDeviceYToWpf(panel.Y);
+				bottom = ConvertDeviceYToWpf(panel.Y + panel.H);
 				return bottom > top;
 			} catch { return bottom > top; }
 		}
@@ -486,6 +654,24 @@ namespace NinjaTrader.NinjaScript.AddOns
 			y = GetYByPrice(price);
 			TryGetPrimaryPricePanelBounds(out panelTop, out panelBottom);
 			if (y <= 0 || panelBottom <= panelTop) return false;
+			return y >= panelTop && y <= panelBottom;
+		}
+		private bool TryGetOverlayYByPriceInPrimaryPanel(System.Windows.Controls.Canvas canvas, double price, out double y, out double panelTop, out double panelBottom) {
+			double chartY, chartTop, chartBottom;
+			if (!TryGetYByPriceInPrimaryPanel(price, out chartY, out chartTop, out chartBottom)) {
+				y = chartY;
+				panelTop = chartTop;
+				panelBottom = chartBottom;
+				return false;
+			}
+			y = TranslateChartPointToOverlay(canvas, 0, chartY).Y;
+			panelTop = TranslateChartPointToOverlay(canvas, 0, chartTop).Y;
+			panelBottom = TranslateChartPointToOverlay(canvas, 0, chartBottom).Y;
+			if (panelBottom < panelTop) {
+				double temp = panelTop;
+				panelTop = panelBottom;
+				panelBottom = temp;
+			}
 			return y >= panelTop && y <= panelBottom;
 		}
 		private double ClampRoutedTop(double desiredTop, double elementHeight, double panelTop, double panelBottom) {
@@ -500,9 +686,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (acc == null || executionInstrument == null || IsSameInstrument(chartInstrument, executionInstrument)) { RemoveRoutedOrderOverlay(); return; }
 				EnsureRoutedOrderCanvas();
 				if (routedOrderCanvas == null) return;
+				AlignOverlayCanvasToChartControl(routedOrderCanvas);
+				routedOrderCanvas.Visibility = Visibility.Visible;
+				System.Windows.Controls.Panel.SetZIndex(routedOrderCanvas, 10020);
 				OrcaExecutionRouterSettings visual = OrcaExecutionRouter.GetSettings();
 				routedOrderCanvas.Children.Clear();
 				routedLabelSlots.Clear();
+				BeginNativeRoutedOverlayFrame();
 				Position pos = acc.Positions.FirstOrDefault(p => IsSameInstrument(p.Instrument, executionInstrument));
 				bool hasStop = false, hasLimit = false;
 				string activeOco = "";
@@ -527,23 +717,83 @@ namespace NinjaTrader.NinjaScript.AddOns
 					string label = BuildRoutedOrderLabel(executionInstrument, pos, order, price, type);
 					AddRoutedLine(price, brush, label, acc, order, visual);
 				}
+				EndNativeRoutedOverlayFrame();
 			} catch { }
 		}
 		private void EnsureRoutedOrderCanvas() {
 			if (routedOrderCanvas != null) return;
 			if (!(attachedTab?.Content is System.Windows.Controls.Grid grid) || attachedTab.ChartControl == null) return;
 			routedOrderCanvas = new System.Windows.Controls.Canvas { IsHitTestVisible = true, ClipToBounds = true };
-			System.Windows.Controls.Panel.SetZIndex(routedOrderCanvas, 9996);
-			System.Windows.Controls.Grid.SetRow(routedOrderCanvas, System.Windows.Controls.Grid.GetRow(attachedTab.ChartControl));
-			System.Windows.Controls.Grid.SetColumn(routedOrderCanvas, System.Windows.Controls.Grid.GetColumn(attachedTab.ChartControl));
+			AlignOverlayCanvasToChartControl(routedOrderCanvas);
+			System.Windows.Controls.Panel.SetZIndex(routedOrderCanvas, 10020);
 			routedOrderCanvas.MouseMove += RoutedOrderCanvas_MouseMove;
 			routedOrderCanvas.MouseLeftButtonUp += RoutedOrderCanvas_MouseLeftButtonUp;
 			grid.Children.Add(routedOrderCanvas);
 		}
-		private void RemoveRoutedOrderOverlay() { try { routedLabelSlots.Clear(); if (routedOrderCanvas != null) { routedOrderCanvas.MouseMove -= RoutedOrderCanvas_MouseMove; routedOrderCanvas.MouseLeftButtonUp -= RoutedOrderCanvas_MouseLeftButtonUp; (System.Windows.Media.VisualTreeHelper.GetParent(routedOrderCanvas) as System.Windows.Controls.Panel)?.Children.Remove(routedOrderCanvas); routedOrderCanvas = null; } } catch { } }
+		private void RemoveRoutedOrderOverlay() { try { routedLabelSlots.Clear(); ClearNativeRoutedLines(); if (routedOrderCanvas != null) { routedOrderCanvas.MouseMove -= RoutedOrderCanvas_MouseMove; routedOrderCanvas.MouseLeftButtonUp -= RoutedOrderCanvas_MouseLeftButtonUp; (System.Windows.Media.VisualTreeHelper.GetParent(routedOrderCanvas) as System.Windows.Controls.Panel)?.Children.Remove(routedOrderCanvas); routedOrderCanvas = null; } } catch { } }
 		private double GetPlotRightX() {
-			try { if (attachedTab?.ChartControl != null && attachedTab.ChartControl.CanvasRight > 0) return attachedTab.ChartControl.CanvasRight; } catch { }
+			try { if (attachedTab?.ChartControl != null && attachedTab.ChartControl.CanvasRight > 0) return ConvertDeviceXToWpf(attachedTab.ChartControl.CanvasRight); } catch { }
 			return Math.Max(100, (attachedTab?.ChartControl?.ActualWidth ?? 100) - 65);
+		}
+		private NinjaScriptBase GetRoutedNativeOwner() {
+			try {
+				NinjaScriptBase owner = attachedTab?.ChartControl?.Indicators?.FirstOrDefault() as NinjaScriptBase;
+				if (owner != null) routedNativeOwner = owner;
+			} catch { }
+			return routedNativeOwner;
+		}
+		private void BeginNativeRoutedOverlayFrame() {
+			routedNativeFrameTags.Clear();
+		}
+		private void EndNativeRoutedOverlayFrame() {
+			NinjaScriptBase owner = GetRoutedNativeOwner();
+			foreach (string tag in routedNativeActiveTags.ToList()) {
+				if (!routedNativeFrameTags.Contains(tag))
+					RemoveNativeRoutedLine(owner, tag);
+			}
+			routedNativeActiveTags.Clear();
+			foreach (string tag in routedNativeFrameTags)
+				routedNativeActiveTags.Add(tag);
+			routedNativeFrameTags.Clear();
+		}
+		private void ClearNativeRoutedLines() {
+			NinjaScriptBase owner = GetRoutedNativeOwner();
+			foreach (string tag in routedNativeActiveTags.Concat(routedNativeFrameTags).Distinct().ToList())
+				RemoveNativeRoutedLine(owner, tag);
+			routedNativeActiveTags.Clear();
+			routedNativeFrameTags.Clear();
+		}
+		private void RemoveNativeRoutedLine(NinjaScriptBase owner, string tag) {
+			if (owner == null || string.IsNullOrEmpty(tag)) return;
+			try {
+				Type type = owner.GetType();
+				while (type != null) {
+					var method = type.GetMethod("RemoveDrawObject", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic, null, new[] { typeof(string) }, null);
+					if (method != null) {
+						method.Invoke(owner, new object[] { tag });
+						return;
+					}
+					type = type.BaseType;
+				}
+			} catch { }
+		}
+		private void DrawNativeRoutedLine(string key, double price, System.Windows.Media.Brush brush, string label, OrcaExecutionRouterSettings visual) {
+			NinjaScriptBase owner = GetRoutedNativeOwner();
+			if (owner == null || price <= 0) return;
+			string tag = "OrcaRouted_" + key;
+			string labelTag = tag + "_Label";
+			try {
+				int thickness = Math.Max(1, (int)Math.Round(visual.LineThickness));
+				NinjaTrader.NinjaScript.DrawingTools.HorizontalLine line = Draw.HorizontalLine(owner, tag, price, brush, DashStyleHelper.Solid, thickness);
+				if (line != null) {
+					line.IsAutoScale = false;
+					line.IsLocked = true;
+				}
+				if (!string.IsNullOrWhiteSpace(label))
+					Draw.Text(owner, labelTag, label, 0, price, brush);
+				routedNativeFrameTags.Add(tag);
+				routedNativeFrameTags.Add(labelTag);
+			} catch { }
 		}
 		private string ShortOrderAction(OrderAction action) { return action == OrderAction.BuyToCover ? "Buy" : action == OrderAction.SellShort ? "Short" : action.ToString(); }
 		private System.Windows.Media.Brush GetRouterBrush(string text, System.Windows.Media.Brush fallback) { try { return (System.Windows.Media.Brush)new BrushConverter().ConvertFrom(text); } catch { return fallback; } }
@@ -675,16 +925,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 			return stack;
 		}
 		private void AddRoutedLine(double price, System.Windows.Media.Brush brush, string label, Account acc, Order order, OrcaExecutionRouterSettings visual, string pnlBadgeText = "", bool pnlIsPositive = true) {
+			string nativeKey = order != null ? "Order_" + order.GetHashCode().ToString("X8") : "Position";
+			string nativeLabel = string.IsNullOrWhiteSpace(pnlBadgeText) ? label : label + " | " + pnlBadgeText;
+			DrawNativeRoutedLine(nativeKey, price, brush, nativeLabel, visual);
 			double y, panelTop, panelBottom;
-			if (!TryGetYByPriceInPrimaryPanel(price, out y, out panelTop, out panelBottom)) return;
+			if (!TryGetOverlayYByPriceInPrimaryPanel(routedOrderCanvas, price, out y, out panelTop, out panelBottom)) return;
 			if (y <= 0 || routedOrderCanvas == null || attachedTab?.ChartControl == null) return;
-			double plotRight = GetPlotRightX();
-			var line = new System.Windows.Shapes.Line { X1 = 0, X2 = plotRight, Y1 = y, Y2 = y, Stroke = brush, StrokeThickness = visual.LineThickness, Opacity = 0.95, IsHitTestVisible = false };
+			double plotRight = GetOverlayPlotRightX(routedOrderCanvas);
 			bool hasPnlBadge = !string.IsNullOrWhiteSpace(pnlBadgeText);
 			var content = BuildRoutedLabelContent(label, brush, visual, pnlBadgeText, pnlIsPositive);
 			var pill = new System.Windows.Controls.Border { Background = hasPnlBadge ? System.Windows.Media.Brushes.Transparent : GetRouterBackgroundBrush(brush, visual.LabelBackgroundOpacity), CornerRadius = new CornerRadius(4), Padding = hasPnlBadge ? new Thickness(0) : new Thickness(4, 2, 4, 2), Child = content, IsHitTestVisible = order != null, Cursor = order != null ? Cursors.SizeNS : Cursors.Arrow };
 			var closeButton = acc != null ? BuildRoutedCloseButton(acc, order, visual) : null;
-			routedOrderCanvas.Children.Add(line);
 			if (order != null) {
 				var hitLine = new System.Windows.Shapes.Line { X1 = 0, X2 = plotRight, Y1 = y, Y2 = y, Stroke = System.Windows.Media.Brushes.Transparent, StrokeThickness = 10, Cursor = Cursors.SizeNS };
 				hitLine.MouseLeftButtonDown += (s, e) => { StartRoutedOrderChangeDrag(acc, order); e.Handled = true; };
@@ -722,8 +973,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 		}
 		private void AddRoutedProtectionButtons(Account acc, Instrument instrument, Position pos, bool hasLimit, bool hasStop, string oco, OrcaExecutionRouterSettings visual) {
 			double y, panelTop, panelBottom;
-			if (!TryGetYByPriceInPrimaryPanel(pos.AveragePrice, out y, out panelTop, out panelBottom) || routedOrderCanvas == null) return;
-			double plotRight = GetPlotRightX();
+			if (!TryGetOverlayYByPriceInPrimaryPanel(routedOrderCanvas, pos.AveragePrice, out y, out panelTop, out panelBottom) || routedOrderCanvas == null) return;
+			double plotRight = GetOverlayPlotRightX(routedOrderCanvas);
 			double width = 32;
 			double height = 18;
 			double gap = 4;
@@ -781,8 +1032,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 		}
 		private void RoutedOrderCanvas_MouseMove(object sender, MouseEventArgs e) {
 			if (!isDraggingRoutedTP && !isDraggingRoutedSL && !isDraggingRoutedOrder) return;
-			Point point = e.GetPosition(attachedTab.ChartControl);
-			double price = GetPriceByY(point.Y);
+			Point point = e.GetPosition(routedOrderCanvas);
+			double price = GetPriceByOverlayY(routedOrderCanvas, point.Y);
 			double tick = GetChartInstrument()?.MasterInstrument?.TickSize ?? 0.25;
 			routedDragPrice = Math.Round(price / tick) * tick;
 			DrawRoutedDragPreview();
@@ -815,14 +1066,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 				routedOrderCanvas.Children.Add(routedDragPill);
 			}
 			double y, panelTop, panelBottom;
-			if (!TryGetYByPriceInPrimaryPanel(routedDragPrice, out y, out panelTop, out panelBottom)) {
+			if (!TryGetOverlayYByPriceInPrimaryPanel(routedOrderCanvas, routedDragPrice, out y, out panelTop, out panelBottom)) {
 				routedDragLine.Visibility = Visibility.Collapsed;
 				routedDragPill.Visibility = Visibility.Collapsed;
 				return;
 			}
 			routedDragLine.Visibility = Visibility.Visible;
 			routedDragPill.Visibility = Visibility.Visible;
-			double plotRight = GetPlotRightX();
+			double plotRight = GetOverlayPlotRightX(routedOrderCanvas);
 			routedDragLine.X2 = plotRight; routedDragLine.Y1 = routedDragLine.Y2 = y;
 			string label = isDraggingRoutedOrder ? BuildRoutedOrderDragLabel() : BuildRoutedProtectionDragLabel();
 			routedDragTxt.Text = label;
@@ -1000,7 +1251,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			RemoveCalculator(); try {
 				if (attachedTab?.ChartControl == null) return; NinjaScriptBase o = attachedTab.ChartControl.Indicators.FirstOrDefault() as NinjaScriptBase; if (o == null) return; calcOwner = o; double cp = GetActivePrice(); Instrument ins = GetActiveInstrument(); if (ins == null) return; double tk = ins.MasterInstrument.TickSize; int sT = ins.FullName.Contains("ES") ? 20 : 100, tT = sT * 2; double sY = isLongSelected ? cp - (sT * tk) : cp + (sT * tk), tY = isLongSelected ? cp + (tT * tk) : cp - (tT * tk);
 				hEntry = Draw.HorizontalLine(o,"OEnt",cp,System.Windows.Media.Brushes.WhiteSmoke,DashStyleHelper.Solid,2); hTarget = Draw.HorizontalLine(o,"OTar",tY,System.Windows.Media.Brushes.LimeGreen,DashStyleHelper.Solid,2); hStop = Draw.HorizontalLine(o,"OStp",sY,System.Windows.Media.Brushes.Salmon,DashStyleHelper.Solid,2);
-				calcCanvas = new System.Windows.Controls.Canvas { IsHitTestVisible = false }; System.Windows.Controls.Panel.SetZIndex(calcCanvas, 9998); System.Windows.Controls.Grid.SetRow(calcCanvas, System.Windows.Controls.Grid.GetRow(attachedTab.ChartControl)); System.Windows.Controls.Grid.SetColumn(calcCanvas, System.Windows.Controls.Grid.GetColumn(attachedTab.ChartControl)); (attachedTab.Content as System.Windows.Controls.Grid).Children.Add(calcCanvas);
+				calcCanvas = new System.Windows.Controls.Canvas { IsHitTestVisible = false }; AlignOverlayCanvasToChartControl(calcCanvas); System.Windows.Controls.Panel.SetZIndex(calcCanvas, 9998); (attachedTab.Content as System.Windows.Controls.Grid).Children.Add(calcCanvas);
 				void AddP(System.Windows.Media.Brush b, out System.Windows.Controls.TextBlock t, out System.Windows.Controls.Border p) { t = new System.Windows.Controls.TextBlock { Foreground = System.Windows.Media.Brushes.Black, FontWeight = FontWeights.Bold }; p = new System.Windows.Controls.Border { Background = b, CornerRadius = new CornerRadius(4), Padding = new Thickness(4), Child = t }; System.Windows.Controls.Canvas.SetRight(p, 65); calcCanvas.Children.Add(p); }
 				AddP(System.Windows.Media.Brushes.WhiteSmoke, out cEntryTxt, out cEntryPill); AddP(System.Windows.Media.Brushes.Salmon, out cStopTxt, out cStopPill); AddP(System.Windows.Media.Brushes.LimeGreen, out cTargetTxt, out cTargetPill);
 				if (renderHandler == null) { renderHandler = new EventHandler(OnRenderFrame); System.Windows.Media.CompositionTarget.Rendering += renderHandler; }

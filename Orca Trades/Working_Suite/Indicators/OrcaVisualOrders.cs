@@ -157,7 +157,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				SetZOrder(10000);
 				ChartControl.Dispatcher.InvokeAsync(() =>
 				{
-					EnsureVisualOverlayOnUi();
 					ChartControl.MouseLeftButtonDown += ChartControl_MouseLeftButtonDown;
 					ChartControl.MouseMove += ChartControl_MouseMove;
 					ChartControl.MouseLeftButtonUp += ChartControl_MouseLeftButtonUp;
@@ -198,12 +197,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (ChartControl != null && lastChartPanel != null && lastChartScale != null)
 			{
-				System.Windows.Point position = e.GetPosition(lastChartPanel);
+				System.Windows.Point position = e.GetPosition(ChartControl);
 				double tickSize = Instrument.MasterInstrument.TickSize;
 				if (showTPButton && rectTP.Contains(position))
 				{
 					isDraggingTP = true;
-					currentDragPrice = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
+					currentDragPrice = Math.Round(lastChartScale.GetValueByYWpf(position.Y) / tickSize) * tickSize;
 					Mouse.Capture(ChartControl);
 					e.Handled = true;
 					RefreshChartDuringDrag();
@@ -211,7 +210,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				else if (showSLButton && rectSL.Contains(position))
 				{
 					isDraggingSL = true;
-					currentDragPrice = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
+					currentDragPrice = Math.Round(lastChartScale.GetValueByYWpf(position.Y) / tickSize) * tickSize;
 					Mouse.Capture(ChartControl);
 					e.Handled = true;
 					RefreshChartDuringDrag();
@@ -253,6 +252,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			base.OnRender(chartControl, chartScale);
+			NinjaTrader.NinjaScript.AddOns.OrcaChartCoordinateRegistry.Update(chartControl, chartScale);
 			lastChartScale = chartScale;
 			lastChartPanel = ChartPanel;
 			if (Bars == null || Instrument == null) return;
@@ -286,15 +286,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 			showTPButton = !hasLimit;
 			showSLButton = !hasStop;
 
-			double yEntry = chartScale.GetYByValue(activeEntryPrice);
+			double yEntry = chartScale.GetYByValueWpf(activeEntryPrice);
 			
-			double rightX = chartControl.CanvasRight;
+			double rightXDevice = chartControl.CanvasRight;
+			double rightX = ConvertDeviceXToWpf(chartControl, rightXDevice);
 			if (LabelAlignment == VisualOrderAlignment.Center) 
-				rightX = chartControl.CanvasLeft + ((chartControl.CanvasRight - chartControl.CanvasLeft) / 2.0);
+			{
+				rightXDevice = chartControl.CanvasLeft + ((chartControl.CanvasRight - chartControl.CanvasLeft) / 2.0);
+				rightX = ConvertDeviceXToWpf(chartControl, rightXDevice);
+			}
 			else if (LabelAlignment == VisualOrderAlignment.LeftEdge)
-				rightX = chartControl.CanvasLeft;
+			{
+				rightXDevice = chartControl.CanvasLeft;
+				rightX = ConvertDeviceXToWpf(chartControl, rightXDevice);
+			}
 			else if (LabelAlignment == VisualOrderAlignment.RightmostBar && ChartBars != null && ChartBars.Count > 0)
-				rightX = chartControl.GetXByBarIndex(ChartBars, ChartBars.Count - 1);
+			{
+				rightXDevice = chartControl.GetXByBarIndex(ChartBars, ChartBars.Count - 1);
+				rightX = ConvertDeviceXToWpf(chartControl, rightXDevice);
+			}
 				
 			int tagOffset = NormalizeLegacyOffset(TagOffsetRight);
 			int labelOffset = NormalizeLegacyOffset(OrderLabelOffsetRight);
@@ -338,7 +348,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			foreach (var g in groups)
 			{
 				bool isLim = g.Value.Item1; double pr = g.Value.Item2; int qty = g.Value.Item3;
-				float y = chartScale.GetYByValue(pr);
+				double y = chartScale.GetYByValueWpf(pr);
 				double ticks = Math.Round(Math.Abs(pr - activeEntryPrice) / tickSize);
 				double points = ticks * tickSize;
 				double val = ticks * tickSize * pointValue * qty;
@@ -348,22 +358,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 				string txt = string.Format("{0} {1} | {2}", isProf ? "Profit" : "Risk", val.ToString("C0"), FormatPoints(points));
 				string nativeText = string.Format("{0} {1} {2}", qty, action, type);
 				bool labelAboveLine = pr < activeEntryPrice;
-				overlayItems.Add(new VisualOverlayItem { IsOrderLabel = true, Text = txt, NativeText = nativeText, Background = isProf ? visual.BuyColor : visual.SellColor, Foreground = visual.TextColor, NativeLeftX = rightX - labelOffset, RightX = labelRightX, MaxRightX = chartControl.CanvasRight - visual.LabelRightPadding, LineY = y, PlaceAboveLine = labelAboveLine, Opacity = visual.LabelBackgroundOpacity });
+				overlayItems.Add(new VisualOverlayItem { IsOrderLabel = true, Text = txt, NativeText = nativeText, Background = isProf ? visual.BuyColor : visual.SellColor, Foreground = visual.TextColor, NativeLeftX = rightX - labelOffset, RightX = labelRightX, MaxRightX = ConvertDeviceXToWpf(chartControl, chartControl.CanvasRight) - visual.LabelRightPadding, LineY = y, PlaceAboveLine = labelAboveLine, Opacity = visual.LabelBackgroundOpacity });
 			}
 
 			if (isDraggingTP || isDraggingSL)
 			{
 				float yDrag = chartScale.GetYByValue(currentDragPrice);
+				double yDragWpf = chartScale.GetYByValueWpf(currentDragPrice);
 				System.Windows.Media.Brush dragBrush = isDraggingTP ? tpBrush : slBrush;
 				var clr = ToDxColor(dragBrush, 0.95);
 				using (var br = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, clr))
 				using (var stroke = new SharpDX.Direct2D1.StrokeStyle(RenderTarget.Factory, new SharpDX.Direct2D1.StrokeStyleProperties { DashStyle = SharpDX.Direct2D1.DashStyle.Dash }))
 				{
-					RenderTarget.DrawLine(new Vector2(0f, yDrag), new Vector2((float)rightX, yDrag), br, (float)Math.Max(1.5, visual.LineThickness), stroke);
+					RenderTarget.DrawLine(new Vector2(0f, yDrag), new Vector2((float)rightXDevice, yDrag), br, (float)Math.Max(1.5, visual.LineThickness), stroke);
 					double ts = Math.Round(Math.Abs(currentDragPrice - activeEntryPrice) / tickSize);
 					double points = ts * tickSize;
 					string dTxt = string.Format("{0} @ {1:F2} | {2} {3} | {4}", isDraggingTP ? "TP" : "SL", currentDragPrice, isDraggingTP ? "Profit" : "Risk", (points * pointValue * activeQuantity).ToString("C0"), FormatPoints(points));
-					overlayItems.Add(new VisualOverlayItem { Text = dTxt, Background = isDraggingTP ? visual.BuyColor : visual.SellColor, Foreground = visual.TextColor, RightX = labelRightX, LineY = yDrag, PlaceAboveLine = currentDragPrice < activeEntryPrice, Opacity = visual.LabelBackgroundOpacity });
+					overlayItems.Add(new VisualOverlayItem { Text = dTxt, Background = isDraggingTP ? visual.BuyColor : visual.SellColor, Foreground = visual.TextColor, RightX = labelRightX, LineY = yDragWpf, PlaceAboveLine = currentDragPrice < activeEntryPrice, Opacity = visual.LabelBackgroundOpacity });
 				}
 			}
 			QueueOverlayUpdate(overlayItems);
@@ -373,6 +384,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (ChartControl != null) ChartControl.InvalidateVisual();
 			ForceRefresh();
+		}
+
+		private double ConvertDeviceXToWpf(ChartControl chartControl, double x)
+		{
+			try
+			{
+				if (chartControl?.PresentationSource != null)
+					return ChartingExtensions.ConvertFromHorizontalPixels((int)Math.Round(x), chartControl.PresentationSource);
+			}
+			catch { }
+			return x;
 		}
 
 		private void EnsureVisualOverlayOnUi()
@@ -424,6 +446,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			var snapshot = items == null ? new List<VisualOverlayItem>() : items.ToList();
 			ChartControl.Dispatcher.InvokeAsync(() =>
 			{
+				if (snapshot.Count == 0)
+				{
+					if (visualOverlayCanvas != null)
+						visualOverlayCanvas.Children.Clear();
+					return;
+				}
 				EnsureVisualOverlayOnUi();
 				if (visualOverlayCanvas == null) return;
 				visualOverlayCanvas.Width = ChartControl.ActualWidth;
@@ -433,6 +461,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 				foreach (var item in snapshot.Where(i => i.IsButton)) AddOverlayButton(item, visual);
 				foreach (var item in snapshot.Where(i => !i.IsButton)) AddOverlayPill(item, visual);
 			});
+		}
+
+		private void DrawOverlayItems(List<VisualOverlayItem> items, OrcaExecutionRouterSettings visual)
+		{
+			if (RenderTarget == null || items == null || visual == null)
+				return;
+
+			foreach (VisualOverlayItem item in items)
+			{
+				if (item == null)
+					continue;
+
+				if (item.IsButton)
+				{
+					System.Windows.Media.Brush brush = GetRouterBrush(item.Background, item.IsTp ? System.Windows.Media.Brushes.LimeGreen : System.Windows.Media.Brushes.Salmon);
+					DrawButton(item.Text, new Rect(item.Left, item.Top, item.Width, item.Height), brush, visual);
+					continue;
+				}
+
+				System.Windows.Media.Brush background = GetRouterBrush(item.Background, System.Windows.Media.Brushes.LimeGreen);
+				System.Windows.Media.Brush foreground = GetRouterBrush(item.Foreground, System.Windows.Media.Brushes.Black);
+				if (item.IsOrderLabel)
+					DrawOrderPill(item.Text, item.NativeText ?? "", (float)item.NativeLeftX, (float)item.RightX, (float)item.MaxRightX, (float)item.LineY, item.PlaceAboveLine, background, foreground, visual, item.Opacity);
+				else
+					DrawOffsetPill(item.Text, (float)item.RightX, (float)item.LineY, item.PlaceAboveLine, background, foreground, visual, item.Opacity);
+			}
+		}
+
+		private System.Windows.Point ChartPointToOverlay(double x, double y)
+		{
+			try
+			{
+				if (ChartControl != null && visualOverlayCanvas != null)
+					return ChartControl.TranslatePoint(new System.Windows.Point(x, y), visualOverlayCanvas);
+			}
+			catch { }
+			return new System.Windows.Point(x, y);
 		}
 
 		private void AddOverlayButton(VisualOverlayItem item, OrcaExecutionRouterSettings visual)
@@ -464,8 +529,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				e.Handled = true;
 			};
 			visualOverlayCanvas.Children.Add(button);
-			System.Windows.Controls.Canvas.SetLeft(button, item.Left);
-			System.Windows.Controls.Canvas.SetTop(button, item.Top);
+			System.Windows.Point point = ChartPointToOverlay(item.Left, item.Top);
+			System.Windows.Controls.Canvas.SetLeft(button, point.X);
+			System.Windows.Controls.Canvas.SetTop(button, point.Y);
 			System.Windows.Controls.Panel.SetZIndex(button, 10002);
 		}
 
@@ -503,8 +569,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				left = item.RightX - pill.DesiredSize.Width;
 			double top = item.PlaceAboveLine ? item.LineY - pill.DesiredSize.Height - 8 : item.LineY + 8;
 			visualOverlayCanvas.Children.Add(pill);
-			System.Windows.Controls.Canvas.SetLeft(pill, Math.Max(0, left));
-			System.Windows.Controls.Canvas.SetTop(pill, top);
+			System.Windows.Point point = ChartPointToOverlay(Math.Max(0, left), top);
+			System.Windows.Controls.Canvas.SetLeft(pill, point.X);
+			System.Windows.Controls.Canvas.SetTop(pill, point.Y);
 			System.Windows.Controls.Panel.SetZIndex(pill, 10003);
 		}
 
@@ -533,16 +600,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void UpdateDragPrice(MouseEventArgs e)
 		{
-			if (lastChartPanel == null || lastChartScale == null) return;
-			System.Windows.Point position = e.GetPosition(lastChartPanel);
+			if (ChartControl == null || lastChartPanel == null || lastChartScale == null) return;
+			System.Windows.Point position = e.GetPosition(ChartControl);
 			double tickSize = Instrument.MasterInstrument.TickSize;
-			currentDragPrice = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
+			currentDragPrice = Math.Round(lastChartScale.GetValueByYWpf(position.Y) / tickSize) * tickSize;
 			RefreshChartDuringDrag();
 		}
 
 		private void FinishDrag(MouseButtonEventArgs e)
 		{
-			if (lastChartPanel == null || lastChartScale == null)
+			if (ChartControl == null || lastChartPanel == null || lastChartScale == null)
 			{
 				isDraggingTP = false; isDraggingSL = false;
 				Mouse.Capture(null);
@@ -550,9 +617,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RefreshChartDuringDrag();
 				return;
 			}
-			System.Windows.Point position = e.GetPosition(lastChartPanel);
+			System.Windows.Point position = e.GetPosition(ChartControl);
 			double tickSize = Instrument.MasterInstrument.TickSize;
-			double price = Math.Round(lastChartScale.GetValueByY((float)position.Y) / tickSize) * tickSize;
+			double price = Math.Round(lastChartScale.GetValueByYWpf(position.Y) / tickSize) * tickSize;
 			bool submitTP = isDraggingTP;
 			try { SubmitDraggedOrder(submitTP, price); }
 			finally

@@ -80,7 +80,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (lastChartPanel == null || ChartControl == null)
 				return;
 
-			System.Windows.Point position = e.GetPosition(lastChartPanel);
+			System.Windows.Point position = e.GetPosition(ChartControl);
 			lastMousePoint = position;
 			hasMousePoint = true;
 			ChartControl.InvalidateVisual();
@@ -91,6 +91,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 			hasMousePoint = false;
 			if (ChartControl != null)
 				ChartControl.InvalidateVisual();
+		}
+
+		private System.Windows.Point ConvertWpfPointToDevicePixels(ChartControl chartControl, System.Windows.Point point)
+		{
+			try
+			{
+				if (chartControl?.PresentationSource != null)
+				{
+					return new System.Windows.Point(
+						ChartingExtensions.ConvertToHorizontalPixels(point.X, chartControl.PresentationSource),
+						ChartingExtensions.ConvertToVerticalPixels(point.Y, chartControl.PresentationSource));
+				}
+			}
+			catch { }
+
+			return point;
 		}
 
 		public override void OnRenderTargetChanged()
@@ -121,6 +137,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			base.OnRender(chartControl, chartScale);
+			NinjaTrader.NinjaScript.AddOns.OrcaChartCoordinateRegistry.Update(chartControl, chartScale);
 
 			if (RenderTarget == null || chartControl == null || chartScale == null || ChartPanel == null)
 				return;
@@ -171,11 +188,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float hoveredY = 0.0f;
 			float hoveredRadius = 0.0f;
 			double closestHitDistance = double.MaxValue;
-			bool mouseInPanel = hasMousePoint
-				&& lastMousePoint.X >= left
-				&& lastMousePoint.X <= right
-				&& lastMousePoint.Y >= top
-				&& lastMousePoint.Y <= bottom;
+			System.Windows.Point deviceMousePoint = ConvertWpfPointToDevicePixels(chartControl, lastMousePoint);
+			bool mouseInChartPanel = hasMousePoint
+				&& deviceMousePoint.X >= left
+				&& deviceMousePoint.X <= right
+				&& deviceMousePoint.Y >= top
+				&& deviceMousePoint.Y <= bottom;
 
 			for (int i = 0; i < visibleItems.Count; i++)
 			{
@@ -191,10 +209,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (radius <= 0)
 					continue;
 
-				if (mouseInPanel)
+				if (mouseInChartPanel)
 				{
-					double dx = lastMousePoint.X - x;
-					double dy = lastMousePoint.Y - y;
+					double dx = deviceMousePoint.X - x;
+					double dy = deviceMousePoint.Y - y;
 					double distance = Math.Sqrt(dx * dx + dy * dy);
 					double hitRadius = Math.Max(radius + 4.0, 8.0);
 					if (distance <= hitRadius && distance < closestHitDistance)
