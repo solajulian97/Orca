@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 
 using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
 #endregion
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -17,15 +18,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			printEvents = new List<PrintEvent>(2048);
 			clusterCooldowns = new Dictionary<string, DateTime>();
 			priceLevelAccumulators = new Dictionary<double, PriceLevelAccumulator>();
+			sharedProfileVolumeMaps = new List<Dictionary<double, long>>(4096);
+			sharedProfileUpVolumeMaps = new List<Dictionary<double, long>>(4096);
+			sharedProfileDownVolumeMaps = new List<Dictionary<double, long>>(4096);
 			printLock = new System.Threading.ReaderWriterLockSlim();
 			currentBid = double.NaN;
 			currentAsk = double.NaN;
+			sharedProfilePrevLast = double.NaN;
+			sharedProfileLastDirection = 0;
+			sharedProfileRevision = 0;
+			sharedProfileCoverageBarCount = 0;
+			sharedProfileLastUpdatedUtc = DateTime.MinValue;
+			lastSharedProfileRegistrationUtc = DateTime.MinValue;
 			lastSessionResetBar = -1;
 			priceLevelAccumulatorBarIndex = -1;
 		}
 
 		private void TerminateOrcaPrintsEngine()
 		{
+			OrcaProfileDataCache.UnregisterSource(sharedProfileSourceId);
+
 			System.Threading.ReaderWriterLockSlim localLock = printLock;
 			if (localLock != null)
 			{
@@ -36,6 +48,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (printEvents != null) printEvents.Clear();
 					if (clusterCooldowns != null) clusterCooldowns.Clear();
 					if (priceLevelAccumulators != null) priceLevelAccumulators.Clear();
+					if (sharedProfileVolumeMaps != null) sharedProfileVolumeMaps.Clear();
+					if (sharedProfileUpVolumeMaps != null) sharedProfileUpVolumeMaps.Clear();
+					if (sharedProfileDownVolumeMaps != null) sharedProfileDownVolumeMaps.Clear();
 				}
 				finally
 				{
@@ -50,6 +65,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			printEvents = null;
 			clusterCooldowns = null;
 			priceLevelAccumulators = null;
+			sharedProfileVolumeMaps = null;
+			sharedProfileUpVolumeMaps = null;
+			sharedProfileDownVolumeMaps = null;
 		}
 
 		private void ClearOrcaPrintsState()
@@ -68,6 +86,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				currentBid = double.NaN;
 				currentAsk = double.NaN;
 				priceLevelAccumulatorBarIndex = -1;
+				ClearSharedProfileCache();
 			}
 			finally
 			{
@@ -112,10 +131,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else if (!double.IsNaN(currentBid) && currentBid > 0 && e.Price <= currentBid)
 				side = AggressorSide.Sell;
 
+			DateTime time = e.Time == DateTime.MinValue ? Time[0] : e.Time;
+			UpdateSharedProfileCache(time, e.Price, size, side);
+
 			if (side == AggressorSide.Unknown)
 				return;
 
-			DateTime time = e.Time == DateTime.MinValue ? Time[0] : e.Time;
 			OrcaPrintTick tick = new OrcaPrintTick(time, e.Price, size, side);
 			bool includeInSingleAndCluster = size >= MinTradeSize;
 
@@ -162,6 +183,166 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			TrimStoredEvents();
+		}
+
+		private void RefreshSharedProfileRegistrationIfNeeded()
+		{
+			DateTime now = DateTime.UtcNow;
+			if ((now - lastSharedProfileRegistrationUtc).TotalSeconds < 5)
+				return;
+
+			RegisterSharedProfileSource(false);
+		}
+
+		private void RegisterSharedProfileSource(bool announce)
+		{
+			lastSharedProfileRegistrationUtc = DateTime.UtcNow;
+			if (!PublishSharedProfileCache)
+			{
+				OrcaProfileDataCache.UnregisterSource(sharedProfileSourceId);
+				return;
+			}
+
+			string key = OrcaProfileDataCache.BuildKey(Bars);
+			RegisterSharedProfileSourceForKey(key);
+
+			string chartKey = OrcaProfileDataCache.BuildKey(Bars, ChartControl);
+			if (!string.IsNullOrEmpty(chartKey) && chartKey != key)
+				RegisterSharedProfileSourceForKey(chartKey);
+		}
+
+		private void RegisterSharedProfileSourceForKey(string key)
+		{
+			if (string.IsNullOrEmpty(key))
+				return;
+
+			OrcaProfileDataCache.RegisterSource(new OrcaProfileDataSource
+			{
+				SourceId = sharedProfileSourceId,
+				Key = key,
+				SourceName = "OrcaPrints live VAP",
+				SyncRoot = sharedProfileSync,
+				VolumeByBar = sharedProfileVolumeMaps,
+				UpVolumeByBar = sharedProfileUpVolumeMaps,
+				DownVolumeByBar = sharedProfileDownVolumeMaps,
+				RevisionProvider = () => sharedProfileRevision,
+				LastUpdatedUtcProvider = () => sharedProfileLastUpdatedUtc,
+				CoverageProvider = () => sharedProfileCoverageBarCount
+			});
+		}
+
+		private void ClearSharedProfileCache()
+		{
+			lock (sharedProfileSync)
+			{
+				if (sharedProfileVolumeMaps != null) sharedProfileVolumeMaps.Clear();
+				if (sharedProfileUpVolumeMaps != null) sharedProfileUpVolumeMaps.Clear();
+				if (sharedProfileDownVolumeMaps != null) sharedProfileDownVolumeMaps.Clear();
+				sharedProfilePrevLast = double.NaN;
+				sharedProfileLastDirection = 0;
+				sharedProfileCoverageBarCount = 0;
+				sharedProfileRevision++;
+				sharedProfileLastUpdatedUtc = DateTime.UtcNow;
+			}
+		}
+
+		private void UpdateSharedProfileCache(DateTime tickTime, double price, long volume, AggressorSide side)
+		{
+			if (!PublishSharedProfileCache)
+				return;
+			if (volume <= 0 || tickTime == DateTime.MinValue || double.IsNaN(price) || double.IsInfinity(price))
+				return;
+
+			int primaryIndex = GetSharedProfilePrimaryIndex(tickTime);
+			if (primaryIndex < 0)
+				return;
+
+			double priceKey = NormalizePriceToTick(price);
+
+			lock (sharedProfileSync)
+			{
+				EnsureSharedProfileBarMaps(primaryIndex);
+				long signed = ResolveSharedProfileSignedVolume(price, volume, side);
+
+				Dictionary<double, long> volumeMap = sharedProfileVolumeMaps[primaryIndex];
+				bool wasEmptyBar = volumeMap.Count == 0;
+				AddSharedProfileVolume(volumeMap, priceKey, volume);
+
+				if (signed > 0)
+					AddSharedProfileVolume(sharedProfileUpVolumeMaps[primaryIndex], priceKey, volume);
+				else if (signed < 0)
+					AddSharedProfileVolume(sharedProfileDownVolumeMaps[primaryIndex], priceKey, volume);
+
+				if (wasEmptyBar)
+					sharedProfileCoverageBarCount++;
+
+				sharedProfileRevision++;
+				sharedProfileLastUpdatedUtc = DateTime.UtcNow;
+			}
+		}
+
+		private int GetSharedProfilePrimaryIndex(DateTime tickTime)
+		{
+			int primaryIndex = -1;
+			try
+			{
+				if (BarsArray != null && BarsArray.Length > 0 && BarsArray[0] != null)
+					primaryIndex = BarsArray[0].GetBar(tickTime);
+			}
+			catch { }
+
+			if (primaryIndex < 0 && CurrentBar >= 0)
+				primaryIndex = CurrentBar;
+
+			return primaryIndex;
+		}
+
+		private void EnsureSharedProfileBarMaps(int primaryIndex)
+		{
+			while (sharedProfileVolumeMaps.Count <= primaryIndex)
+				sharedProfileVolumeMaps.Add(new Dictionary<double, long>());
+			while (sharedProfileUpVolumeMaps.Count <= primaryIndex)
+				sharedProfileUpVolumeMaps.Add(new Dictionary<double, long>());
+			while (sharedProfileDownVolumeMaps.Count <= primaryIndex)
+				sharedProfileDownVolumeMaps.Add(new Dictionary<double, long>());
+		}
+
+		private long ResolveSharedProfileSignedVolume(double price, long volume, AggressorSide side)
+		{
+			long signed = 0;
+			if (side == AggressorSide.Buy)
+				signed = volume;
+			else if (side == AggressorSide.Sell)
+				signed = -volume;
+			else if (!double.IsNaN(sharedProfilePrevLast))
+			{
+				if (price > sharedProfilePrevLast)
+					signed = volume;
+				else if (price < sharedProfilePrevLast)
+					signed = -volume;
+				else
+					signed = sharedProfileLastDirection * volume;
+			}
+
+			sharedProfilePrevLast = price;
+			if (signed > 0)
+				sharedProfileLastDirection = 1;
+			else if (signed < 0)
+				sharedProfileLastDirection = -1;
+
+			return signed;
+		}
+
+		private void AddSharedProfileVolume(Dictionary<double, long> map, double price, long volume)
+		{
+			if (map == null || volume <= 0 || double.IsNaN(price) || double.IsInfinity(price))
+				return;
+
+			long existing;
+			if (map.TryGetValue(price, out existing))
+				map[price] = existing + volume;
+			else
+				map[price] = volume;
 		}
 
 		private void UpdatePriceLevelAccumulation(OrcaPrintTick tick)

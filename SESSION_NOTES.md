@@ -36,6 +36,8 @@
 - Toggle `ShowDeltaLabels`, adjust `DeltaLabelFontSize`, and change positive/negative label colors to confirm labels appear only on rows with enough height/width and do not overlap.
 - On Rolling, Leg-to-Leg, and Step profiles, enable delta text and confirm positive delta labels use the positive text/label color while negative delta labels use the negative text/label color.
 - On Rolling, Leg-to-Leg, Step, and Visible Range profiles, set dynamic multiplier and delta dynamic row-min-pixels to matching values and confirm delta row heights visually align at the same chart zoom.
+- Visible-range delta labels now use trailing text alignment inside the actual delta bar rectangle, so labels line up on the right edge instead of relying on estimated text widths.
+- Protected visible-range true volume-at-price maps with a shared lock while tick updates append data, then snapshot the visible maps before render-time recalculation. Profile rebuilds now enumerate immutable snapshots instead of live dictionaries, fixing live `OnRender` collection-modified errors across multi-chart layouts.
 - Toggle every display/color property in the indicator dialog.
 - Run the standard 6-chart MNQ/NQ/ES/MES layout and confirm no visible lag while panning and zooming.
 
@@ -58,3 +60,17 @@
 - Confirm `Daily Open` appears at the 18:00 Globex open and can be toggled independently from current-day high/low.
 - Verify ONH/ONL/ONM/ONVAH/ONVAL/ONPOC build only between ETH open and RTH open, then remain fixed after RTH begins.
 - Confirm ETH Mid continues plotting after RTH open, reflects the full current day including overnight and RTH action, and staggers its label when overlapping ON Mid.
+- Current RTH Open now renders as its own current-session level (`RTH Open`) when `Show Current RTH` is enabled. Legacy `RTHO` labels migrate to `RTH Open`, keeping `RTH PDO` reserved for the prior RTH open.
+
+## Orca DPI-Safe Chart Coordinates
+
+- Updated OrcaPrints hover tracking to store mouse positions in chart-control coordinates, matching the SharpDX render coordinates used for print dots.
+- Updated OrcaVisualOrders drag/hover price conversion to use chart-control mouse coordinates instead of chart-panel-relative coordinates.
+- Updated OrcaRiskManager drag overlays so temporary drag canvases are aligned to the chart control's grid slot, and drag price conversion now reads mouse coordinates from the aligned overlay canvas. This keeps preview lines, click prices, and chart-scale conversion in the same coordinate space on high-DPI laptop/external-monitor setups.
+
+## DPI Coordinate Test Plan
+
+- Deploy `OrcaPrints.Rendering.cs`, `OrcaVisualOrders`, and `OrcaRiskManagerAddOn` from `Working_Suite`, press F5, and restart NinjaTrader if the AddOn panel was already loaded.
+- On the laptop display at native resolution, verify OrcaPrint hover tooltips trigger directly over dots.
+- In SIM, use Orca Risk Manager drag order placement and confirm the preview line price matches the submitted limit/stop price.
+- In SIM, drag visual TP/SL buttons and routed order overlays and confirm submitted/changed prices match the chart line.

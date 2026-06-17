@@ -21,15 +21,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class OrcaPrints : Indicator
 	{
+		private readonly Guid sharedProfileSourceId = Guid.NewGuid();
+		private readonly object sharedProfileSync = new object();
 		private List<OrcaPrintTick> tickBuffer;
 		private List<PrintEvent> printEvents;
 		private Dictionary<string, DateTime> clusterCooldowns;
 		private Dictionary<double, PriceLevelAccumulator> priceLevelAccumulators;
+		private List<Dictionary<double, long>> sharedProfileVolumeMaps;
+		private List<Dictionary<double, long>> sharedProfileUpVolumeMaps;
+		private List<Dictionary<double, long>> sharedProfileDownVolumeMaps;
 		private ReaderWriterLockSlim printLock;
 		private double currentBid = double.NaN;
 		private double currentAsk = double.NaN;
+		private double sharedProfilePrevLast = double.NaN;
 		private int lastSessionResetBar = -1;
 		private int priceLevelAccumulatorBarIndex = -1;
+		private int sharedProfileLastDirection;
+		private int sharedProfileRevision;
+		private int sharedProfileCoverageBarCount;
+		private DateTime lastSharedProfileRegistrationUtc = DateTime.MinValue;
+		private DateTime sharedProfileLastUpdatedUtc = DateTime.MinValue;
 
 		protected override void OnStateChange()
 		{
@@ -48,6 +59,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				MinTradeSize = 5;
 				ResetOnNewSession = true;
+				PublishSharedProfileCache = true;
 
 				EnableSinglePrints = true;
 				SinglePrintMinSize = 100;
@@ -73,6 +85,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				MinDotSize = 6;
 				MaxDotSize = 30;
+				SinglePrintMinDotSize = 7;
+				SinglePrintMaxDotSize = 22;
+				PriceLevelMinDotSize = 12;
+				PriceLevelMaxDotSize = 26;
+				ClusterMinDotSize = 18;
+				ClusterMaxDotSize = 34;
 				DotSizeScale = NinjaTrader.NinjaScript.Indicators.DotSizeScale.Logarithmic;
 				BuyAggressorColor = WpfBrushes.LimeGreen;
 				SellAggressorColor = WpfBrushes.OrangeRed;
@@ -86,11 +104,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShapeMode = NinjaTrader.NinjaScript.Indicators.ShapeMode.DistinguishClusters;
 				HorizontalAnchor = OrcaPrintHorizontalAnchor.ExactPrintTime;
 				HorizontalOffsetPx = 0;
+				AutoCompactLayout = true;
+				CompactLayoutEnterSpacingPx = 36;
+				DetailLayoutEnterSpacingPx = 46;
 			}
 			else if (State == State.DataLoaded)
 			{
 				InitializeOrcaPrintsEngine();
 				InitializeOrcaPrintsRendering();
+				RegisterSharedProfileSource(true);
 			}
 			else if (State == State.Historical)
 			{
@@ -106,14 +128,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnBarUpdate()
 		{
-			if (!ResetOnNewSession || CurrentBar < 0 || Bars == null)
+			if (CurrentBar < 0 || Bars == null)
 				return;
 
-			if (Bars.IsFirstBarOfSession && lastSessionResetBar != CurrentBar)
+			if (ResetOnNewSession && Bars.IsFirstBarOfSession && lastSessionResetBar != CurrentBar)
 			{
 				lastSessionResetBar = CurrentBar;
 				ClearOrcaPrintsState();
 			}
+
+			RefreshSharedProfileRegistrationIfNeeded();
 		}
 
 		#region 01. General
@@ -125,6 +149,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty]
 		[Display(Name = "Reset On New Session", Order = 2, GroupName = "01. General")]
 		public bool ResetOnNewSession { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Publish Shared Profile Cache", Order = 3, GroupName = "01. General",
+			Description = "Publishes live volume-at-price and classified delta maps for Fixed Range and other Orca tools on the same chart.")]
+		public bool PublishSharedProfileCache { get; set; }
 		#endregion
 
 		#region 02. Single Prints
@@ -232,11 +261,41 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public int MaxDotSize { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Dot Size Scale", Order = 3, GroupName = "05. Rendering")]
+		[Range(1, 300)]
+		[Display(Name = "Single Min Dot Size", Order = 3, GroupName = "05. Rendering")]
+		public int SinglePrintMinDotSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 300)]
+		[Display(Name = "Single Max Dot Size", Order = 4, GroupName = "05. Rendering")]
+		public int SinglePrintMaxDotSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 300)]
+		[Display(Name = "Price Level Min Dot Size", Order = 5, GroupName = "05. Rendering")]
+		public int PriceLevelMinDotSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 300)]
+		[Display(Name = "Price Level Max Dot Size", Order = 6, GroupName = "05. Rendering")]
+		public int PriceLevelMaxDotSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 300)]
+		[Display(Name = "Cluster Min Dot Size", Order = 7, GroupName = "05. Rendering")]
+		public int ClusterMinDotSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 300)]
+		[Display(Name = "Cluster Max Dot Size", Order = 8, GroupName = "05. Rendering")]
+		public int ClusterMaxDotSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Dot Size Scale", Order = 9, GroupName = "05. Rendering")]
 		public DotSizeScale DotSizeScale { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "Buy Aggressor Color", Order = 4, GroupName = "05. Rendering")]
+		[Display(Name = "Buy Aggressor Color", Order = 10, GroupName = "05. Rendering")]
 		public WpfBrush BuyAggressorColor { get; set; }
 
 		[Browsable(false)]
@@ -247,7 +306,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		[XmlIgnore]
-		[Display(Name = "Sell Aggressor Color", Order = 5, GroupName = "05. Rendering")]
+		[Display(Name = "Sell Aggressor Color", Order = 11, GroupName = "05. Rendering")]
 		public WpfBrush SellAggressorColor { get; set; }
 
 		[Browsable(false)]
@@ -258,7 +317,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		[XmlIgnore]
-		[Display(Name = "Price Level Buy Color", Order = 6, GroupName = "05. Rendering")]
+		[Display(Name = "Price Level Buy Color", Order = 12, GroupName = "05. Rendering")]
 		public WpfBrush PriceLevelBuyColor { get; set; }
 
 		[Browsable(false)]
@@ -269,7 +328,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		[XmlIgnore]
-		[Display(Name = "Price Level Sell Color", Order = 7, GroupName = "05. Rendering")]
+		[Display(Name = "Price Level Sell Color", Order = 13, GroupName = "05. Rendering")]
 		public WpfBrush PriceLevelSellColor { get; set; }
 
 		[Browsable(false)]
@@ -280,20 +339,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		[NinjaScriptProperty]
-		[Display(Name = "Use Variable Intensity", Order = 8, GroupName = "05. Rendering")]
+		[Display(Name = "Use Variable Intensity", Order = 14, GroupName = "05. Rendering")]
 		public bool UseVariableIntensity { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "Min Intensity Pct", Order = 9, GroupName = "05. Rendering")]
+		[Display(Name = "Min Intensity Pct", Order = 15, GroupName = "05. Rendering")]
 		public int MinIntensityPct { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Border Enabled", Order = 10, GroupName = "05. Rendering")]
+		[Display(Name = "Border Enabled", Order = 16, GroupName = "05. Rendering")]
 		public bool BorderEnabled { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "Border Color", Order = 11, GroupName = "05. Rendering")]
+		[Display(Name = "Border Color", Order = 17, GroupName = "05. Rendering")]
 		public WpfBrush BorderColor { get; set; }
 
 		[Browsable(false)]
@@ -305,21 +364,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 99)]
-		[Display(Name = "Transparency Pct", Order = 12, GroupName = "05. Rendering")]
+		[Display(Name = "Transparency Pct", Order = 18, GroupName = "05. Rendering")]
 		public int TransparencyPct { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Shape Mode", Order = 13, GroupName = "05. Rendering")]
+		[Display(Name = "Shape Mode", Order = 19, GroupName = "05. Rendering")]
 		public ShapeMode ShapeMode { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Horizontal Anchor", Order = 14, GroupName = "05. Rendering")]
+		[Display(Name = "Horizontal Anchor", Order = 20, GroupName = "05. Rendering")]
 		public OrcaPrintHorizontalAnchor HorizontalAnchor { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(-500, 500)]
-		[Display(Name = "Horizontal Offset Px", Order = 15, GroupName = "05. Rendering")]
+		[Display(Name = "Horizontal Offset Px", Order = 21, GroupName = "05. Rendering")]
 		public int HorizontalOffsetPx { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Auto Compact Layout", Order = 22, GroupName = "05. Rendering")]
+		public bool AutoCompactLayout { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 500)]
+		[Display(Name = "Compact Below Bar Spacing", Order = 23, GroupName = "05. Rendering")]
+		public int CompactLayoutEnterSpacingPx { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 500)]
+		[Display(Name = "Detail Above Bar Spacing", Order = 24, GroupName = "05. Rendering")]
+		public int DetailLayoutEnterSpacingPx { get; set; }
 		#endregion
 	}
 }

@@ -42,6 +42,37 @@ namespace NinjaTrader.NinjaScript
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
+	public class OrcaMgiFontFamilyConverter : StringConverter
+	{
+		public override bool GetStandardValuesSupported(ITypeDescriptorContext context)
+		{
+			return true;
+		}
+
+		public override bool GetStandardValuesExclusive(ITypeDescriptorContext context)
+		{
+			return false;
+		}
+
+		public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context)
+		{
+			HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			List<string> fontNames = new List<string>();
+
+			foreach (System.Windows.Media.FontFamily family in System.Windows.Media.Fonts.SystemFontFamilies)
+			{
+				string name = family != null ? family.Source : null;
+				if (string.IsNullOrWhiteSpace(name) || !seen.Add(name))
+					continue;
+
+				fontNames.Add(name);
+			}
+
+			fontNames.Sort(StringComparer.CurrentCultureIgnoreCase);
+			return new StandardValuesCollection(fontNames);
+		}
+	}
+
 	public class OrcaMGIDaily : Indicator
 	{
 		#region Helper Classes
@@ -120,6 +151,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SharpDX.DirectWrite.TextFormat dxLabelFormat;
 		private DxSolidBrush dxLabelBrush, dxRegionBrush;
 		private bool dxValid;
+		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
+		private DateTime lastRenderSkipUtc = DateTime.MinValue;
 
 		// Level rendering cache
 		private struct LevelInfo
@@ -223,7 +256,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ONRegionOpacity = 15; IBRegionOpacity = 10;
 
 				// Label settings
-				LabelFontName = "Segoe UI"; LabelFontSize = 10; LabelXOffset = 20;
+				LabelFontName = "Segoe UI"; LabelFontSize = 10; LabelXOffset = 20; LabelOpacity = 100;
 
 				// Colors
 				ONColor = WpfBrushes.SteelBlue; ONVAColor = WpfBrushes.SlateBlue;
@@ -247,19 +280,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// Line settings
 				MainLineWidth = 2; SecondaryLineWidth = 1; VALineWidth = 1;
 				MainDashStyle = MgiDashStyle.Solid; VADashStyle = MgiDashStyle.Dash;
+				LineOpacity = 100;
+				DrawBehindCandles = false;
 				EdgeLineLength = 160;
 				ShowIBExtensions = true;
 				ShowIBFullExtensions = true;
 				ShowIBHalfExtensions = true;
 				ShowIBQuarterExtensions = true;
-				
+
 				ShowSessionLine = false;
 				AbbreviateLabels = true;
 				ShowPriceInLabel = false;
 
 				UseLatestCloseForPdc = true;
 				PriorDayCloseMode = MgiPdcMode.Globex5PM; // default: latest close before the 5 PM maintenance break
-				
+
 				ShowRthMid = true; RthMidColor = WpfBrushes.DarkGoldenrod;
 				ShowEthMid = true; EthMidColor = WpfBrushes.DarkSlateBlue;
 
@@ -288,6 +323,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else if (State == State.Configure)
 			{
 				AddDataSeries(BarsPeriodType.Minute, 1);
+				AddDataSeries(BarsPeriodType.Second, 30);
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -298,9 +334,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				rthHistoryByDate = new Dictionary<DateTime, LevelSet>();
 				levelCache = new LevelInfo[LVL_COUNT];
 				orComplete = false; ibComplete = false;
-				
+
 				rthMidSeries = new Series<double>(this);
 				ethMidSeries = new Series<double>(this);
+			}
+			else if (State == State.Historical)
+			{
+				if (DrawBehindCandles && ChartControl != null)
+					SetZOrder(-1000);
 			}
 			else if (State == State.Terminated)
 			{
@@ -390,9 +431,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnBarUpdate()
 		{
-			if (BarsInProgress != 1)
+			if (BarsInProgress == 0)
 			{
-				if (BarsInProgress == 0 && CurrentBars[0] >= 0)
+				if (CurrentBars[0] >= 0)
 				{
 					UpdatePrimaryOpeningRanges(Times[0][0], Highs[0][0], Lows[0][0], CurrentBars[0]);
 					UpdatePrimaryLevelAnchors(Times[0][0], Highs[0][0], Lows[0][0], CurrentBars[0]);
@@ -401,6 +442,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				return;
 			}
+			if (BarsInProgress == 2)
+			{
+				if (CurrentBars.Length > 2 && CurrentBars[2] >= 0)
+				{
+					UpdateThirtySecondOpeningRange(Times[2][0], Highs[2][0], Lows[2][0]);
+					BuildLevelCache();
+				}
+				return;
+			}
+			if (BarsInProgress != 1)
+				return;
 
 			if (CurrentBars[1] < 1) return;
 			int barIndex = CurrentBars[1];
@@ -483,7 +535,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						halfGap = priorRTH.Close + gap * 0.5;
 				}
 			}
-			
+
 			// Determine session state
 			inRTH = isRthBar;
 
@@ -681,7 +733,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			BeginRthRangeSession(rthAnchorTime, primaryIdx);
 
 			TimeSpan orEnd = RTHOpenTime + GetORDurationTimeSpan();
-			if (!orComplete)
+			if (!orComplete && ORDuration != MgiORDuration.Sec30)
 			{
 				if (IsInOpeningWindow(tod, RTHOpenTime, orEnd))
 					UpdateOrRange(time, high, low, primaryIdx);
@@ -710,6 +762,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 					ibComplete = true;
 				}
+			}
+		}
+
+		private void UpdateThirtySecondOpeningRange(DateTime time, double high, double low)
+		{
+			if (ORDuration != MgiORDuration.Sec30 || double.IsNaN(high) || double.IsNaN(low))
+				return;
+
+			TimeSpan tod = time.TimeOfDay;
+			if (!IsInTimeWindow(tod, RTHOpenTime, RTHCloseTime))
+				return;
+
+			DateTime rthAnchorTime = GetSessionOpenDateTime(time, RTHOpenTime);
+			BeginRthRangeSession(rthAnchorTime, -1);
+
+			TimeSpan orEnd = RTHOpenTime + GetORDurationTimeSpan();
+			if (orComplete)
+				return;
+
+			if (IsInOpeningWindow(tod, RTHOpenTime, orEnd))
+				UpdateOrRange(time, high, low, -1);
+
+			if (tod >= orEnd)
+			{
+				if (curSessionInfo != null)
+				{
+					curSessionInfo.OrEndIdx = -1;
+					curSessionInfo.OrEndTime = rthAnchorTime + GetORDurationTimeSpan();
+				}
+				orComplete = true;
 			}
 		}
 
@@ -1211,38 +1293,54 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			return Instrument != null ? Instrument.MasterInstrument.FormatPrice(p) : p.ToString("F2");
 		}
+
+		private float EstimateLabelWidth(string text)
+		{
+			if (string.IsNullOrEmpty(text))
+				return Math.Max(24f, LabelFontSize * 2f);
+
+			float width = 8f;
+			foreach (char c in text)
+				width += (c == ' ' || c == '.' || c == ':' || c == '-' ? 0.35f : 0.62f) * LabelFontSize;
+
+			return Math.Max(24f, Math.Min(240f, width));
+		}
 		#endregion
 
 		#region Rendering
 		protected override void OnRender(ChartControl cc, ChartScale cs)
 		{
-			base.OnRender(cc, cs);
-			if (cc == null || cs == null || ChartBars == null || levelCache == null) return;
-			EnsureDx();
-			if (!dxValid) return;
-			BuildLevelCache();
+			try
+			{
+				base.OnRender(cc, cs);
+				if (cc == null || cs == null || ChartBars == null || ChartPanel == null || RenderTarget == null || levelCache == null) return;
+				EnsureDx();
+				if (!dxValid || dxBrushes == null || dxStrokes == null) return;
+				BuildLevelCache();
 
-			float pT = ChartPanel.Y, pB = pT + ChartPanel.H, pL = ChartPanel.X;
-			float CR = ChartPanel.X + ChartPanel.W;
-			bool edgeMode = MgiStyle == MgiPlotStyle.Edge;
-			float edgeEndX = CR;
-			float edgeStartX = Math.Max(pL, edgeEndX - EdgeLineLength);
-			
-			SessionInfo si = curSessionInfo ?? sessionHistory.LastOrDefault();
-			int rthPrimaryIdx = si != null ? GetPrimaryBarIndex(si.RthOpenTime, si.RthOpenIdx) : -1;
-			int ethPrimaryIdx = si != null ? GetPrimaryBarIndex(si.EthOpenTime, si.EthOpenIdx) : -1;
+				float pT = ChartPanel.Y, pB = pT + ChartPanel.H, pL = ChartPanel.X;
+				float CR = ChartPanel.X + ChartPanel.W;
+				bool edgeMode = MgiStyle == MgiPlotStyle.Edge;
+				float edgeEndX = CR;
+				float edgeStartX = Math.Max(pL, edgeEndX - EdgeLineLength);
 
-			float rthX = rthPrimaryIdx != -1 ? cc.GetXByBarIndex(ChartBars, rthPrimaryIdx) : -1;
-			float ethX = ethPrimaryIdx != -1 ? cc.GetXByBarIndex(ChartBars, ethPrimaryIdx) : -1;
-			float nowX = GetVisibleLevelEndX(cc, pL, CR);
-			bool priorRthOwnsRthSpace = IsAfterEthRollover();
+				SessionInfo si = curSessionInfo ?? sessionHistory.LastOrDefault();
+				int rthPrimaryIdx = si != null ? GetPrimaryBarIndex(si.RthOpenTime, si.RthOpenIdx) : -1;
+				int ethPrimaryIdx = si != null ? GetPrimaryBarIndex(si.EthOpenTime, si.EthOpenIdx) : -1;
 
-			var oldAA = RenderTarget.AntialiasMode;
-			RenderTarget.AntialiasMode = AntialiasMode.Aliased;
+				float rthX = rthPrimaryIdx != -1 ? cc.GetXByBarIndex(ChartBars, rthPrimaryIdx) : -1;
+				float ethX = ethPrimaryIdx != -1 ? cc.GetXByBarIndex(ChartBars, ethPrimaryIdx) : -1;
+				float nowX = GetVisibleLevelEndX(cc, pL, CR);
+				bool priorRthOwnsRthSpace = IsAfterEthRollover();
+
+				var oldAA = RenderTarget.AntialiasMode;
+				RenderTarget.AntialiasMode = AntialiasMode.Aliased;
+				try
+				{
 
 			// Vert line at session open (if reached)
 			if (ShowSessionLine && rthX > 0 && dxBrushes.Length > 16 && dxBrushes[16] != null)
-				RenderTarget.DrawLine(new Vector2(rthX, pT), new Vector2(rthX, pB), dxBrushes[16], 1f);
+				DrawLineWithOpacity(new Vector2(rthX, pT), new Vector2(rthX, pB), dxBrushes[16], 1f);
 
 			// Draw levels -- Pass 1: lines only, collect labels for stagger pass
 			var pendingLabels = ShowLabels && dxLabelFormat != null
@@ -1279,7 +1377,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				MgiDashStyle style = levelCache[i].StrokeIdx >= 0 ? (MgiDashStyle)levelCache[i].StrokeIdx : (isVA ? VADashStyle : MainDashStyle);
 				var stroke = GetStroke(style);
 
-				RenderTarget.DrawLine(new Vector2(sX, y), new Vector2(eX, y), dxBrushes[bi], w, stroke);
+				DrawLineWithOpacity(new Vector2(sX, y), new Vector2(eX, y), dxBrushes[bi], w, stroke);
 
 				// Collect label for Pass 2
 				float labelAnchorX = edgeMode ? sX + 4f - LabelXOffset : eX;
@@ -1337,14 +1435,38 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 					lastNaturalY = lbl.y;
 					lastDrawY = drawY;
-					float txtX = Math.Min(lbl.eX + LabelXOffset + samePriceCol * colStep, CR - 200f);
+					float labelWidth = EstimateLabelWidth(lbl.text);
+					float maxTxtX = Math.Max(pL, CR - labelWidth - 2f);
+					float txtX = lbl.eX + LabelXOffset + samePriceCol * colStep;
+					if (txtX > maxTxtX)
+						txtX = samePriceCol > 0 ? maxTxtX - samePriceCol * colStep : maxTxtX;
 					if (txtX < pL) txtX = pL;
-					var rect = new RectangleF(txtX, drawY - halfLabelHeight, 200, labelHeight);
-					RenderTarget.DrawText(lbl.text, dxLabelFormat, rect, dxBrushes[lbl.bi]);
+					float rectWidth = Math.Max(labelWidth + 4f, Math.Min(240f, CR - txtX));
+					var rect = new RectangleF(txtX, drawY - halfLabelHeight, rectWidth, labelHeight);
+					DrawTextWithOpacity(lbl.text, dxLabelFormat, rect, dxBrushes[lbl.bi]);
 				}
 			}
 
-			RenderTarget.AntialiasMode = oldAA;
+				}
+				finally
+				{
+					if (RenderTarget != null)
+						RenderTarget.AntialiasMode = oldAA;
+				}
+			}
+			catch (Exception ex)
+			{
+				DisposeDx();
+				PrintRenderSkip(ex);
+			}
+		}
+
+		private void PrintRenderSkip(Exception ex)
+		{
+			DateTime now = DateTime.UtcNow;
+			if ((now - lastRenderSkipUtc).TotalSeconds < 30) return;
+			lastRenderSkipUtc = now;
+			Print("OrcaMGIDaily: skipped one render frame: " + ex.Message);
 		}
 
 		private bool IsIBProjectionLevel(int idx)
@@ -1381,7 +1503,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (startX < panelLeft || startX < 0) startX = panelLeft;
 
 			float y = cs.GetYByValue(price);
-			RenderTarget.DrawLine(new Vector2(startX, y), new Vector2(endX, y), dxBrushes[brushIdx], width, GetStroke(MgiDashStyle.Solid));
+			DrawLineWithOpacity(new Vector2(startX, y), new Vector2(endX, y), dxBrushes[brushIdx], width, GetStroke(MgiDashStyle.Solid));
 			if (ShowLabels && !string.IsNullOrEmpty(label))
 				pendingLabels?.Add((y, endX, brushIdx, label));
 		}
@@ -1602,7 +1724,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float x = ChartControl.GetXByBarIndex(ChartBars, i);
 				float y = cs.GetYByValue(val);
 				if (lastX != -1)
-					RenderTarget.DrawLine(new Vector2(lastX, lastY), new Vector2(x, y), dxBrushes[brushIdx], width, stroke);
+					DrawLineWithOpacity(new Vector2(lastX, lastY), new Vector2(x, y), dxBrushes[brushIdx], width, stroke);
 				lastX = x; lastY = y;
 				lastValidY = y;
 			}
@@ -1640,10 +1762,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (CrossedTime(pt.TimeOfDay, t.TimeOfDay, RTHOpenTime) || CrossedTime(pt.TimeOfDay, t.TimeOfDay, RTHCloseTime))
 				{
 					float x = cc.GetXByBarIndex(ChartBars, i);
-					float prevOp = dxBrushes[15].Opacity;
-					dxBrushes[15].Opacity = 0.3f;
-					RenderTarget.DrawLine(new Vector2(x, panelTop), new Vector2(x, panelBot), dxBrushes[15], 1f);
-					dxBrushes[15].Opacity = prevOp;
+					DrawLineWithOpacity(new Vector2(x, panelTop), new Vector2(x, panelBot), dxBrushes[15], 1f, null, 0.3f);
 				}
 			}
 		}
@@ -1653,6 +1772,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SharpDX.Direct2D1.StrokeStyle GetStroke(MgiDashStyle ds)
 		{
 			int idx = (int)ds;
+			if (dxStrokes == null || idx < 0) return null;
 			if (idx < dxStrokes.Length && dxStrokes[idx] != null) return dxStrokes[idx];
 			return null;
 		}
@@ -1663,9 +1783,48 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return new Color4(c.R / 255f, c.G / 255f, c.B / 255f, (c.A / 255f) * alpha);
 		}
 
+		private float OpacityPercent(int opacity)
+		{
+			return Math.Max(0, Math.Min(100, opacity)) / 100f;
+		}
+
+		private void DrawLineWithOpacity(Vector2 start, Vector2 end, DxSolidBrush brush, float width, SharpDX.Direct2D1.StrokeStyle stroke = null, float opacityMultiplier = 1f)
+		{
+			if (brush == null) return;
+			float prevOp = brush.Opacity;
+			brush.Opacity = OpacityPercent(LineOpacity) * Math.Max(0f, Math.Min(1f, opacityMultiplier));
+			try
+			{
+				RenderTarget.DrawLine(start, end, brush, width, stroke);
+			}
+			finally
+			{
+				brush.Opacity = prevOp;
+			}
+		}
+
+		private void DrawTextWithOpacity(string text, SharpDX.DirectWrite.TextFormat format, RectangleF rect, DxSolidBrush brush)
+		{
+			if (brush == null || format == null) return;
+			float prevOp = brush.Opacity;
+			brush.Opacity = OpacityPercent(LabelOpacity);
+			try
+			{
+				RenderTarget.DrawText(text, format, rect, brush);
+			}
+			finally
+			{
+				brush.Opacity = prevOp;
+			}
+		}
+
 		private void EnsureDx()
 		{
-			if (dxValid || RenderTarget == null) return;
+			if (RenderTarget == null) return;
+			IntPtr currentTarget = RenderTarget.NativePointer;
+			if (dxValid && dxResourceRenderTarget == currentTarget) return;
+			if (dxValid || dxResourceRenderTarget != IntPtr.Zero)
+				DisposeDx();
 			try
 			{
 				WpfBrush[] colorMap = { ONColor, ONVAColor, ORColor, IBColor, CurRTHColor, CurETHColor,
@@ -1689,9 +1848,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					LabelFontName, FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize)
 				{ TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading, ParagraphAlignment = ParagraphAlignment.Center };
 
+				dxResourceRenderTarget = currentTarget;
 				dxValid = true;
 			}
-			catch { dxValid = false; }
+			catch
+			{
+				DisposeDx();
+			}
 		}
 
 		private void DisposeDx()
@@ -1706,6 +1869,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			catch { }
 			dxBrushes = null; dxStrokes = null; dxLabelFormat = null; dxLabelBrush = null; dxRegionBrush = null;
+			dxResourceRenderTarget = IntPtr.Zero;
 			dxValid = false;
 		}
 
@@ -1899,18 +2063,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// --- 17. Labels ---
 		[Display(Name="Show Labels", Description="Show price labels next to session breaks", Order=1, GroupName="17. Labels")]
 		public bool ShowLabels { get; set; }
-		[NinjaScriptProperty][Display(Name="Font Name", Order=2, GroupName="17. Labels")]
+		[NinjaScriptProperty]
+		[TypeConverter(typeof(OrcaMgiFontFamilyConverter))]
+		[Display(Name="Font Name", Order=2, GroupName="17. Labels")]
 		public string LabelFontName { get; set; }
 		[Range(6,24)][Display(Name="Font Size", Order=3, GroupName="17. Labels")]
 		public int LabelFontSize { get; set; }
 		[XmlIgnore][Display(Name="Label Color", Order=4, GroupName="17. Labels")]
 		public WpfBrush LabelColor { get; set; }
 		[Browsable(false)] public string LabelColorS { get { return Serialize.BrushToString(LabelColor); } set { LabelColor = Serialize.StringToBrush(value); } }
-		[Range(0, 100)][Display(Name="Label X Offset", Order=5, GroupName="17. Labels")]
+		[Range(0,100)][Display(Name="Label Opacity", Order=5, GroupName="17. Labels")]
+		public int LabelOpacity { get; set; }
+		[Range(0, 100)][Display(Name="Label X Offset", Order=6, GroupName="17. Labels")]
 		public int LabelXOffset { get; set; }
-		[Display(Name="Abbreviate Labels", Order=6, GroupName="17. Labels")]
+		[Display(Name="Abbreviate Labels", Order=7, GroupName="17. Labels")]
 		public bool AbbreviateLabels { get; set; }
-		[Display(Name="Show Price in Label", Order=7, GroupName="17. Labels")]
+		[Display(Name="Show Price in Label", Order=8, GroupName="17. Labels")]
 		public bool ShowPriceInLabel { get; set; }
 
 		// --- 18. Plot Style ---
@@ -1935,7 +2103,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public MgiDashStyle MainDashStyle { get; set; }
 		[Display(Name="VA Dash Style", Order=9, GroupName="18. Plot Style")]
 		public MgiDashStyle VADashStyle { get; set; }
-		[Range(50,100)][Display(Name="Value Area %", Description="Percentage for VA calculation (default 70)", Order=10, GroupName="18. Plot Style")]
+		[Range(0,100)][Display(Name="Line Opacity", Order=10, GroupName="18. Plot Style")]
+		public int LineOpacity { get; set; }
+		[Display(Name="Draw Behind Candles", Description="Attempts to place MGI lines behind chart bars using NinjaTrader z-order.", Order=11, GroupName="18. Plot Style")]
+		public bool DrawBehindCandles { get; set; }
+		[Range(50,100)][Display(Name="Value Area %", Description="Percentage for VA calculation (default 70)", Order=12, GroupName="18. Plot Style")]
 		public int ValueAreaPct { get; set; }
 
 		// --- 19. Mid Levels ---
@@ -2011,3 +2183,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#endregion
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaMGIDaily[] cacheOrcaMGIDaily;
+		public OrcaMGIDaily OrcaMGIDaily(TimeSpan rTHOpenTime, TimeSpan rTHCloseTime, TimeSpan eTHOpenTime, MgiORDuration oRDuration, MgiPdcMode priorDayCloseMode, bool useLatestCloseForPdc, string labelFontName, MgiPlotStyle mgiStyle, int edgeLineLength)
+		{
+			return OrcaMGIDaily(Input, rTHOpenTime, rTHCloseTime, eTHOpenTime, oRDuration, priorDayCloseMode, useLatestCloseForPdc, labelFontName, mgiStyle, edgeLineLength);
+		}
+
+		public OrcaMGIDaily OrcaMGIDaily(ISeries<double> input, TimeSpan rTHOpenTime, TimeSpan rTHCloseTime, TimeSpan eTHOpenTime, MgiORDuration oRDuration, MgiPdcMode priorDayCloseMode, bool useLatestCloseForPdc, string labelFontName, MgiPlotStyle mgiStyle, int edgeLineLength)
+		{
+			if (cacheOrcaMGIDaily != null)
+				for (int idx = 0; idx < cacheOrcaMGIDaily.Length; idx++)
+					if (cacheOrcaMGIDaily[idx] != null && cacheOrcaMGIDaily[idx].RTHOpenTime == rTHOpenTime && cacheOrcaMGIDaily[idx].RTHCloseTime == rTHCloseTime && cacheOrcaMGIDaily[idx].ETHOpenTime == eTHOpenTime && cacheOrcaMGIDaily[idx].ORDuration == oRDuration && cacheOrcaMGIDaily[idx].PriorDayCloseMode == priorDayCloseMode && cacheOrcaMGIDaily[idx].UseLatestCloseForPdc == useLatestCloseForPdc && cacheOrcaMGIDaily[idx].LabelFontName == labelFontName && cacheOrcaMGIDaily[idx].MgiStyle == mgiStyle && cacheOrcaMGIDaily[idx].EdgeLineLength == edgeLineLength && cacheOrcaMGIDaily[idx].EqualsInput(input))
+						return cacheOrcaMGIDaily[idx];
+			return CacheIndicator<OrcaMGIDaily>(new OrcaMGIDaily(){ RTHOpenTime = rTHOpenTime, RTHCloseTime = rTHCloseTime, ETHOpenTime = eTHOpenTime, ORDuration = oRDuration, PriorDayCloseMode = priorDayCloseMode, UseLatestCloseForPdc = useLatestCloseForPdc, LabelFontName = labelFontName, MgiStyle = mgiStyle, EdgeLineLength = edgeLineLength }, input, ref cacheOrcaMGIDaily);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaMGIDaily OrcaMGIDaily(TimeSpan rTHOpenTime, TimeSpan rTHCloseTime, TimeSpan eTHOpenTime, MgiORDuration oRDuration, MgiPdcMode priorDayCloseMode, bool useLatestCloseForPdc, string labelFontName, MgiPlotStyle mgiStyle, int edgeLineLength)
+		{
+			return indicator.OrcaMGIDaily(Input, rTHOpenTime, rTHCloseTime, eTHOpenTime, oRDuration, priorDayCloseMode, useLatestCloseForPdc, labelFontName, mgiStyle, edgeLineLength);
+		}
+
+		public Indicators.OrcaMGIDaily OrcaMGIDaily(ISeries<double> input , TimeSpan rTHOpenTime, TimeSpan rTHCloseTime, TimeSpan eTHOpenTime, MgiORDuration oRDuration, MgiPdcMode priorDayCloseMode, bool useLatestCloseForPdc, string labelFontName, MgiPlotStyle mgiStyle, int edgeLineLength)
+		{
+			return indicator.OrcaMGIDaily(input, rTHOpenTime, rTHCloseTime, eTHOpenTime, oRDuration, priorDayCloseMode, useLatestCloseForPdc, labelFontName, mgiStyle, edgeLineLength);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaMGIDaily OrcaMGIDaily(TimeSpan rTHOpenTime, TimeSpan rTHCloseTime, TimeSpan eTHOpenTime, MgiORDuration oRDuration, MgiPdcMode priorDayCloseMode, bool useLatestCloseForPdc, string labelFontName, MgiPlotStyle mgiStyle, int edgeLineLength)
+		{
+			return indicator.OrcaMGIDaily(Input, rTHOpenTime, rTHCloseTime, eTHOpenTime, oRDuration, priorDayCloseMode, useLatestCloseForPdc, labelFontName, mgiStyle, edgeLineLength);
+		}
+
+		public Indicators.OrcaMGIDaily OrcaMGIDaily(ISeries<double> input , TimeSpan rTHOpenTime, TimeSpan rTHCloseTime, TimeSpan eTHOpenTime, MgiORDuration oRDuration, MgiPdcMode priorDayCloseMode, bool useLatestCloseForPdc, string labelFontName, MgiPlotStyle mgiStyle, int edgeLineLength)
+		{
+			return indicator.OrcaMGIDaily(input, rTHOpenTime, rTHCloseTime, eTHOpenTime, oRDuration, priorDayCloseMode, useLatestCloseForPdc, labelFontName, mgiStyle, edgeLineLength);
+		}
+	}
+}
+
+#endregion

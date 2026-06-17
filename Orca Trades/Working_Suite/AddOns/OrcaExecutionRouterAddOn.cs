@@ -70,6 +70,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 	{
 		public bool Enabled { get; set; }
 		public bool RouteNqToMnq { get; set; } = true;
+		public bool RouteEsToMes { get; set; } = true;
 		public string PositionColor { get; set; } = "#FF1E90FF";
 		public string ShortPositionColor { get; set; } = "#FFE03A52";
 		public string BuyColor { get; set; } = "#FF32CD32";
@@ -98,6 +99,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				return new OrcaExecutionRouterSettings {
 					Enabled = settings.Enabled,
 					RouteNqToMnq = settings.RouteNqToMnq,
+					RouteEsToMes = settings.RouteEsToMes,
 					PositionColor = settings.PositionColor,
 					ShortPositionColor = settings.ShortPositionColor,
 					BuyColor = settings.BuyColor,
@@ -125,6 +127,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				settings = new OrcaExecutionRouterSettings {
 					Enabled = newSettings.Enabled,
 					RouteNqToMnq = newSettings.RouteNqToMnq,
+					RouteEsToMes = newSettings.RouteEsToMes,
 					PositionColor = string.IsNullOrWhiteSpace(newSettings.PositionColor) ? "#FF1E90FF" : newSettings.PositionColor,
 					ShortPositionColor = string.IsNullOrWhiteSpace(newSettings.ShortPositionColor) ? "#FFE03A52" : newSettings.ShortPositionColor,
 					BuyColor = string.IsNullOrWhiteSpace(newSettings.BuyColor) ? "#FF32CD32" : newSettings.BuyColor,
@@ -177,15 +180,22 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public static Instrument ResolveExecutionInstrument(Instrument chartInstrument, Instrument fallbackInstrument)
 		{
 			EnsureLoaded();
-			if (chartInstrument == null)
+			Instrument sourceInstrument = chartInstrument ?? fallbackInstrument;
+			if (sourceInstrument == null)
 				return fallbackInstrument;
 
 			lock (Sync) {
 				if (!settings.Enabled)
-					return fallbackInstrument ?? chartInstrument;
+					return chartInstrument ?? fallbackInstrument;
 
-				if (settings.RouteNqToMnq && string.Equals(GetRoot(chartInstrument), "NQ", StringComparison.OrdinalIgnoreCase)) {
-					Instrument micro = GetMappedInstrument(chartInstrument, "MNQ");
+				if (settings.RouteNqToMnq && string.Equals(GetRoot(sourceInstrument), "NQ", StringComparison.OrdinalIgnoreCase)) {
+					Instrument micro = GetMappedInstrument(sourceInstrument, "MNQ");
+					if (micro != null)
+						return micro;
+				}
+
+				if (settings.RouteEsToMes && string.Equals(GetRoot(sourceInstrument), "ES", StringComparison.OrdinalIgnoreCase)) {
+					Instrument micro = GetMappedInstrument(sourceInstrument, "MES");
 					if (micro != null)
 						return micro;
 				}
@@ -261,6 +271,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private static OrcaExecutionRouterWindow instance;
 		private readonly CheckBox enabledBox;
 		private readonly CheckBox nqToMnqBox;
+		private readonly CheckBox esToMesBox;
 		private readonly TextBlock statusText;
 		private readonly TextBox positionColorBox;
 		private readonly TextBox shortPositionColorBox;
@@ -305,11 +316,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 			nqToMnqBox = new CheckBox {
 				Content = "Route NQ chart orders to MNQ",
+				Margin = new Thickness(0, 0, 0, 8),
+				Foreground = Brushes.GhostWhite
+			};
+			esToMesBox = new CheckBox {
+				Content = "Route ES chart orders to MES",
 				Margin = new Thickness(0, 0, 0, 14),
 				Foreground = Brushes.GhostWhite
 			};
 			root.Children.Add(enabledBox);
 			root.Children.Add(nqToMnqBox);
+			root.Children.Add(esToMesBox);
 
 			root.Children.Add(new TextBlock {
 				Text = "Overlay Visuals",
@@ -351,6 +368,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			Content = scroll;
 			LoadSettings();
+			enabledBox.Checked += OnRoutingToggleChanged;
+			enabledBox.Unchecked += OnRoutingToggleChanged;
+			nqToMnqBox.Checked += OnRoutingToggleChanged;
+			nqToMnqBox.Unchecked += OnRoutingToggleChanged;
+			esToMesBox.Checked += OnRoutingToggleChanged;
+			esToMesBox.Unchecked += OnRoutingToggleChanged;
 			Closed += (s, e) => instance = null;
 		}
 
@@ -387,6 +410,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			OrcaExecutionRouterSettings settings = OrcaExecutionRouter.GetSettings();
 			enabledBox.IsChecked = settings.Enabled;
 			nqToMnqBox.IsChecked = settings.RouteNqToMnq;
+			esToMesBox.IsChecked = settings.RouteEsToMes;
 			positionColorBox.Text = settings.PositionColor;
 			shortPositionColorBox.Text = settings.ShortPositionColor;
 			buyColorBox.Text = settings.BuyColor;
@@ -409,6 +433,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			OrcaExecutionRouter.SaveSettings(new OrcaExecutionRouterSettings {
 				Enabled = enabledBox.IsChecked == true,
 				RouteNqToMnq = nqToMnqBox.IsChecked == true,
+				RouteEsToMes = esToMesBox.IsChecked == true,
 				PositionColor = positionColorBox.Text,
 				ShortPositionColor = shortPositionColorBox.Text,
 				BuyColor = buyColorBox.Text,
@@ -427,6 +452,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 			UpdateStatus();
 		}
 
+		private void OnRoutingToggleChanged(object sender, RoutedEventArgs e)
+		{
+			Save();
+		}
+
 		private double ParseDouble(string text, double fallback)
 		{
 			double value;
@@ -435,8 +465,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private void UpdateStatus()
 		{
-			statusText.Text = enabledBox.IsChecked == true && nqToMnqBox.IsChecked == true
-				? "Enabled: Orca Risk Manager will use NQ chart prices but submit and size orders on the matching MNQ contract."
+			statusText.Text = enabledBox.IsChecked == true && (nqToMnqBox.IsChecked == true || esToMesBox.IsChecked == true)
+				? "Enabled: Orca Risk Manager will use chart prices but submit and size routed orders on the matching micro contract."
 				: "Disabled: Orca Risk Manager uses its normal chart/Chart Trader instrument behavior.";
 		}
 	}

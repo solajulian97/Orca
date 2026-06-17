@@ -28,6 +28,11 @@ using WpfBrushes = System.Windows.Media.Brushes;
 namespace NinjaTrader.NinjaScript.Indicators
 {
 	internal enum OrcaLegDirection { Unknown = 0, Up = 1, Down = -1 }
+	public enum LegProfileTradeSourceMode
+	{
+		SecondaryTickSeries = 0,
+		TickReplayLastEvents = 1
+	}
 
 	public class OrcaLegtoLegProfile : Indicator
 	{
@@ -58,15 +63,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double lastBid = double.NaN;
 		private double lastAsk = double.NaN;
 		private double prevLast = double.NaN;
+		private int lastDirection;
 
 		private TextFormat textFormat;
+		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
 		private SolidColorBrush posBrushDx, negBrushDx, textBrushDx, negativeTextBrushDx, volBrushDx, labelBgBrushDx, legBoxBrushDx;
 		private SolidColorBrush pocBrushDx, vaVolBrushDx, vaLineBrushDx;
 		private StrokeStyle vaLineStrokeDx;
 		private SolidColorBrush[] volGradientBrushes;
 		private SolidColorBrush[] vaGradientBrushes;
+		private SolidColorBrush[] positiveDeltaIntensityBrushes;
+		private SolidColorBrush[] negativeDeltaIntensityBrushes;
 		private int lastBuiltGradientSteps = -1;
 		private int lastBuiltVAGradientSteps = -1;
+		private int lastBuiltDeltaIntensitySteps = -1;
+		private float lastBuiltDeltaIntensityMinOpacity = -1f;
+		private float lastBuiltDeltaIntensityMaxOpacity = -1f;
+		private DateTime lastRenderSkipUtc = DateTime.MinValue;
+		private int lastAppliedZOrder = int.MinValue;
 		private Dictionary<string, float> textWidthCache = new Dictionary<string, float>();
 
 		protected override void OnStateChange()
@@ -90,6 +104,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				UseDynamicAggregation = false;
 				DynamicAggregationMultiplier = 1.0;
 				DeltaDynamicRowMinPixels = 10;
+				DynamicDeltaMinCompression = 1;
+				DynamicDeltaMaxCompression = 100;
+				TradeSourceMode = LegProfileTradeSourceMode.SecondaryTickSeries;
 				VolumeTickCompression = 6;
 				DeltaTickCompression = 6;
 				VolumeProfileWidthPx = 150;
@@ -99,6 +116,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RightOffsetPx = 60;
 				ProfileSeparationPx = 20;
 				ProfileBarSpacingPx = 0;
+				DrawBehindCandles = false;
 				ShowVolume = true;
 				ShowDelta = true;
 				ShowPastDelta = true;
@@ -109,6 +127,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowDeltaLabelBackground = true;
 				VolumeOpacity = 0.6f;
 				DeltaOpacity = 0.85f;
+				UseDeltaIntensityColoring = true;
+				DeltaIntensityMinOpacity = 0.35f;
 
 				PositiveBrush = WpfBrushes.Lime;
 				NegativeBrush = WpfBrushes.Red;
@@ -135,18 +155,38 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			else if (State == State.Configure)
 			{
-				AddDataSeries(BarsPeriodType.Tick, 1);
+				if (TradeSourceMode == LegProfileTradeSourceMode.SecondaryTickSeries)
+					AddDataSeries(BarsPeriodType.Tick, 1);
 				currentTracker = new LegTracker(this, ReversalTicks, AtrMultiplier);
 				pastTracker = new LegTracker(this, PastReversalTicks > 0 ? PastReversalTicks : ReversalTicks, PastAtrMultiplier);
 			}
 			else if (State == State.DataLoaded)
 			{
+				lastBid = double.NaN;
+				lastAsk = double.NaN;
+				prevLast = double.NaN;
+				lastDirection = 0;
 				if (UseAtrReversal)
 				{
 					atrIndicator = ATR(AtrPeriod);
 				}
 			}
+			else if (State == State.Historical)
+			{
+				ApplyProfileZOrder();
+			}
 			else if (State == State.Terminated) DisposeDx();
+		}
+
+		private void ApplyProfileZOrder()
+		{
+			if (ChartControl == null) return;
+
+			int desiredZOrder = DrawBehindCandles ? -1000 : 0;
+			if (lastAppliedZOrder == desiredZOrder) return;
+
+			SetZOrder(desiredZOrder);
+			lastAppliedZOrder = desiredZOrder;
 		}
 
 		private void DisposeDx()
@@ -167,6 +207,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				vaLineStrokeDx?.Dispose();
 				if (volGradientBrushes != null) foreach (var b in volGradientBrushes) b?.Dispose();
 				if (vaGradientBrushes != null) foreach (var b in vaGradientBrushes) b?.Dispose();
+				if (positiveDeltaIntensityBrushes != null) foreach (var b in positiveDeltaIntensityBrushes) b?.Dispose();
+				if (negativeDeltaIntensityBrushes != null) foreach (var b in negativeDeltaIntensityBrushes) b?.Dispose();
 			}
 			catch { }
 			finally
@@ -175,7 +217,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				volBrushDx = null; labelBgBrushDx = null; legBoxBrushDx = null;
 				pocBrushDx = null; vaVolBrushDx = null; vaLineBrushDx = null; vaLineStrokeDx = null;
 				volGradientBrushes = null; vaGradientBrushes = null;
+				positiveDeltaIntensityBrushes = null; negativeDeltaIntensityBrushes = null;
+				dxResourceRenderTarget = IntPtr.Zero;
 				lastBuiltGradientSteps = -1; lastBuiltVAGradientSteps = -1;
+				lastBuiltDeltaIntensitySteps = -1; lastBuiltDeltaIntensityMinOpacity = -1f; lastBuiltDeltaIntensityMaxOpacity = -1f;
 				textWidthCache.Clear();
 			}
 		}
@@ -188,42 +233,130 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnMarketData(MarketDataEventArgs e)
 		{
-			if (e.MarketDataType == MarketDataType.Bid) lastBid = e.Price;
-			else if (e.MarketDataType == MarketDataType.Ask) lastAsk = e.Price;
+			if (e == null)
+				return;
+
+			if (e.MarketDataType == MarketDataType.Bid)
+				lastBid = e.Price;
+			else if (e.MarketDataType == MarketDataType.Ask)
+				lastAsk = e.Price;
+			else if (e.MarketDataType == MarketDataType.Last)
+			{
+				if (e.Ask > 0 && !double.IsNaN(e.Ask))
+					lastAsk = e.Ask;
+				if (e.Bid > 0 && !double.IsNaN(e.Bid))
+					lastBid = e.Bid;
+
+				if (TradeSourceMode == LegProfileTradeSourceMode.TickReplayLastEvents)
+				{
+					DateTime tradeTime = e.Time == DateTime.MinValue ? GetCurrentPrimaryTime() : e.Time;
+					ProcessTradeEvent(e.Price, NormalizeTradeVolume(e.Volume), tradeTime);
+				}
+			}
 		}
 
 		protected override void OnBarUpdate()
 		{
 			if (BarsInProgress == 1)
 			{
-				if (CurrentBar < 1) return;
-				double last = Close[0];
-				long vol = (long)Volume[0];
-				DateTime time = Time[0];
-				int primaryBarIndex = Math.Max(0, BarsArray[0].Count - 1);
-
-				long signedVol = 0;
-				if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
-				{
-					if (last >= lastAsk) signedVol = +vol;
-					else if (last <= lastBid) signedVol = -vol;
-					else if (!double.IsNaN(prevLast)) signedVol = (last > prevLast) ? +vol : (last < prevLast ? -vol : 0);
-				}
-				else if (!double.IsNaN(prevLast)) signedVol = (last > prevLast) ? +vol : (last < prevLast ? -vol : 0);
-				prevLast = last;
-
-				if (vol > 0)
-				{
-					currentTracker.ProcessBarUpdate(last, vol, signedVol, time, primaryBarIndex);
-					pastTracker.ProcessBarUpdate(last, vol, signedVol, time, primaryBarIndex);
-					// Removed ForceRefresh() to fix UI Thread lagging
-				}
+				ProcessSecondaryTickSeriesEvent();
+				// Removed ForceRefresh() to fix UI Thread lagging
 			}
 			else if (BarsInProgress == 0)
 			{
 				if (currentTracker?.CurrentLeg != null && CurrentBar > 0) currentTracker.CurrentLeg.EndIndex = CurrentBar;
 				if (pastTracker?.CurrentLeg != null && CurrentBar > 0) pastTracker.CurrentLeg.EndIndex = CurrentBar;
 			}
+		}
+
+		private void ProcessSecondaryTickSeriesEvent()
+		{
+			if (TradeSourceMode != LegProfileTradeSourceMode.SecondaryTickSeries)
+				return;
+
+			if (BarsArray == null || BarsArray.Length < 2 || CurrentBars == null || CurrentBars.Length < 2 || CurrentBars[1] < 0)
+				return;
+
+			ProcessTradeEvent(Closes[1][0], NormalizeTradeVolume((long)Volumes[1][0]), Times[1][0]);
+		}
+
+		private DateTime GetCurrentPrimaryTime()
+		{
+			try
+			{
+				if (Times != null && Times.Length > 0 && CurrentBar >= 0)
+					return Times[0][0];
+			}
+			catch { }
+
+			return DateTime.MinValue;
+		}
+
+		private long NormalizeTradeVolume(long volume)
+		{
+			if (volume <= 0)
+				return 0;
+
+			try
+			{
+				if (Instrument != null && Instrument.MasterInstrument != null && Instrument.MasterInstrument.InstrumentType == InstrumentType.CryptoCurrency)
+					return (long)Core.Globals.ToCryptocurrencyVolume(volume);
+			}
+			catch { }
+
+			return volume;
+		}
+
+		private void ProcessTradeEvent(double last, long vol, DateTime time)
+		{
+			if (BarsArray == null || BarsArray.Length < 1 || BarsArray[0] == null || time == DateTime.MinValue)
+				return;
+
+			if (vol <= 0 || double.IsNaN(last) || double.IsInfinity(last))
+				return;
+
+			int primaryBarIndex = BarsArray[0].GetBar(time);
+			if (primaryBarIndex < 0)
+				return;
+
+			long signedVol = ClassifySignedVolume(last, vol);
+			currentTracker?.ProcessBarUpdate(last, vol, signedVol, time, primaryBarIndex);
+			pastTracker?.ProcessBarUpdate(last, vol, signedVol, time, primaryBarIndex);
+		}
+
+		private long ClassifySignedVolume(double price, long volume)
+		{
+			if (volume <= 0)
+				return 0;
+
+			long signed = 0;
+			if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
+			{
+				if (price >= lastAsk)
+					signed = +volume;
+				else if (price <= lastBid)
+					signed = -volume;
+				else if (!double.IsNaN(prevLast))
+				{
+					if (price > prevLast) signed = +volume;
+					else if (price < prevLast) signed = -volume;
+					else signed = lastDirection * volume;
+				}
+			}
+			else if (!double.IsNaN(prevLast))
+			{
+				if (price > prevLast) signed = +volume;
+				else if (price < prevLast) signed = -volume;
+				else signed = lastDirection * volume;
+			}
+
+			prevLast = price;
+			if (signed > 0)
+				lastDirection = 1;
+			else if (signed < 0)
+				lastDirection = -1;
+
+			return signed;
 		}
 
 		private class LegTracker
@@ -397,11 +530,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
-			base.OnRender(chartControl, chartScale);
-			if (RenderTarget == null || chartControl == null || chartScale == null || currentTracker?.CurrentLeg == null) return;
-			NinjaTrader.Gui.Chart.ChartPanel panel;
-			if (!TryGetRenderPanel(chartControl, chartScale, out panel)) return;
-			EnsureDxResources();
+			try
+			{
+				ApplyProfileZOrder();
+				base.OnRender(chartControl, chartScale);
+				if (RenderTarget == null || chartControl == null || chartScale == null || currentTracker?.CurrentLeg == null) return;
+				NinjaTrader.Gui.Chart.ChartPanel panel;
+				if (!TryGetRenderPanel(chartControl, chartScale, out panel)) return;
+				EnsureDxResources();
 
 			int dynamicVolComp = VolumeTickCompression;
 			int dynamicDeltaComp = DeltaTickCompression;
@@ -425,6 +561,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				else if (desiredTicks <= 50) dynamicDeltaComp = 50;
 				else if (desiredTicks <= 100) dynamicDeltaComp = (int)(Math.Round(desiredTicks / 20.0) * 20); // 60, 80, 100
 				else dynamicDeltaComp = (int)(Math.Round(desiredTicks / 50.0) * 50);
+				dynamicDeltaComp = ClampDeltaCompression(dynamicDeltaComp);
 
 				if (lastDynamicDeltaComp > 0 && Math.Abs(dynamicDeltaComp - lastDynamicDeltaComp) < Math.Max(2, dynamicDeltaComp * 0.15))
 				{
@@ -436,20 +573,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			float rightmostEdge = chartControl.CanvasRight - RightOffsetPx - VolumeProfileWidthPx;
-			DrawLegProfiles(chartControl, chartScale, panel, currentTracker.CurrentLeg, rightmostEdge, VolumeProfileWidthPx, DeltaProfileWidthPx, true, false, dynamicVolComp, dynamicDeltaComp);
+				float rightmostEdge = chartControl.CanvasRight - RightOffsetPx - VolumeProfileWidthPx;
+				DrawLegProfiles(chartControl, chartScale, panel, currentTracker.CurrentLeg, rightmostEdge, VolumeProfileWidthPx, DeltaProfileWidthPx, true, false, dynamicVolComp, dynamicDeltaComp);
 
-			List<PriceLeg> completedLegs = GetCompletedLegSnapshot(pastTracker);
-			if (LegsToDisplay > 0 && completedLegs.Count > 0)
-			{
-				for (int i = completedLegs.Count - 1; i >= 0; i--)
+				List<PriceLeg> completedLegs = GetCompletedLegSnapshot(pastTracker);
+				if (LegsToDisplay > 0 && completedLegs.Count > 0)
 				{
-					var leg = completedLegs[i];
-					float originX;
-					if (!TryGetXByTime(chartControl, leg.StartTime, out originX)) continue;
-					DrawLegProfiles(chartControl, chartScale, panel, leg, originX, PastVolumeWidthPx, PastDeltaWidthPx, false, !ShowPastDelta, dynamicVolComp, dynamicDeltaComp);
+					for (int i = completedLegs.Count - 1; i >= 0; i--)
+					{
+						var leg = completedLegs[i];
+						float originX;
+						if (!TryGetXByTime(chartControl, leg.StartTime, out originX)) continue;
+						DrawLegProfiles(chartControl, chartScale, panel, leg, originX, PastVolumeWidthPx, PastDeltaWidthPx, false, !ShowPastDelta, dynamicVolComp, dynamicDeltaComp);
+					}
 				}
 			}
+			catch (Exception ex)
+			{
+				PrintRenderSkip(ex);
+			}
+		}
+
+		private void PrintRenderSkip(Exception ex)
+		{
+			DateTime now = DateTime.UtcNow;
+			if ((now - lastRenderSkipUtc).TotalSeconds < 30) return;
+			lastRenderSkipUtc = now;
+			Print("OrcaLegtoLegProfile: skipped one render frame: " + ex.Message);
+		}
+
+		private int ClampDeltaCompression(int compression)
+		{
+			int min = Math.Max(1, DynamicDeltaMinCompression);
+			int max = Math.Max(min, DynamicDeltaMaxCompression);
+			if (compression < min) return min;
+			if (compression > max) return max;
+			return compression;
 		}
 
 		private bool TryGetRenderPanel(ChartControl chartControl, ChartScale chartScale, out NinjaTrader.Gui.Chart.ChartPanel panel)
@@ -528,7 +687,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					foreach (var kvp in targetVolMap) { if (kvp.Value > maxVol) { maxVol = kvp.Value; pocPrice = kvp.Key; } }
 					if (maxVol > 0 && ShowValueArea && (ShowVAColor || ShowVALines))
 						haveVA = CalcValueArea(targetVolMap, pocPrice, out vahPrice, out valPrice);
-					
+
 					if (!isCurrent)
 					{
 						leg.MaxVol = maxVol; leg.POCPrice = pocPrice;
@@ -609,7 +768,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						if (w > 0.5f)
 						{
 							float barX = MirrorProfile ? spineX : spineX - w;
-							RenderTarget.FillRectangle(new RectangleF(barX, drawY, w, height), kvp.Value >= 0 ? posBrushDx : negBrushDx);
+							RenderTarget.FillRectangle(new RectangleF(barX, drawY, w, height), SelectDeltaBrush(kvp.Value, maxAbsDelta));
 							if (height >= DeltaLabelFontSize + 2)
 							{
 								string lbl = kvp.Value.ToString("+#;-#;0");
@@ -627,6 +786,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void EnsureDxResources()
 		{
+			if (RenderTarget == null) return;
+			IntPtr currentTarget = RenderTarget.NativePointer;
+			if (dxResourceRenderTarget != IntPtr.Zero && dxResourceRenderTarget != currentTarget)
+				DisposeDx();
+
 			if (posBrushDx == null) posBrushDx = new SolidColorBrush(RenderTarget, ToDx(PositiveBrush, DeltaOpacity));
 			if (negBrushDx == null) negBrushDx = new SolidColorBrush(RenderTarget, ToDx(NegativeBrush, DeltaOpacity));
 			if (textBrushDx == null) textBrushDx = new SolidColorBrush(RenderTarget, ToDx(TextBrush, 1f));
@@ -645,7 +809,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				vaLineStrokeDx = new StrokeStyle(RenderTarget.Factory, new StrokeStyleProperties { DashStyle = ds });
 			}
 			if (textFormat == null) textFormat = new TextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Bold, FontStyle.Normal, (float)DeltaLabelFontSize) { TextAlignment = SharpDX.DirectWrite.TextAlignment.Center, ParagraphAlignment = ParagraphAlignment.Center };
-			
+
 			int steps = Math.Max(2, GradientSteps);
 			if (UseGradient && (volGradientBrushes == null || lastBuiltGradientSteps != steps))
 			{
@@ -659,6 +823,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 				vaGradientBrushes = BuildGradientPalette(VABrush, steps);
 				lastBuiltVAGradientSteps = steps;
 			}
+			if (UseDeltaIntensityColoring && (positiveDeltaIntensityBrushes == null || negativeDeltaIntensityBrushes == null || lastBuiltDeltaIntensitySteps != steps || Math.Abs(lastBuiltDeltaIntensityMinOpacity - DeltaIntensityMinOpacity) > 0.0001f || Math.Abs(lastBuiltDeltaIntensityMaxOpacity - DeltaOpacity) > 0.0001f))
+			{
+				if (positiveDeltaIntensityBrushes != null) foreach (var b in positiveDeltaIntensityBrushes) b?.Dispose();
+				if (negativeDeltaIntensityBrushes != null) foreach (var b in negativeDeltaIntensityBrushes) b?.Dispose();
+				positiveDeltaIntensityBrushes = BuildDeltaIntensityPalette(PositiveBrush, steps, DeltaOpacity);
+				negativeDeltaIntensityBrushes = BuildDeltaIntensityPalette(NegativeBrush, steps, DeltaOpacity);
+				lastBuiltDeltaIntensitySteps = steps;
+				lastBuiltDeltaIntensityMinOpacity = DeltaIntensityMinOpacity;
+				lastBuiltDeltaIntensityMaxOpacity = DeltaOpacity;
+			}
+			else if (!UseDeltaIntensityColoring && (positiveDeltaIntensityBrushes != null || negativeDeltaIntensityBrushes != null))
+			{
+				if (positiveDeltaIntensityBrushes != null) foreach (var b in positiveDeltaIntensityBrushes) b?.Dispose();
+				if (negativeDeltaIntensityBrushes != null) foreach (var b in negativeDeltaIntensityBrushes) b?.Dispose();
+				positiveDeltaIntensityBrushes = null; negativeDeltaIntensityBrushes = null;
+				lastBuiltDeltaIntensitySteps = -1; lastBuiltDeltaIntensityMinOpacity = -1f; lastBuiltDeltaIntensityMaxOpacity = -1f;
+			}
+			dxResourceRenderTarget = currentTarget;
 		}
 
 		private SolidColorBrush[] BuildGradientPalette(WpfBrush baseBrush, int steps)
@@ -673,9 +855,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return palette;
 		}
 
+		private SolidColorBrush[] BuildDeltaIntensityPalette(WpfBrush baseBrush, int steps, float maxOpacity)
+		{
+			var baseColor = (baseBrush as WpfSolidColorBrush)?.Color ?? WpfColors.White;
+			var palette = new SolidColorBrush[steps];
+			float minOpacity = Math.Max(0f, Math.Min(1f, DeltaIntensityMinOpacity));
+			for (int i = 0; i < steps; i++)
+			{
+				float t = i / (float)(steps - 1);
+				float opacity = maxOpacity * (minOpacity + t * (1f - minOpacity));
+				palette[i] = new SolidColorBrush(RenderTarget, new Color4(baseColor.R / 255f, baseColor.G / 255f, baseColor.B / 255f, (baseColor.A / 255f) * opacity));
+			}
+			return palette;
+		}
+
+		private SolidColorBrush SelectDeltaBrush(long delta, long maxAbsDelta)
+		{
+			if (!UseDeltaIntensityColoring || maxAbsDelta <= 0)
+				return delta >= 0 ? posBrushDx : negBrushDx;
+
+			SolidColorBrush[] palette = delta >= 0 ? positiveDeltaIntensityBrushes : negativeDeltaIntensityBrushes;
+			if (palette == null || palette.Length == 0)
+				return delta >= 0 ? posBrushDx : negBrushDx;
+
+			double intensity = Math.Abs((double)delta) / Math.Max(1.0, (double)maxAbsDelta);
+			int index = (int)Math.Round(intensity * (palette.Length - 1));
+			if (index < 0) index = 0;
+			if (index >= palette.Length) index = palette.Length - 1;
+			return palette[index];
+		}
+
 		private float MeasureTextWidth(string text)
-		{ 
-			if (textFormat == null) return 0f; 
+		{
+			if (textFormat == null) return 0f;
 			if (textWidthCache.TryGetValue(text, out float width)) return width;
 			using (var l = new TextLayout(Core.Globals.DirectWriteFactory, text, textFormat, 1000, 100))
 			{
@@ -700,16 +912,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty] [Display(Name="Use Dynamic Aggregation", Description="Automatically adjust profile compression upon zoom", GroupName="Layout", Order=5)] public bool UseDynamicAggregation { get; set; }
 		[NinjaScriptProperty] [Range(0.1, 10.0)] [Display(Name="Dynamic Aggregation Multiplier", Description="Lower value = more granular blocks (fewer aggregated ticks)", GroupName="Layout", Order=6)] public double DynamicAggregationMultiplier { get; set; }
 		[NinjaScriptProperty] [Range(2, 40)] [Display(Name="Delta Dynamic Row Min Pixels", Description="Target minimum delta row height used before applying the aggregation multiplier", GroupName="Layout", Order=7)] public int DeltaDynamicRowMinPixels { get; set; }
-		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Vol Compression (Ticks)", GroupName="Layout", Order=8)] public int VolumeTickCompression { get; set; }
-		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Delta Compression (Ticks)", GroupName="Layout", Order=9)] public int DeltaTickCompression { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Vol Width", GroupName="Layout", Order=10)] public int VolumeProfileWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Delta Width", GroupName="Layout", Order=11)] public int DeltaProfileWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Vol Width", GroupName="Layout", Order=12)] public int PastVolumeWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Delta Width", GroupName="Layout", Order=13)] public int PastDeltaWidthPx { get; set; }
-		[NinjaScriptProperty] [Range(-500, 500)] [Display(Name="Right Offset (px)", GroupName="Layout", Order=14)] public int RightOffsetPx { get; set; }
-		[NinjaScriptProperty] [Range(0, 500)] [Display(Name="Separation", GroupName="Layout", Order=15)] public int ProfileSeparationPx { get; set; }
-		[NinjaScriptProperty] [Range(0, 10)] [Display(Name="Profile Bar Spacing", GroupName="Layout", Order=16)] public int ProfileBarSpacingPx { get; set; }
-		[NinjaScriptProperty] [Display(Name="Mirror Profile", Description="Flip the profile so the spine is on the right and bars point left", GroupName="Layout", Order=17)] public bool MirrorProfile { get; set; }
+		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Dynamic Delta Min Compression", GroupName="Layout", Order=8)] public int DynamicDeltaMinCompression { get; set; }
+		[NinjaScriptProperty] [Range(1, 500)] [Display(Name="Dynamic Delta Max Compression", GroupName="Layout", Order=9)] public int DynamicDeltaMaxCompression { get; set; }
+		[NinjaScriptProperty] [Display(Name="Trade Source Mode", Description="Secondary Tick Series is the legacy path; Tick Replay Last Events reads replayed Last event volume like CVP/Orca Prints.", GroupName="Data", Order=0)] public LegProfileTradeSourceMode TradeSourceMode { get; set; }
+		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Vol Compression (Ticks)", GroupName="Layout", Order=10)] public int VolumeTickCompression { get; set; }
+		[NinjaScriptProperty] [Range(1, 100)] [Display(Name="Delta Compression (Ticks)", GroupName="Layout", Order=11)] public int DeltaTickCompression { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Vol Width", GroupName="Layout", Order=12)] public int VolumeProfileWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Delta Width", GroupName="Layout", Order=13)] public int DeltaProfileWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Vol Width", GroupName="Layout", Order=14)] public int PastVolumeWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(10, 500)] [Display(Name="Past Delta Width", GroupName="Layout", Order=15)] public int PastDeltaWidthPx { get; set; }
+		[NinjaScriptProperty] [Range(-500, 500)] [Display(Name="Right Offset (px)", GroupName="Layout", Order=16)] public int RightOffsetPx { get; set; }
+		[NinjaScriptProperty] [Range(0, 500)] [Display(Name="Separation", GroupName="Layout", Order=17)] public int ProfileSeparationPx { get; set; }
+		[NinjaScriptProperty] [Range(0, 10)] [Display(Name="Profile Bar Spacing", GroupName="Layout", Order=18)] public int ProfileBarSpacingPx { get; set; }
+		[NinjaScriptProperty] [Display(Name="Mirror Profile", Description="Flip the profile so the spine is on the right and bars point left", GroupName="Layout", Order=19)] public bool MirrorProfile { get; set; }
+		[Display(Name="Draw Behind Candles", Description="Attempts to place the profile behind chart bars using NinjaTrader z-order.", GroupName="Layout", Order=20)] public bool DrawBehindCandles { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Volume", GroupName="Visibility", Order=14)] public bool ShowVolume { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Delta", GroupName="Visibility", Order=15)] public bool ShowDelta { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Past Delta", GroupName="Visibility", Order=16)] public bool ShowPastDelta { get; set; }
@@ -728,25 +944,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty] [Range(0.05, 1.0)] [Display(Name="Min Brightness", GroupName="Colors", Order=30)] public float MinBrightness { get; set; }
 		[NinjaScriptProperty] [Range(0.1, 1.0)] [Display(Name="Volume Opacity", GroupName="Colors", Order=31)] public float VolumeOpacity { get; set; }
 		[NinjaScriptProperty] [Range(0.1, 1.0)] [Display(Name="Delta Opacity", GroupName="Colors", Order=32)] public float DeltaOpacity { get; set; }
-		[XmlIgnore] [Display(Name="Pos Delta Color", GroupName="Colors", Order=33)] public WpfBrush PositiveBrush { get; set; }
+		[NinjaScriptProperty] [Display(Name="Use Delta Intensity Color", GroupName="Colors", Order=33)] public bool UseDeltaIntensityColoring { get; set; }
+		[NinjaScriptProperty] [Range(0.0, 1.0)] [Display(Name="Delta Intensity Min Opacity", GroupName="Colors", Order=34)] public float DeltaIntensityMinOpacity { get; set; }
+		[XmlIgnore] [Display(Name="Pos Delta Color", GroupName="Colors", Order=35)] public WpfBrush PositiveBrush { get; set; }
 		[Browsable(false)] public string PositiveBrushSerialize { get { return Serialize.BrushToString(PositiveBrush); } set { PositiveBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Neg Delta Color", GroupName="Colors", Order=34)] public WpfBrush NegativeBrush { get; set; }
+		[XmlIgnore] [Display(Name="Neg Delta Color", GroupName="Colors", Order=36)] public WpfBrush NegativeBrush { get; set; }
 		[Browsable(false)] public string NegativeBrushSerialize { get { return Serialize.BrushToString(NegativeBrush); } set { NegativeBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Vol Color", GroupName="Colors", Order=35)] public WpfBrush VolumeBrush { get; set; }
+		[XmlIgnore] [Display(Name="Vol Color", GroupName="Colors", Order=37)] public WpfBrush VolumeBrush { get; set; }
 		[Browsable(false)] public string VolumeBrushSerialize { get { return Serialize.BrushToString(VolumeBrush); } set { VolumeBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Positive Label Color", GroupName="Colors", Order=36)] public WpfBrush TextBrush { get; set; }
+		[XmlIgnore] [Display(Name="Positive Label Color", GroupName="Colors", Order=38)] public WpfBrush TextBrush { get; set; }
 		[Browsable(false)] public string TextBrushSerialize { get { return Serialize.BrushToString(TextBrush); } set { TextBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Negative Label Color", GroupName="Colors", Order=37)] public WpfBrush NegativeTextBrush { get; set; }
+		[XmlIgnore] [Display(Name="Negative Label Color", GroupName="Colors", Order=39)] public WpfBrush NegativeTextBrush { get; set; }
 		[Browsable(false)] public string NegativeTextBrushSerialize { get { return Serialize.BrushToString(NegativeTextBrush); } set { NegativeTextBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Label BG Color", GroupName="Colors", Order=38)] public WpfBrush LabelBgBrush { get; set; }
+		[XmlIgnore] [Display(Name="Label BG Color", GroupName="Colors", Order=40)] public WpfBrush LabelBgBrush { get; set; }
 		[Browsable(false)] public string LabelBgBrushSerialize { get { return Serialize.BrushToString(LabelBgBrush); } set { LabelBgBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Leg Box Color", GroupName="Colors", Order=39)] public WpfBrush LegBoxBrush { get; set; }
+		[XmlIgnore] [Display(Name="Leg Box Color", GroupName="Colors", Order=41)] public WpfBrush LegBoxBrush { get; set; }
 		[Browsable(false)] public string LegBoxBrushSerialize { get { return Serialize.BrushToString(LegBoxBrush); } set { LegBoxBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="POC Color", GroupName="Colors", Order=40)] public WpfBrush POCBrush { get; set; }
+		[XmlIgnore] [Display(Name="POC Color", GroupName="Colors", Order=42)] public WpfBrush POCBrush { get; set; }
 		[Browsable(false)] public string POCBrushSerialize { get { return Serialize.BrushToString(POCBrush); } set { POCBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="VA Color", GroupName="Colors", Order=41)] public WpfBrush VABrush { get; set; }
+		[XmlIgnore] [Display(Name="VA Color", GroupName="Colors", Order=43)] public WpfBrush VABrush { get; set; }
 		[Browsable(false)] public string VABrushSerialize { get { return Serialize.BrushToString(VABrush); } set { VABrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="VA Line Color", GroupName="Colors", Order=42)] public WpfBrush VALineBrush { get; set; }
+		[XmlIgnore] [Display(Name="VA Line Color", GroupName="Colors", Order=44)] public WpfBrush VALineBrush { get; set; }
 		[Browsable(false)] public string VALineBrushSerialize { get { return Serialize.BrushToString(VALineBrush); } set { VALineBrush = Serialize.StringToBrush(value); } }
 		#endregion
 	}
@@ -759,18 +977,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private OrcaLegtoLegProfile[] cacheOrcaLegtoLegProfile;
-		public OrcaLegtoLegProfile OrcaLegtoLegProfile(int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		public OrcaLegtoLegProfile OrcaLegtoLegProfile(int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int dynamicDeltaMinCompression, int dynamicDeltaMaxCompression, LegProfileTradeSourceMode tradeSourceMode, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity)
 		{
-			return OrcaLegtoLegProfile(Input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+			return OrcaLegtoLegProfile(Input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, deltaDynamicRowMinPixels, dynamicDeltaMinCompression, dynamicDeltaMaxCompression, tradeSourceMode, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity, useDeltaIntensityColoring, deltaIntensityMinOpacity);
 		}
 
-		public OrcaLegtoLegProfile OrcaLegtoLegProfile(ISeries<double> input, int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		public OrcaLegtoLegProfile OrcaLegtoLegProfile(ISeries<double> input, int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int dynamicDeltaMinCompression, int dynamicDeltaMaxCompression, LegProfileTradeSourceMode tradeSourceMode, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity)
 		{
 			if (cacheOrcaLegtoLegProfile != null)
 				for (int idx = 0; idx < cacheOrcaLegtoLegProfile.Length; idx++)
-					if (cacheOrcaLegtoLegProfile[idx] != null && cacheOrcaLegtoLegProfile[idx].ReversalTicks == reversalTicks && cacheOrcaLegtoLegProfile[idx].PastReversalTicks == pastReversalTicks && cacheOrcaLegtoLegProfile[idx].UseAtrReversal == useAtrReversal && cacheOrcaLegtoLegProfile[idx].AtrPeriod == atrPeriod && cacheOrcaLegtoLegProfile[idx].AtrMultiplier == atrMultiplier && cacheOrcaLegtoLegProfile[idx].PastAtrMultiplier == pastAtrMultiplier && cacheOrcaLegtoLegProfile[idx].MinimumLegTicks == minimumLegTicks && cacheOrcaLegtoLegProfile[idx].MinimumBarsPerLeg == minimumBarsPerLeg && cacheOrcaLegtoLegProfile[idx].MinimumDurationMinutes == minimumDurationMinutes && cacheOrcaLegtoLegProfile[idx].LegsToDisplay == legsToDisplay && cacheOrcaLegtoLegProfile[idx].UseDynamicAggregation == useDynamicAggregation && cacheOrcaLegtoLegProfile[idx].DynamicAggregationMultiplier == dynamicAggregationMultiplier && cacheOrcaLegtoLegProfile[idx].VolumeTickCompression == volumeTickCompression && cacheOrcaLegtoLegProfile[idx].DeltaTickCompression == deltaTickCompression && cacheOrcaLegtoLegProfile[idx].VolumeProfileWidthPx == volumeProfileWidthPx && cacheOrcaLegtoLegProfile[idx].DeltaProfileWidthPx == deltaProfileWidthPx && cacheOrcaLegtoLegProfile[idx].PastVolumeWidthPx == pastVolumeWidthPx && cacheOrcaLegtoLegProfile[idx].PastDeltaWidthPx == pastDeltaWidthPx && cacheOrcaLegtoLegProfile[idx].RightOffsetPx == rightOffsetPx && cacheOrcaLegtoLegProfile[idx].ProfileSeparationPx == profileSeparationPx && cacheOrcaLegtoLegProfile[idx].ProfileBarSpacingPx == profileBarSpacingPx && cacheOrcaLegtoLegProfile[idx].MirrorProfile == mirrorProfile && cacheOrcaLegtoLegProfile[idx].ShowVolume == showVolume && cacheOrcaLegtoLegProfile[idx].ShowDelta == showDelta && cacheOrcaLegtoLegProfile[idx].ShowPastDelta == showPastDelta && cacheOrcaLegtoLegProfile[idx].ShowCurrentLegBox == showCurrentLegBox && cacheOrcaLegtoLegProfile[idx].DeltaLabelFontSize == deltaLabelFontSize && cacheOrcaLegtoLegProfile[idx].ShowDeltaLabelBackground == showDeltaLabelBackground && cacheOrcaLegtoLegProfile[idx].ShowPOC == showPOC && cacheOrcaLegtoLegProfile[idx].UseGradient == useGradient && cacheOrcaLegtoLegProfile[idx].GradientSteps == gradientSteps && cacheOrcaLegtoLegProfile[idx].ShowValueArea == showValueArea && cacheOrcaLegtoLegProfile[idx].ShowVAColor == showVAColor && cacheOrcaLegtoLegProfile[idx].ShowVALines == showVALines && cacheOrcaLegtoLegProfile[idx].ValueAreaPercent == valueAreaPercent && cacheOrcaLegtoLegProfile[idx].VALineThickness == vALineThickness && cacheOrcaLegtoLegProfile[idx].VALineStyle == vALineStyle && cacheOrcaLegtoLegProfile[idx].MinBrightness == minBrightness && cacheOrcaLegtoLegProfile[idx].VolumeOpacity == volumeOpacity && cacheOrcaLegtoLegProfile[idx].DeltaOpacity == deltaOpacity && cacheOrcaLegtoLegProfile[idx].EqualsInput(input))
+					if (cacheOrcaLegtoLegProfile[idx] != null && cacheOrcaLegtoLegProfile[idx].ReversalTicks == reversalTicks && cacheOrcaLegtoLegProfile[idx].PastReversalTicks == pastReversalTicks && cacheOrcaLegtoLegProfile[idx].UseAtrReversal == useAtrReversal && cacheOrcaLegtoLegProfile[idx].AtrPeriod == atrPeriod && cacheOrcaLegtoLegProfile[idx].AtrMultiplier == atrMultiplier && cacheOrcaLegtoLegProfile[idx].PastAtrMultiplier == pastAtrMultiplier && cacheOrcaLegtoLegProfile[idx].MinimumLegTicks == minimumLegTicks && cacheOrcaLegtoLegProfile[idx].MinimumBarsPerLeg == minimumBarsPerLeg && cacheOrcaLegtoLegProfile[idx].MinimumDurationMinutes == minimumDurationMinutes && cacheOrcaLegtoLegProfile[idx].LegsToDisplay == legsToDisplay && cacheOrcaLegtoLegProfile[idx].UseDynamicAggregation == useDynamicAggregation && cacheOrcaLegtoLegProfile[idx].DynamicAggregationMultiplier == dynamicAggregationMultiplier && cacheOrcaLegtoLegProfile[idx].DeltaDynamicRowMinPixels == deltaDynamicRowMinPixels && cacheOrcaLegtoLegProfile[idx].DynamicDeltaMinCompression == dynamicDeltaMinCompression && cacheOrcaLegtoLegProfile[idx].DynamicDeltaMaxCompression == dynamicDeltaMaxCompression && cacheOrcaLegtoLegProfile[idx].TradeSourceMode == tradeSourceMode && cacheOrcaLegtoLegProfile[idx].VolumeTickCompression == volumeTickCompression && cacheOrcaLegtoLegProfile[idx].DeltaTickCompression == deltaTickCompression && cacheOrcaLegtoLegProfile[idx].VolumeProfileWidthPx == volumeProfileWidthPx && cacheOrcaLegtoLegProfile[idx].DeltaProfileWidthPx == deltaProfileWidthPx && cacheOrcaLegtoLegProfile[idx].PastVolumeWidthPx == pastVolumeWidthPx && cacheOrcaLegtoLegProfile[idx].PastDeltaWidthPx == pastDeltaWidthPx && cacheOrcaLegtoLegProfile[idx].RightOffsetPx == rightOffsetPx && cacheOrcaLegtoLegProfile[idx].ProfileSeparationPx == profileSeparationPx && cacheOrcaLegtoLegProfile[idx].ProfileBarSpacingPx == profileBarSpacingPx && cacheOrcaLegtoLegProfile[idx].MirrorProfile == mirrorProfile && cacheOrcaLegtoLegProfile[idx].ShowVolume == showVolume && cacheOrcaLegtoLegProfile[idx].ShowDelta == showDelta && cacheOrcaLegtoLegProfile[idx].ShowPastDelta == showPastDelta && cacheOrcaLegtoLegProfile[idx].ShowCurrentLegBox == showCurrentLegBox && cacheOrcaLegtoLegProfile[idx].DeltaLabelFontSize == deltaLabelFontSize && cacheOrcaLegtoLegProfile[idx].ShowDeltaLabelBackground == showDeltaLabelBackground && cacheOrcaLegtoLegProfile[idx].ShowPOC == showPOC && cacheOrcaLegtoLegProfile[idx].UseGradient == useGradient && cacheOrcaLegtoLegProfile[idx].GradientSteps == gradientSteps && cacheOrcaLegtoLegProfile[idx].ShowValueArea == showValueArea && cacheOrcaLegtoLegProfile[idx].ShowVAColor == showVAColor && cacheOrcaLegtoLegProfile[idx].ShowVALines == showVALines && cacheOrcaLegtoLegProfile[idx].ValueAreaPercent == valueAreaPercent && cacheOrcaLegtoLegProfile[idx].VALineThickness == vALineThickness && cacheOrcaLegtoLegProfile[idx].VALineStyle == vALineStyle && cacheOrcaLegtoLegProfile[idx].MinBrightness == minBrightness && cacheOrcaLegtoLegProfile[idx].VolumeOpacity == volumeOpacity && cacheOrcaLegtoLegProfile[idx].DeltaOpacity == deltaOpacity && cacheOrcaLegtoLegProfile[idx].UseDeltaIntensityColoring == useDeltaIntensityColoring && cacheOrcaLegtoLegProfile[idx].DeltaIntensityMinOpacity == deltaIntensityMinOpacity && cacheOrcaLegtoLegProfile[idx].EqualsInput(input))
 						return cacheOrcaLegtoLegProfile[idx];
-			return CacheIndicator<OrcaLegtoLegProfile>(new OrcaLegtoLegProfile(){ ReversalTicks = reversalTicks, PastReversalTicks = pastReversalTicks, UseAtrReversal = useAtrReversal, AtrPeriod = atrPeriod, AtrMultiplier = atrMultiplier, PastAtrMultiplier = pastAtrMultiplier, MinimumLegTicks = minimumLegTicks, MinimumBarsPerLeg = minimumBarsPerLeg, MinimumDurationMinutes = minimumDurationMinutes, LegsToDisplay = legsToDisplay, UseDynamicAggregation = useDynamicAggregation, DynamicAggregationMultiplier = dynamicAggregationMultiplier, VolumeTickCompression = volumeTickCompression, DeltaTickCompression = deltaTickCompression, VolumeProfileWidthPx = volumeProfileWidthPx, DeltaProfileWidthPx = deltaProfileWidthPx, PastVolumeWidthPx = pastVolumeWidthPx, PastDeltaWidthPx = pastDeltaWidthPx, RightOffsetPx = rightOffsetPx, ProfileSeparationPx = profileSeparationPx, ProfileBarSpacingPx = profileBarSpacingPx, MirrorProfile = mirrorProfile, ShowVolume = showVolume, ShowDelta = showDelta, ShowPastDelta = showPastDelta, ShowCurrentLegBox = showCurrentLegBox, DeltaLabelFontSize = deltaLabelFontSize, ShowDeltaLabelBackground = showDeltaLabelBackground, ShowPOC = showPOC, UseGradient = useGradient, GradientSteps = gradientSteps, ShowValueArea = showValueArea, ShowVAColor = showVAColor, ShowVALines = showVALines, ValueAreaPercent = valueAreaPercent, VALineThickness = vALineThickness, VALineStyle = vALineStyle, MinBrightness = minBrightness, VolumeOpacity = volumeOpacity, DeltaOpacity = deltaOpacity }, input, ref cacheOrcaLegtoLegProfile);
+			return CacheIndicator<OrcaLegtoLegProfile>(new OrcaLegtoLegProfile(){ ReversalTicks = reversalTicks, PastReversalTicks = pastReversalTicks, UseAtrReversal = useAtrReversal, AtrPeriod = atrPeriod, AtrMultiplier = atrMultiplier, PastAtrMultiplier = pastAtrMultiplier, MinimumLegTicks = minimumLegTicks, MinimumBarsPerLeg = minimumBarsPerLeg, MinimumDurationMinutes = minimumDurationMinutes, LegsToDisplay = legsToDisplay, UseDynamicAggregation = useDynamicAggregation, DynamicAggregationMultiplier = dynamicAggregationMultiplier, DeltaDynamicRowMinPixels = deltaDynamicRowMinPixels, DynamicDeltaMinCompression = dynamicDeltaMinCompression, DynamicDeltaMaxCompression = dynamicDeltaMaxCompression, TradeSourceMode = tradeSourceMode, VolumeTickCompression = volumeTickCompression, DeltaTickCompression = deltaTickCompression, VolumeProfileWidthPx = volumeProfileWidthPx, DeltaProfileWidthPx = deltaProfileWidthPx, PastVolumeWidthPx = pastVolumeWidthPx, PastDeltaWidthPx = pastDeltaWidthPx, RightOffsetPx = rightOffsetPx, ProfileSeparationPx = profileSeparationPx, ProfileBarSpacingPx = profileBarSpacingPx, MirrorProfile = mirrorProfile, ShowVolume = showVolume, ShowDelta = showDelta, ShowPastDelta = showPastDelta, ShowCurrentLegBox = showCurrentLegBox, DeltaLabelFontSize = deltaLabelFontSize, ShowDeltaLabelBackground = showDeltaLabelBackground, ShowPOC = showPOC, UseGradient = useGradient, GradientSteps = gradientSteps, ShowValueArea = showValueArea, ShowVAColor = showVAColor, ShowVALines = showVALines, ValueAreaPercent = valueAreaPercent, VALineThickness = vALineThickness, VALineStyle = vALineStyle, MinBrightness = minBrightness, VolumeOpacity = volumeOpacity, DeltaOpacity = deltaOpacity, UseDeltaIntensityColoring = useDeltaIntensityColoring, DeltaIntensityMinOpacity = deltaIntensityMinOpacity }, input, ref cacheOrcaLegtoLegProfile);
 		}
 	}
 }
@@ -779,14 +997,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int dynamicDeltaMinCompression, int dynamicDeltaMaxCompression, LegProfileTradeSourceMode tradeSourceMode, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity)
 		{
-			return indicator.OrcaLegtoLegProfile(Input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+			return indicator.OrcaLegtoLegProfile(Input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, deltaDynamicRowMinPixels, dynamicDeltaMinCompression, dynamicDeltaMaxCompression, tradeSourceMode, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity, useDeltaIntensityColoring, deltaIntensityMinOpacity);
 		}
 
-		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(ISeries<double> input , int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(ISeries<double> input , int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int dynamicDeltaMinCompression, int dynamicDeltaMaxCompression, LegProfileTradeSourceMode tradeSourceMode, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity)
 		{
-			return indicator.OrcaLegtoLegProfile(input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+			return indicator.OrcaLegtoLegProfile(input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, deltaDynamicRowMinPixels, dynamicDeltaMinCompression, dynamicDeltaMaxCompression, tradeSourceMode, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity, useDeltaIntensityColoring, deltaIntensityMinOpacity);
 		}
 	}
 }
@@ -795,14 +1013,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int dynamicDeltaMinCompression, int dynamicDeltaMaxCompression, LegProfileTradeSourceMode tradeSourceMode, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity)
 		{
-			return indicator.OrcaLegtoLegProfile(Input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+			return indicator.OrcaLegtoLegProfile(Input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, deltaDynamicRowMinPixels, dynamicDeltaMinCompression, dynamicDeltaMaxCompression, tradeSourceMode, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity, useDeltaIntensityColoring, deltaIntensityMinOpacity);
 		}
 
-		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(ISeries<double> input , int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity)
+		public Indicators.OrcaLegtoLegProfile OrcaLegtoLegProfile(ISeries<double> input , int reversalTicks, int pastReversalTicks, bool useAtrReversal, int atrPeriod, double atrMultiplier, double pastAtrMultiplier, int minimumLegTicks, int minimumBarsPerLeg, int minimumDurationMinutes, int legsToDisplay, bool useDynamicAggregation, double dynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int dynamicDeltaMinCompression, int dynamicDeltaMaxCompression, LegProfileTradeSourceMode tradeSourceMode, int volumeTickCompression, int deltaTickCompression, int volumeProfileWidthPx, int deltaProfileWidthPx, int pastVolumeWidthPx, int pastDeltaWidthPx, int rightOffsetPx, int profileSeparationPx, int profileBarSpacingPx, bool mirrorProfile, bool showVolume, bool showDelta, bool showPastDelta, bool showCurrentLegBox, int deltaLabelFontSize, bool showDeltaLabelBackground, bool showPOC, bool useGradient, int gradientSteps, bool showValueArea, bool showVAColor, bool showVALines, int valueAreaPercent, float vALineThickness, VALineStyleEnum vALineStyle, float minBrightness, float volumeOpacity, float deltaOpacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity)
 		{
-			return indicator.OrcaLegtoLegProfile(input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity);
+			return indicator.OrcaLegtoLegProfile(input, reversalTicks, pastReversalTicks, useAtrReversal, atrPeriod, atrMultiplier, pastAtrMultiplier, minimumLegTicks, minimumBarsPerLeg, minimumDurationMinutes, legsToDisplay, useDynamicAggregation, dynamicAggregationMultiplier, deltaDynamicRowMinPixels, dynamicDeltaMinCompression, dynamicDeltaMaxCompression, tradeSourceMode, volumeTickCompression, deltaTickCompression, volumeProfileWidthPx, deltaProfileWidthPx, pastVolumeWidthPx, pastDeltaWidthPx, rightOffsetPx, profileSeparationPx, profileBarSpacingPx, mirrorProfile, showVolume, showDelta, showPastDelta, showCurrentLegBox, deltaLabelFontSize, showDeltaLabelBackground, showPOC, useGradient, gradientSteps, showValueArea, showVAColor, showVALines, valueAreaPercent, vALineThickness, vALineStyle, minBrightness, volumeOpacity, deltaOpacity, useDeltaIntensityColoring, deltaIntensityMinOpacity);
 		}
 	}
 }

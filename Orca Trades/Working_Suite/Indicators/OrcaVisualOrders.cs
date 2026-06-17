@@ -287,15 +287,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			showSLButton = !hasStop;
 
 			double yEntry = chartScale.GetYByValue(activeEntryPrice);
-			
+
 			double rightX = chartControl.CanvasRight;
-			if (LabelAlignment == VisualOrderAlignment.Center) 
+			if (LabelAlignment == VisualOrderAlignment.Center)
 				rightX = chartControl.CanvasLeft + ((chartControl.CanvasRight - chartControl.CanvasLeft) / 2.0);
 			else if (LabelAlignment == VisualOrderAlignment.LeftEdge)
 				rightX = chartControl.CanvasLeft;
 			else if (LabelAlignment == VisualOrderAlignment.RightmostBar && ChartBars != null && ChartBars.Count > 0)
 				rightX = chartControl.GetXByBarIndex(ChartBars, ChartBars.Count - 1);
-				
+
 			int tagOffset = NormalizeLegacyOffset(TagOffsetRight);
 			int labelOffset = NormalizeLegacyOffset(OrderLabelOffsetRight);
 			double labelRightX = rightX - visual.LabelRightPadding - labelOffset;
@@ -732,3 +732,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaVisualOrders[] cacheOrcaVisualOrders;
+		public OrcaVisualOrders OrcaVisualOrders(int tagOffsetRight, int orderLabelOffsetRight, VisualOrderAlignment labelAlignment, int dragButtonVerticalOffset, int dragButtonWidth, int dragButtonGap)
+		{
+			return OrcaVisualOrders(Input, tagOffsetRight, orderLabelOffsetRight, labelAlignment, dragButtonVerticalOffset, dragButtonWidth, dragButtonGap);
+		}
+
+		public OrcaVisualOrders OrcaVisualOrders(ISeries<double> input, int tagOffsetRight, int orderLabelOffsetRight, VisualOrderAlignment labelAlignment, int dragButtonVerticalOffset, int dragButtonWidth, int dragButtonGap)
+		{
+			if (cacheOrcaVisualOrders != null)
+				for (int idx = 0; idx < cacheOrcaVisualOrders.Length; idx++)
+					if (cacheOrcaVisualOrders[idx] != null && cacheOrcaVisualOrders[idx].TagOffsetRight == tagOffsetRight && cacheOrcaVisualOrders[idx].OrderLabelOffsetRight == orderLabelOffsetRight && cacheOrcaVisualOrders[idx].LabelAlignment == labelAlignment && cacheOrcaVisualOrders[idx].DragButtonVerticalOffset == dragButtonVerticalOffset && cacheOrcaVisualOrders[idx].DragButtonWidth == dragButtonWidth && cacheOrcaVisualOrders[idx].DragButtonGap == dragButtonGap && cacheOrcaVisualOrders[idx].EqualsInput(input))
+						return cacheOrcaVisualOrders[idx];
+			return CacheIndicator<OrcaVisualOrders>(new OrcaVisualOrders(){ TagOffsetRight = tagOffsetRight, OrderLabelOffsetRight = orderLabelOffsetRight, LabelAlignment = labelAlignment, DragButtonVerticalOffset = dragButtonVerticalOffset, DragButtonWidth = dragButtonWidth, DragButtonGap = dragButtonGap }, input, ref cacheOrcaVisualOrders);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(int tagOffsetRight, int orderLabelOffsetRight, VisualOrderAlignment labelAlignment, int dragButtonVerticalOffset, int dragButtonWidth, int dragButtonGap)
+		{
+			return indicator.OrcaVisualOrders(Input, tagOffsetRight, orderLabelOffsetRight, labelAlignment, dragButtonVerticalOffset, dragButtonWidth, dragButtonGap);
+		}
+
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(ISeries<double> input , int tagOffsetRight, int orderLabelOffsetRight, VisualOrderAlignment labelAlignment, int dragButtonVerticalOffset, int dragButtonWidth, int dragButtonGap)
+		{
+			return indicator.OrcaVisualOrders(input, tagOffsetRight, orderLabelOffsetRight, labelAlignment, dragButtonVerticalOffset, dragButtonWidth, dragButtonGap);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(int tagOffsetRight, int orderLabelOffsetRight, VisualOrderAlignment labelAlignment, int dragButtonVerticalOffset, int dragButtonWidth, int dragButtonGap)
+		{
+			return indicator.OrcaVisualOrders(Input, tagOffsetRight, orderLabelOffsetRight, labelAlignment, dragButtonVerticalOffset, dragButtonWidth, dragButtonGap);
+		}
+
+		public Indicators.OrcaVisualOrders OrcaVisualOrders(ISeries<double> input , int tagOffsetRight, int orderLabelOffsetRight, VisualOrderAlignment labelAlignment, int dragButtonVerticalOffset, int dragButtonWidth, int dragButtonGap)
+		{
+			return indicator.OrcaVisualOrders(input, tagOffsetRight, orderLabelOffsetRight, labelAlignment, dragButtonVerticalOffset, dragButtonWidth, dragButtonGap);
+		}
+	}
+}
+
+#endregion

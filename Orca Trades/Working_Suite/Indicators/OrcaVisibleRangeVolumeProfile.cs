@@ -74,6 +74,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int cachedDeltaTicksPerRow = -1;
 		private int cachedResolvedDeltaTicksPerRow = -1;
 		private int cachedDeltaDynamicRowMinPixels = -1;
+		private int cachedDeltaDynamicMinCompression = -1;
+		private int cachedDeltaDynamicMaxCompression = -1;
 		private double cachedValueAreaPercent = double.NaN;
 		private double cachedDynamicAggregationMultiplier = double.NaN;
 		private double cachedDeltaDynamicAggregationMultiplier = double.NaN;
@@ -82,21 +84,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private VisibleRangeRowSizingMode cachedDeltaRowSizingMode = (VisibleRangeRowSizingMode)(-1);
 		private VisibleRangeProfileDataMode cachedProfileDataMode = (VisibleRangeProfileDataMode)(-1);
 		private int cachedDataRevision = -1;
+		private int cachedSharedProviderRevision = int.MinValue;
+		private int cachedSharedProviderBucketSeconds = int.MinValue;
+		private int cachedSharedProviderBucketCount = -1;
+		private bool cachedUseSharedProfileDataProvider;
+		private bool cachedUseLocalTickSeriesCache;
+		private bool cachedAllowEstimatedChartFallback;
+		private DateTime cachedLastVisibleBarTime = DateTime.MinValue;
+		private double cachedLastVisibleBarVolume = double.NaN;
 		private int lastSeenCurrentBar = -1;
 		private string totalVolumeLabel = string.Empty;
+		private string dataSourceLabel = string.Empty;
+		private DateTime lastRenderSkipUtc = DateTime.MinValue;
 
 		private List<Dictionary<double, long>> barVolumeMaps;
 		private List<Dictionary<double, long>> barUpVolumeMaps;
 		private List<Dictionary<double, long>> barDownVolumeMaps;
+		private readonly Guid profileDataSourceId = Guid.NewGuid();
+		private readonly object priceMapSync = new object();
 		private double lastBid = double.NaN;
 		private double lastAsk = double.NaN;
 		private double prevLast = double.NaN;
 		private int lastDirection;
 		private int dataRevision;
+		private DateTime profileDataLastUpdatedUtc = DateTime.MinValue;
+		private bool addLocalTickSeries;
 
 		private INotifyPropertyChanged subscribedChartControl;
 		private ChartControl subscribedChartControlRef;
 
+		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
 		private SharpDX.Direct2D1.SolidColorBrush pocBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush vaFillBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush vaLineBrushDx;
@@ -104,6 +121,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SharpDX.Direct2D1.SolidColorBrush downBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush deltaPositiveBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush deltaNegativeBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush[] positiveDeltaIntensityBrushes;
+		private SharpDX.Direct2D1.SolidColorBrush[] negativeDeltaIntensityBrushes;
 		private SharpDX.Direct2D1.SolidColorBrush deltaPositiveLabelBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush deltaNegativeLabelBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush textBrushDx;
@@ -116,6 +135,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int lastBuiltGradientSteps = -1;
 		private float lastBuiltMinBrightness = -1f;
 		private byte lastBuiltOpacity = 0;
+		private int lastBuiltDeltaIntensitySteps = -1;
+		private byte lastBuiltDeltaIntensityOpacity = 0;
 		private VisibleRangeVALineStyle lastBuiltVALineStyle = (VisibleRangeVALineStyle)(-1);
 		private string lastBrushSignature = string.Empty;
 
@@ -135,6 +156,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				BarsRequiredToPlot = 0;
 
 				ProfileDataMode = VisibleRangeProfileDataMode.TrueVolumeAtPrice;
+				UseSharedProfileDataProvider = true;
+				UseLocalTickSeriesCache = false;
+				AllowEstimatedChartFallback = true;
+				ShowDataSourceLabel = true;
 				RowCount = 100;
 				RowSizingMode = VisibleRangeRowSizingMode.TicksPerRow;
 				TicksPerRow = 1;
@@ -145,6 +170,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DeltaTicksPerRow = 4;
 				DeltaDynamicAggregationMultiplier = 1.0;
 				DeltaDynamicRowMinPixels = 10;
+				DeltaDynamicMinCompression = 1;
+				DeltaDynamicMaxCompression = 100;
 				ValueAreaPercent = 70;
 				ProfileSide = VisibleRangeProfileSide.Right;
 				ProfileWidthPercent = 25;
@@ -177,10 +204,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DeltaPositiveLabelColor = WpfBrushes.LightGreen;
 				DeltaNegativeLabelColor = WpfBrushes.LightCoral;
 				Opacity = 180;
+				UseDeltaIntensityColoring = true;
+				DeltaIntensityMinOpacity = 0.35f;
 			}
 			else if (State == State.Configure)
 			{
-				AddDataSeries(BarsPeriodType.Tick, 1);
+				addLocalTickSeries = ProfileDataMode == VisibleRangeProfileDataMode.TrueVolumeAtPrice && UseLocalTickSeriesCache;
+				if (addLocalTickSeries)
+					AddDataSeries(BarsPeriodType.Tick, 1);
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -191,9 +222,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				barDownVolumeMaps = new List<Dictionary<double, long>>(4096);
 				ResetTradeClassification();
 				ResetCache();
+				if (addLocalTickSeries)
+					RegisterProfileDataSource();
 			}
 			else if (State == State.Terminated)
 			{
+				OrcaProfileDataCache.UnregisterSource(profileDataSourceId);
 				DetachChartControl();
 				DisposeDxResources();
 			}
@@ -228,7 +262,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (CurrentBar != lastSeenCurrentBar)
 			{
 				lastSeenCurrentBar = CurrentBar;
-				EnsureBarMaps(CurrentBar);
+				if (addLocalTickSeries)
+				{
+					lock (priceMapSync)
+					{
+						EnsureBarMaps(CurrentBar);
+					}
+				}
 				if (Bars != null && Bars.IsFirstBarOfSession)
 					ResetTradeClassification();
 				profileDirty = true;
@@ -243,45 +283,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
-			base.OnRender(chartControl, chartScale);
-
-			if (chartControl == null || chartScale == null || RenderTarget == null || ChartBars == null || Bars == null)
-				return;
-
-			AttachChartControl(chartControl);
-
-			int fromIndex;
-			int toIndex;
-			if (!TryGetVisibleBarRange(out fromIndex, out toIndex))
-				return;
-
-			NinjaTrader.Gui.Chart.ChartPanel panel;
-			if (!TryGetRenderPanel(chartControl, chartScale, out panel))
-				return;
-
-			int resolvedTicksPerRow = ResolveTicksPerRow(RowSizingMode, TicksPerRow, DynamicRowMinPixels, DynamicAggregationMultiplier, chartScale, panel);
-			int resolvedDeltaTicksPerRow = ResolveTicksPerRow(DeltaRowSizingMode, DeltaTicksPerRow, DeltaDynamicRowMinPixels, DeltaDynamicAggregationMultiplier, chartScale, panel);
-			if (NeedsRecalculate(fromIndex, toIndex, resolvedTicksPerRow, resolvedDeltaTicksPerRow))
-				RecalculateProfile(fromIndex, toIndex, resolvedTicksPerRow, resolvedDeltaTicksPerRow);
-
-			if ((profileResult == null || !profileResult.HasProfile) && (deltaResult == null || !deltaResult.HasProfile))
-				return;
-
-			EnsureDxResources();
-			if (pocBrushDx == null || vaFillBrushDx == null || vaLineBrushDx == null || upBrushDx == null || downBrushDx == null || deltaPositiveBrushDx == null || deltaNegativeBrushDx == null
-				|| (ShowDeltaLabels && (deltaPositiveLabelBrushDx == null || deltaNegativeLabelBrushDx == null || deltaLabelTextFormatDx == null)))
-				return;
-
-			SharpDX.Direct2D1.AntialiasMode oldAntialias = RenderTarget.AntialiasMode;
-			RenderTarget.AntialiasMode = SharpDX.Direct2D1.AntialiasMode.Aliased;
 			try
 			{
-				DrawProfile(chartScale, panel);
+				base.OnRender(chartControl, chartScale);
+
+				if (chartControl == null || chartScale == null || RenderTarget == null || ChartBars == null || Bars == null)
+					return;
+
+				AttachChartControl(chartControl);
+
+				int fromIndex;
+				int toIndex;
+				if (!TryGetVisibleBarRange(out fromIndex, out toIndex))
+					return;
+
+				NinjaTrader.Gui.Chart.ChartPanel panel;
+				if (!TryGetRenderPanel(chartControl, chartScale, out panel))
+					return;
+
+				int resolvedTicksPerRow = ResolveTicksPerRow(RowSizingMode, TicksPerRow, DynamicRowMinPixels, DynamicAggregationMultiplier, chartScale, panel);
+				int resolvedDeltaTicksPerRow = ResolveTicksPerRow(DeltaRowSizingMode, DeltaTicksPerRow, DeltaDynamicRowMinPixels, DeltaDynamicAggregationMultiplier, chartScale, panel, DeltaDynamicMinCompression, DeltaDynamicMaxCompression);
+				if (NeedsRecalculate(fromIndex, toIndex, resolvedTicksPerRow, resolvedDeltaTicksPerRow))
+					RecalculateProfile(fromIndex, toIndex, resolvedTicksPerRow, resolvedDeltaTicksPerRow);
+
+				if ((profileResult == null || !profileResult.HasProfile) && (deltaResult == null || !deltaResult.HasProfile))
+					return;
+
+				EnsureDxResources();
+				if (pocBrushDx == null || vaFillBrushDx == null || vaLineBrushDx == null || upBrushDx == null || downBrushDx == null || deltaPositiveBrushDx == null || deltaNegativeBrushDx == null
+					|| (ShowDeltaLabels && (deltaPositiveLabelBrushDx == null || deltaNegativeLabelBrushDx == null || deltaLabelTextFormatDx == null)))
+					return;
+
+				SharpDX.Direct2D1.AntialiasMode oldAntialias = RenderTarget.AntialiasMode;
+				RenderTarget.AntialiasMode = SharpDX.Direct2D1.AntialiasMode.Aliased;
+				try
+				{
+					DrawProfile(chartScale, panel);
+				}
+				finally
+				{
+					RenderTarget.AntialiasMode = oldAntialias;
+				}
 			}
-			finally
+			catch (Exception ex)
 			{
-				RenderTarget.AntialiasMode = oldAntialias;
+				PrintRenderSkip(ex);
 			}
+		}
+
+		private void PrintRenderSkip(Exception ex)
+		{
+			DateTime now = DateTime.UtcNow;
+			if ((now - lastRenderSkipUtc).TotalSeconds < 30) return;
+			lastRenderSkipUtc = now;
+			Print("OrcaVisibleRangeVolumeProfile: skipped one render frame: " + ex.Message);
 		}
 
 		private void ResetCache()
@@ -297,6 +352,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cachedDeltaTicksPerRow = -1;
 			cachedResolvedDeltaTicksPerRow = -1;
 			cachedDeltaDynamicRowMinPixels = -1;
+			cachedDeltaDynamicMinCompression = -1;
+			cachedDeltaDynamicMaxCompression = -1;
 			cachedValueAreaPercent = double.NaN;
 			cachedDynamicAggregationMultiplier = double.NaN;
 			cachedDeltaDynamicAggregationMultiplier = double.NaN;
@@ -305,7 +362,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cachedDeltaRowSizingMode = (VisibleRangeRowSizingMode)(-1);
 			cachedProfileDataMode = (VisibleRangeProfileDataMode)(-1);
 			cachedDataRevision = -1;
+			cachedSharedProviderRevision = int.MinValue;
+			cachedSharedProviderBucketSeconds = int.MinValue;
+			cachedSharedProviderBucketCount = -1;
+			cachedUseSharedProfileDataProvider = false;
+			cachedUseLocalTickSeriesCache = false;
+			cachedAllowEstimatedChartFallback = false;
+			cachedLastVisibleBarTime = DateTime.MinValue;
+			cachedLastVisibleBarVolume = double.NaN;
 			totalVolumeLabel = string.Empty;
+			dataSourceLabel = string.Empty;
 			profileDirty = true;
 		}
 
@@ -324,6 +390,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void ProcessTickIntoPrimaryBar()
 		{
+			if (!addLocalTickSeries)
+				return;
+
 			if (BarsArray == null || BarsArray.Length < 2 || CurrentBars == null || CurrentBars.Length < 2 || CurrentBars[1] < 0)
 				return;
 
@@ -332,24 +401,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (primaryIndex < 0)
 				return;
 
-			EnsureBarMaps(primaryIndex);
-
 			double price = NormalizeToTick(Closes[1][0]);
 			long volume = (long)Volumes[1][0];
 			if (volume <= 0 || double.IsNaN(price) || double.IsInfinity(price))
 				return;
 
-			AddToMap(barVolumeMaps[primaryIndex], price, volume);
-
 			long signedVolume = ClassifySignedVolume(price, volume);
-			if (signedVolume > 0)
-				AddToMap(barUpVolumeMaps[primaryIndex], price, volume);
-			else if (signedVolume < 0)
-				AddToMap(barDownVolumeMaps[primaryIndex], price, volume);
+			lock (priceMapSync)
+			{
+				EnsureBarMaps(primaryIndex);
+				AddToMap(barVolumeMaps[primaryIndex], price, volume);
 
-			dataRevision++;
-			if (cachedFromIndex < 0 || (primaryIndex >= cachedFromIndex && primaryIndex <= cachedToIndex))
-				profileDirty = true;
+				if (signedVolume > 0)
+					AddToMap(barUpVolumeMaps[primaryIndex], price, volume);
+				else if (signedVolume < 0)
+					AddToMap(barDownVolumeMaps[primaryIndex], price, volume);
+
+				dataRevision++;
+				profileDataLastUpdatedUtc = DateTime.UtcNow;
+				if (cachedFromIndex < 0 || (primaryIndex >= cachedFromIndex && primaryIndex <= cachedToIndex))
+					profileDirty = true;
+			}
+		}
+
+		private void RegisterProfileDataSource()
+		{
+			if (!addLocalTickSeries)
+				return;
+
+			string key = OrcaProfileDataCache.BuildKey(Bars);
+			if (string.IsNullOrEmpty(key))
+				return;
+
+			OrcaProfileDataCache.RegisterSource(new OrcaProfileDataSource
+			{
+				SourceId = profileDataSourceId,
+				Key = key,
+				SourceName = Name,
+				SyncRoot = priceMapSync,
+				VolumeByBar = barVolumeMaps,
+				UpVolumeByBar = barUpVolumeMaps,
+				DownVolumeByBar = barDownVolumeMaps,
+				RevisionProvider = () => dataRevision,
+				LastUpdatedUtcProvider = () => profileDataLastUpdatedUtc
+			});
 		}
 
 		private long ClassifySignedVolume(double price, long volume)
@@ -427,6 +522,59 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return fromIndex >= 0 && toIndex >= fromIndex;
 		}
 
+		private bool TryGetVisibleTimeRange(int fromIndex, int toIndex, out DateTime fromTime, out DateTime toTime)
+		{
+			fromTime = DateTime.MinValue;
+			toTime = DateTime.MinValue;
+			if (Bars == null || Bars.Count <= 0 || fromIndex < 0 || toIndex < fromIndex)
+				return false;
+
+			int firstBar = Math.Max(0, Math.Min(fromIndex, Bars.Count - 1));
+			int lastBar = Math.Max(firstBar, Math.Min(toIndex, Bars.Count - 1));
+			fromTime = firstBar > 0 ? Bars.GetTime(firstBar - 1) : Bars.GetTime(firstBar);
+			toTime = Bars.GetTime(lastBar);
+			if (toTime < fromTime)
+			{
+				DateTime temp = fromTime;
+				fromTime = toTime;
+				toTime = temp;
+			}
+
+			return fromTime != DateTime.MinValue && toTime != DateTime.MinValue;
+		}
+
+		private void GetLastVisibleBarState(int toIndex, out DateTime lastBarTime, out double lastBarVolume)
+		{
+			lastBarTime = DateTime.MinValue;
+			lastBarVolume = double.NaN;
+			if (Bars == null || Bars.Count <= 0 || toIndex < 0)
+				return;
+
+			int lastBar = Math.Min(toIndex, Bars.Count - 1);
+			lastBarTime = Bars.GetTime(lastBar);
+			lastBarVolume = Bars.GetVolume(lastBar);
+		}
+
+		private void GetSharedProviderStatus(out int revision, out int bucketSeconds, out int bucketCount)
+		{
+			revision = int.MinValue;
+			bucketSeconds = int.MinValue;
+			bucketCount = -1;
+			if (!UseSharedProfileDataProvider || Bars == null)
+				return;
+
+			string instrumentKey = OrcaProfileDataCache.BuildInstrumentKey(Bars);
+			DateTime lastUpdatedUtc;
+			string sourceName;
+			if (!string.IsNullOrEmpty(instrumentKey)
+				&& OrcaProfileDataCache.TryGetOrderFlowStatus(instrumentKey, out revision, out lastUpdatedUtc, out sourceName, out bucketSeconds, out bucketCount))
+				return;
+
+			revision = -1;
+			bucketSeconds = -1;
+			bucketCount = 0;
+		}
+
 		private bool NeedsRecalculate(int fromIndex, int toIndex, int resolvedTicksPerRow, int resolvedDeltaTicksPerRow)
 		{
 			VisibleRangeRowSizingMode effectiveMode = RowSizingMode;
@@ -435,10 +583,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int ticksPerRow = Math.Max(1, TicksPerRow);
 			int deltaRowCount = Math.Max(1, DeltaRowCount);
 			int deltaTicksPerRow = Math.Max(1, DeltaTicksPerRow);
+			int sharedRevision;
+			int sharedBucketSeconds;
+			int sharedBucketCount;
+			GetSharedProviderStatus(out sharedRevision, out sharedBucketSeconds, out sharedBucketCount);
+			DateTime lastBarTime;
+			double lastBarVolume;
+			GetLastVisibleBarState(toIndex, out lastBarTime, out lastBarVolume);
 			return profileDirty
 				|| fromIndex != cachedFromIndex
 				|| toIndex != cachedToIndex
 				|| Bars.Count != cachedBarsCount
+				|| lastBarTime != cachedLastVisibleBarTime
+				|| Math.Abs(lastBarVolume - cachedLastVisibleBarVolume) > 1E-09
 				|| rowCount != cachedRowCount
 				|| ticksPerRow != cachedTicksPerRow
 				|| resolvedTicksPerRow != cachedResolvedTicksPerRow
@@ -448,9 +605,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 				|| deltaTicksPerRow != cachedDeltaTicksPerRow
 				|| resolvedDeltaTicksPerRow != cachedResolvedDeltaTicksPerRow
 				|| DeltaDynamicRowMinPixels != cachedDeltaDynamicRowMinPixels
+				|| DeltaDynamicMinCompression != cachedDeltaDynamicMinCompression
+				|| DeltaDynamicMaxCompression != cachedDeltaDynamicMaxCompression
 				|| effectiveDeltaMode != cachedDeltaRowSizingMode
 				|| ProfileDataMode != cachedProfileDataMode
+				|| UseSharedProfileDataProvider != cachedUseSharedProfileDataProvider
+				|| UseLocalTickSeriesCache != cachedUseLocalTickSeriesCache
+				|| AllowEstimatedChartFallback != cachedAllowEstimatedChartFallback
 				|| dataRevision != cachedDataRevision
+				|| sharedRevision != cachedSharedProviderRevision
+				|| sharedBucketSeconds != cachedSharedProviderBucketSeconds
+				|| sharedBucketCount != cachedSharedProviderBucketCount
 				|| Math.Abs(ValueAreaPercent - cachedValueAreaPercent) > 1E-09
 				|| Math.Abs(DynamicAggregationMultiplier - cachedDynamicAggregationMultiplier) > 1E-09
 				|| Math.Abs(DeltaDynamicAggregationMultiplier - cachedDeltaDynamicAggregationMultiplier) > 1E-09
@@ -472,13 +637,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int ticksPerRow = useTicksPerRow ? Math.Max(1, resolvedTicksPerRow) : Math.Max(1, TicksPerRow);
 			int deltaRowCount = Math.Max(1, DeltaRowCount);
 			int deltaTicksPerRow = useDeltaTicksPerRow ? Math.Max(1, resolvedDeltaTicksPerRow) : Math.Max(1, DeltaTicksPerRow);
+			int builtDataRevision = dataRevision;
+			int sharedRevision;
+			int sharedBucketSeconds;
+			int sharedBucketCount;
+			GetSharedProviderStatus(out sharedRevision, out sharedBucketSeconds, out sharedBucketCount);
+			DateTime lastBarTime;
+			double lastBarVolume;
+			GetLastVisibleBarState(toIndex, out lastBarTime, out lastBarVolume);
+			dataSourceLabel = string.Empty;
 			if (ProfileDataMode == VisibleRangeProfileDataMode.TrueVolumeAtPrice)
 			{
-				OrcaVolumeProfileCore.BuildVisibleRangeFromPriceMaps(barVolumeMaps, barUpVolumeMaps, barDownVolumeMaps, fromIndex, toIndex, rowCount, ticksPerRow, useTicksPerRow, ValueAreaPercent, TickSize, profileResult);
-				OrcaVolumeProfileCore.BuildVisibleRangeFromPriceMaps(barVolumeMaps, barUpVolumeMaps, barDownVolumeMaps, fromIndex, toIndex, deltaRowCount, deltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, TickSize, deltaResult);
+				OrcaProfileDataSnapshot trueDataSnapshot = null;
+				bool useTrueProfileData = TryGetTrueVisibleRangeSnapshot(fromIndex, toIndex, sharedBucketSeconds, out trueDataSnapshot, out builtDataRevision);
+				if (useTrueProfileData && trueDataSnapshot != null)
+				{
+					OrcaVolumeProfileCore.BuildVisibleRangeFromPriceMaps(trueDataSnapshot.VolumeByBar, trueDataSnapshot.UpVolumeByBar, trueDataSnapshot.DownVolumeByBar, 0, trueDataSnapshot.ToIndex, rowCount, ticksPerRow, useTicksPerRow, ValueAreaPercent, TickSize, profileResult);
+					OrcaVolumeProfileCore.BuildVisibleRangeFromPriceMaps(trueDataSnapshot.VolumeByBar, trueDataSnapshot.UpVolumeByBar, trueDataSnapshot.DownVolumeByBar, 0, trueDataSnapshot.ToIndex, deltaRowCount, deltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, TickSize, deltaResult);
+				}
+				else if (AllowEstimatedChartFallback)
+				{
+					dataSourceLabel = BuildEstimatedFallbackLabel(sharedBucketSeconds);
+					OrcaVolumeProfileCore.BuildVisibleRangeFromBars(Bars, fromIndex, toIndex, rowCount, ticksPerRow, useTicksPerRow, ValueAreaPercent, TickSize, profileResult);
+					OrcaVolumeProfileCore.BuildVisibleRangeFromBars(Bars, fromIndex, toIndex, deltaRowCount, deltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, TickSize, deltaResult);
+				}
+				else
+				{
+					profileResult.Clear();
+					deltaResult.Clear();
+					totalVolumeLabel = string.Empty;
+					profileDirty = true;
+					return;
+				}
 			}
 			else
 			{
+				dataSourceLabel = "Source: chart estimate";
 				OrcaVolumeProfileCore.BuildVisibleRangeFromBars(Bars, fromIndex, toIndex, rowCount, ticksPerRow, useTicksPerRow, ValueAreaPercent, TickSize, profileResult);
 				OrcaVolumeProfileCore.BuildVisibleRangeFromBars(Bars, fromIndex, toIndex, deltaRowCount, deltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, TickSize, deltaResult);
 			}
@@ -486,6 +680,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cachedFromIndex = fromIndex;
 			cachedToIndex = toIndex;
 			cachedBarsCount = Bars != null ? Bars.Count : -1;
+			cachedLastVisibleBarTime = lastBarTime;
+			cachedLastVisibleBarVolume = lastBarVolume;
 			cachedRowCount = rowCount;
 			cachedTicksPerRow = Math.Max(1, TicksPerRow);
 			cachedResolvedTicksPerRow = effectiveMode == VisibleRangeRowSizingMode.RowCount ? -1 : ticksPerRow;
@@ -494,6 +690,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cachedDeltaTicksPerRow = Math.Max(1, DeltaTicksPerRow);
 			cachedResolvedDeltaTicksPerRow = effectiveDeltaMode == VisibleRangeRowSizingMode.RowCount ? -1 : deltaTicksPerRow;
 			cachedDeltaDynamicRowMinPixels = DeltaDynamicRowMinPixels;
+			cachedDeltaDynamicMinCompression = DeltaDynamicMinCompression;
+			cachedDeltaDynamicMaxCompression = DeltaDynamicMaxCompression;
 			cachedValueAreaPercent = ValueAreaPercent;
 			cachedDynamicAggregationMultiplier = DynamicAggregationMultiplier;
 			cachedDeltaDynamicAggregationMultiplier = DeltaDynamicAggregationMultiplier;
@@ -501,12 +699,149 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cachedRowSizingMode = effectiveMode;
 			cachedDeltaRowSizingMode = effectiveDeltaMode;
 			cachedProfileDataMode = ProfileDataMode;
+			cachedUseSharedProfileDataProvider = UseSharedProfileDataProvider;
+			cachedUseLocalTickSeriesCache = UseLocalTickSeriesCache;
+			cachedAllowEstimatedChartFallback = AllowEstimatedChartFallback;
 			cachedDataRevision = dataRevision;
+			cachedSharedProviderRevision = sharedRevision;
+			cachedSharedProviderBucketSeconds = sharedBucketSeconds;
+			cachedSharedProviderBucketCount = sharedBucketCount;
 			totalVolumeLabel = profileResult.HasProfile ? FormatVolume(profileResult.TotalVolume) : string.Empty;
 			profileDirty = false;
 		}
 
-		private int ResolveTicksPerRow(VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, int dynamicRowMinPixels, double dynamicAggregationMultiplier, ChartScale chartScale, NinjaTrader.Gui.Chart.ChartPanel panel)
+		private bool TryGetTrueVisibleRangeSnapshot(int fromIndex, int toIndex, int sharedBucketSeconds, out OrcaProfileDataSnapshot snapshot, out int snapshotDataRevision)
+		{
+			snapshot = null;
+			snapshotDataRevision = dataRevision;
+
+			if (Bars == null)
+				return false;
+
+			if (UseSharedProfileDataProvider)
+			{
+				DateTime fromTime;
+				DateTime toTime;
+				string instrumentKey = OrcaProfileDataCache.BuildInstrumentKey(Bars);
+				if (!string.IsNullOrEmpty(instrumentKey)
+					&& TryGetVisibleTimeRange(fromIndex, toIndex, out fromTime, out toTime))
+				{
+					int bucketSeconds;
+					string sourceName;
+					if (OrcaProfileDataCache.TrySnapshotOrderFlowPriceMaps(instrumentKey, fromTime, toTime, out snapshot, out bucketSeconds, out sourceName))
+					{
+						snapshotDataRevision = snapshot != null ? snapshot.Revision : -1;
+						dataSourceLabel = "Source: master tick";
+						return true;
+					}
+				}
+			}
+
+			if (addLocalTickSeries)
+			{
+				List<Dictionary<double, long>> volumeSnapshot;
+				List<Dictionary<double, long>> upSnapshot;
+				List<Dictionary<double, long>> downSnapshot;
+				int snapshotToIndex;
+				SnapshotPriceMaps(fromIndex, toIndex, out volumeSnapshot, out upSnapshot, out downSnapshot, out snapshotToIndex, out snapshotDataRevision);
+				if (HasAnyVolume(volumeSnapshot))
+				{
+					snapshot = new OrcaProfileDataSnapshot
+					{
+						FromIndex = 0,
+						ToIndex = snapshotToIndex,
+						Revision = snapshotDataRevision,
+						SourceName = Name,
+						VolumeByBar = volumeSnapshot,
+						UpVolumeByBar = upSnapshot,
+						DownVolumeByBar = downSnapshot,
+						HasAnyVolume = true
+					};
+					dataSourceLabel = "Source: local tick cache";
+					return true;
+				}
+			}
+
+			string dataKey = OrcaProfileDataCache.BuildKey(Bars);
+			if (!string.IsNullOrEmpty(dataKey) && OrcaProfileDataCache.TrySnapshot(dataKey, fromIndex, toIndex, out snapshot))
+			{
+				snapshotDataRevision = snapshot != null ? snapshot.Revision : -1;
+				dataSourceLabel = "Source: chart true VAP";
+				return true;
+			}
+
+			dataSourceLabel = BuildEstimatedFallbackLabel(sharedBucketSeconds);
+			return false;
+		}
+
+		private bool HasAnyVolume(List<Dictionary<double, long>> maps)
+		{
+			if (maps == null)
+				return false;
+
+			for (int index = 0; index < maps.Count; index++)
+			{
+				Dictionary<double, long> map = maps[index];
+				if (map != null && map.Count > 0)
+					return true;
+			}
+
+			return false;
+		}
+
+		private string BuildEstimatedFallbackLabel(int sharedBucketSeconds)
+		{
+			if (ProfileDataMode == VisibleRangeProfileDataMode.EstimatedFromBars)
+				return "Source: chart estimate";
+
+			if (UseSharedProfileDataProvider)
+			{
+				if (sharedBucketSeconds > 0)
+					return "Source: chart estimate (master bucket " + sharedBucketSeconds + "s)";
+				if (sharedBucketSeconds == -1)
+					return "Source: chart estimate (no master)";
+			}
+
+			if (!addLocalTickSeries && UseLocalTickSeriesCache)
+				return "Source: chart estimate (reload for local tick)";
+
+			return "Source: chart estimate";
+		}
+
+		private void SnapshotPriceMaps(int fromIndex, int toIndex, out List<Dictionary<double, long>> volumeSnapshot, out List<Dictionary<double, long>> upSnapshot, out List<Dictionary<double, long>> downSnapshot, out int snapshotToIndex, out int snapshotDataRevision)
+		{
+			int firstBar = Math.Max(0, fromIndex);
+			int lastBar = Math.Max(firstBar, toIndex);
+			int count = Math.Max(0, lastBar - firstBar + 1);
+			volumeSnapshot = new List<Dictionary<double, long>>(count);
+			upSnapshot = new List<Dictionary<double, long>>(count);
+			downSnapshot = new List<Dictionary<double, long>>(count);
+
+			lock (priceMapSync)
+			{
+				for (int barIndex = firstBar; barIndex <= lastBar; barIndex++)
+				{
+					volumeSnapshot.Add(CopyMapAt(barVolumeMaps, barIndex));
+					upSnapshot.Add(CopyMapAt(barUpVolumeMaps, barIndex));
+					downSnapshot.Add(CopyMapAt(barDownVolumeMaps, barIndex));
+				}
+
+				snapshotDataRevision = dataRevision;
+			}
+
+			snapshotToIndex = count - 1;
+		}
+
+		private Dictionary<double, long> CopyMapAt(List<Dictionary<double, long>> maps, int index)
+		{
+			if (maps == null || index < 0 || index >= maps.Count)
+				return null;
+
+			Dictionary<double, long> source = maps[index];
+			return source != null && source.Count > 0 ? new Dictionary<double, long>(source) : null;
+		}
+
+		private int ResolveTicksPerRow(VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, int dynamicRowMinPixels, double dynamicAggregationMultiplier, ChartScale chartScale, NinjaTrader.Gui.Chart.ChartPanel panel, int minCompression = 1, int maxCompression = int.MaxValue)
 		{
 			if (rowSizingMode == VisibleRangeRowSizingMode.RowCount)
 				return -1;
@@ -517,7 +852,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double visibleTicks = Math.Max(1.0, (chartScale.MaxValue - chartScale.MinValue) / TickSize);
 			double ticksPerPixel = visibleTicks / Math.Max(1.0, panel.H);
 			double desiredTicks = ticksPerPixel * Math.Max(1, dynamicRowMinPixels) * Math.Max(0.1, dynamicAggregationMultiplier);
-			return RoundToProfileTicks(desiredTicks);
+			return ClampCompression(RoundToProfileTicks(desiredTicks), minCompression, maxCompression);
+		}
+
+		private int ClampCompression(int compression, int minCompression, int maxCompression)
+		{
+			int min = Math.Max(1, minCompression);
+			int max = Math.Max(min, maxCompression);
+			if (compression < min) return min;
+			if (compression > max) return max;
+			return compression;
 		}
 
 		private int RoundToProfileTicks(double desiredTicks)
@@ -638,6 +982,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float referenceRight = ShowVolume ? volumeRight : deltaRight;
 			DrawReferenceLines(chartScale, panelTop, panelBottom, referenceLeft, referenceRight);
 			DrawTotalVolume(panelTop, bandLeft, bandRight);
+			DrawDataSourceLabel(panelTop, bandLeft, bandRight);
 		}
 
 		private bool DrawFromRightForDirection(bool towardOuterEdge)
@@ -647,8 +992,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawVolumeRows(ChartScale chartScale, float panelTop, float panelBottom, float profileLeft, float profileRight, bool drawFromRight)
 		{
+			if (profileResult == null || profileResult.Rows == null)
+				return;
+
 			float width = Math.Max(1f, profileRight - profileLeft);
-			for (int rowIndex = 0; rowIndex < profileResult.RowCount; rowIndex++)
+			int rowLimit = Math.Min(profileResult.RowCount, profileResult.Rows.Length);
+			for (int rowIndex = 0; rowIndex < rowLimit; rowIndex++)
 			{
 				OrcaVolumeProfileRow row = profileResult.Rows[rowIndex];
 				if (row.Volume <= 0)
@@ -673,8 +1022,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawDeltaRows(ChartScale chartScale, float panelTop, float panelBottom, float profileLeft, float profileRight, bool drawFromRight)
 		{
+			if (deltaResult == null || deltaResult.Rows == null)
+				return;
+
 			float width = Math.Max(1f, profileRight - profileLeft);
-			for (int rowIndex = 0; rowIndex < deltaResult.RowCount; rowIndex++)
+			int rowLimit = Math.Min(deltaResult.RowCount, deltaResult.Rows.Length);
+			for (int rowIndex = 0; rowIndex < rowLimit; rowIndex++)
 			{
 				OrcaVolumeProfileRow row = deltaResult.Rows[rowIndex];
 				double delta = row.UpVolume - row.DownVolume;
@@ -692,7 +1045,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (barWidth < 0.5f)
 					continue;
 
-				SharpDX.Direct2D1.SolidColorBrush brush = delta >= 0 ? deltaPositiveBrushDx : deltaNegativeBrushDx;
+				SharpDX.Direct2D1.SolidColorBrush brush = SelectDeltaBrush(delta, deltaResult.MaxDelta);
 				float drawX = drawFromRight ? profileRight - barWidth : profileLeft;
 				RenderTarget.FillRectangle(new RectangleF(drawX, drawY, barWidth, rowHeightPx), brush);
 				DrawDeltaLabel(delta, drawX, drawY, barWidth, rowHeightPx, profileLeft, profileRight, drawFromRight);
@@ -713,17 +1066,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (barWidth < labelWidth + 4f)
 				return;
 
-			float textX = drawFromRight ? drawX + barWidth - labelWidth - 2f : drawX + 2f;
-			if (textX < profileLeft)
-				textX = profileLeft + 1f;
-			if (textX + labelWidth + 2f > profileRight)
-				textX = profileRight - labelWidth - 2f;
-
 			SharpDX.Direct2D1.SolidColorBrush labelBrush = delta >= 0 ? deltaPositiveLabelBrushDx : deltaNegativeLabelBrushDx;
 			if (labelBrush == null)
 				return;
 
-			RenderTarget.DrawText(label, deltaLabelTextFormatDx, new RectangleF(textX, drawY, labelWidth + 4f, rowHeightPx), labelBrush);
+			float textLeft = Math.Max(profileLeft, drawX + 1f);
+			float textRight = Math.Min(profileRight, drawX + barWidth - 2f);
+			if (textRight <= textLeft)
+				return;
+
+			RenderTarget.DrawText(label, deltaLabelTextFormatDx, new RectangleF(textLeft, drawY, textRight - textLeft, rowHeightPx), labelBrush);
 		}
 
 		private SharpDX.Direct2D1.Brush SelectRowBrush(int rowIndex, OrcaVolumeProfileRow row)
@@ -785,6 +1137,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RenderTarget.DrawText(totalVolumeLabel, textFormatDx, textRect, textBrushDx);
 		}
 
+		private void DrawDataSourceLabel(float panelTop, float profileLeft, float profileRight)
+		{
+			if (!ShowDataSourceLabel || string.IsNullOrEmpty(dataSourceLabel) || textBrushDx == null || textFormatDx == null)
+				return;
+
+			float textWidth = Math.Max(120f, profileRight - profileLeft);
+			float y = ShowTotalVolume && !string.IsNullOrEmpty(totalVolumeLabel) ? panelTop + 22f : panelTop + 4f;
+			RectangleF textRect = new RectangleF(profileLeft, y, textWidth, 18f);
+			RenderTarget.DrawText(dataSourceLabel, textFormatDx, textRect, textBrushDx);
+		}
+
 		private void AttachChartControl(ChartControl chartControl)
 		{
 			if (chartControl == null || ReferenceEquals(chartControl, subscribedChartControlRef))
@@ -825,6 +1188,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (RenderTarget == null)
 				return;
 
+			IntPtr currentTarget = RenderTarget.NativePointer;
+			if (dxResourceRenderTarget != IntPtr.Zero && dxResourceRenderTarget != currentTarget)
+				DisposeDxResources();
+
 			int steps = Math.Max(2, GradientSteps);
 			string brushSignature = BuildBrushSignature();
 			if (lastBuiltOpacity != Opacity || brushSignature != lastBrushSignature)
@@ -859,7 +1226,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				deltaLabelTextFormatDx = new TextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)Clamp(DeltaLabelFontSize, 6.0, 30.0))
 				{
-					TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading,
+					TextAlignment = SharpDX.DirectWrite.TextAlignment.Trailing,
 					ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center
 				};
 			}
@@ -875,8 +1242,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastBuiltGradientSteps = steps;
 				lastBuiltMinBrightness = MinBrightness;
 			}
+			if (UseDeltaIntensityColoring && (positiveDeltaIntensityBrushes == null || negativeDeltaIntensityBrushes == null || lastBuiltDeltaIntensitySteps != steps || lastBuiltDeltaIntensityOpacity != Opacity))
+			{
+				DisposePalette(ref positiveDeltaIntensityBrushes);
+				DisposePalette(ref negativeDeltaIntensityBrushes);
+				positiveDeltaIntensityBrushes = BuildDeltaIntensityPalette(DeltaPositiveColor, steps, alpha);
+				negativeDeltaIntensityBrushes = BuildDeltaIntensityPalette(DeltaNegativeColor, steps, alpha);
+				lastBuiltDeltaIntensitySteps = steps;
+				lastBuiltDeltaIntensityOpacity = Opacity;
+			}
+			else if (!UseDeltaIntensityColoring && (positiveDeltaIntensityBrushes != null || negativeDeltaIntensityBrushes != null))
+			{
+				DisposePalette(ref positiveDeltaIntensityBrushes);
+				DisposePalette(ref negativeDeltaIntensityBrushes);
+				lastBuiltDeltaIntensitySteps = -1;
+				lastBuiltDeltaIntensityOpacity = 0;
+			}
 			lastBuiltOpacity = Opacity;
 			lastBrushSignature = brushSignature;
+			dxResourceRenderTarget = currentTarget;
 		}
 
 		private void DisposeDxResources()
@@ -888,6 +1272,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (downBrushDx != null) { downBrushDx.Dispose(); downBrushDx = null; }
 			if (deltaPositiveBrushDx != null) { deltaPositiveBrushDx.Dispose(); deltaPositiveBrushDx = null; }
 			if (deltaNegativeBrushDx != null) { deltaNegativeBrushDx.Dispose(); deltaNegativeBrushDx = null; }
+			DisposePalette(ref positiveDeltaIntensityBrushes);
+			DisposePalette(ref negativeDeltaIntensityBrushes);
 			if (deltaPositiveLabelBrushDx != null) { deltaPositiveLabelBrushDx.Dispose(); deltaPositiveLabelBrushDx = null; }
 			if (deltaNegativeLabelBrushDx != null) { deltaNegativeLabelBrushDx.Dispose(); deltaNegativeLabelBrushDx = null; }
 			if (textBrushDx != null) { textBrushDx.Dispose(); textBrushDx = null; }
@@ -900,8 +1286,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			lastBuiltGradientSteps = -1;
 			lastBuiltMinBrightness = -1f;
 			lastBuiltOpacity = 0;
+			lastBuiltDeltaIntensitySteps = -1;
+			lastBuiltDeltaIntensityOpacity = 0;
 			lastBuiltVALineStyle = (VisibleRangeVALineStyle)(-1);
 			lastBrushSignature = string.Empty;
+			dxResourceRenderTarget = IntPtr.Zero;
 		}
 
 		private string BuildBrushSignature()
@@ -915,6 +1304,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				+ NinjaTrader.Gui.Serialize.BrushToString(DeltaPositiveLabelColor) + "|"
 				+ NinjaTrader.Gui.Serialize.BrushToString(DeltaNegativeLabelColor) + "|"
 				+ DeltaLabelFontSize.ToString("0.###") + "|"
+				+ UseDeltaIntensityColoring.ToString() + "|"
+				+ DeltaIntensityMinOpacity.ToString("0.###") + "|"
 				+ Opacity.ToString();
 		}
 
@@ -937,6 +1328,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 				palette[index] = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(baseColor.Red * brightness, baseColor.Green * brightness, baseColor.Blue * brightness, opacity));
 			}
 			return palette;
+		}
+
+		private SharpDX.Direct2D1.SolidColorBrush[] BuildDeltaIntensityPalette(WpfBrush brush, int steps, float maxOpacity)
+		{
+			SharpDX.Direct2D1.SolidColorBrush[] palette = new SharpDX.Direct2D1.SolidColorBrush[steps];
+			Color4 baseColor = ToDxColor(brush, 1f);
+			float minOpacity = (float)Clamp(DeltaIntensityMinOpacity, 0.0, 1.0);
+			for (int index = 0; index < steps; index++)
+			{
+				float ratio = index / (float)(steps - 1);
+				float opacity = maxOpacity * (minOpacity + ((1f - minOpacity) * ratio));
+				palette[index] = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(baseColor.Red, baseColor.Green, baseColor.Blue, baseColor.Alpha * opacity));
+			}
+			return palette;
+		}
+
+		private SharpDX.Direct2D1.SolidColorBrush SelectDeltaBrush(double delta, double maxAbsDelta)
+		{
+			if (!UseDeltaIntensityColoring || maxAbsDelta <= 0)
+				return delta >= 0 ? deltaPositiveBrushDx : deltaNegativeBrushDx;
+
+			SharpDX.Direct2D1.SolidColorBrush[] palette = delta >= 0 ? positiveDeltaIntensityBrushes : negativeDeltaIntensityBrushes;
+			if (palette == null || palette.Length == 0)
+				return delta >= 0 ? deltaPositiveBrushDx : deltaNegativeBrushDx;
+
+			double intensity = Math.Abs(delta) / Math.Max(1.0, maxAbsDelta);
+			int index = (int)Math.Round(intensity * (palette.Length - 1));
+			if (index < 0) index = 0;
+			if (index >= palette.Length) index = palette.Length - 1;
+			return palette[index];
 		}
 
 		private void DisposePalette(ref SharpDX.Direct2D1.SolidColorBrush[] palette)
@@ -996,56 +1417,82 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public VisibleRangeProfileDataMode ProfileDataMode { get; set; }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Use Master Data Provider", Order = 2, GroupName = "1. Profile")]
+		public bool UseSharedProfileDataProvider { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Use Local Tick Cache (Reload)", Order = 3, GroupName = "1. Profile")]
+		public bool UseLocalTickSeriesCache { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Allow Estimated Fallback", Order = 4, GroupName = "1. Profile")]
+		public bool AllowEstimatedChartFallback { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Data Source Label", Order = 5, GroupName = "1. Profile")]
+		public bool ShowDataSourceLabel { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(1, 1000)]
-		[Display(Name = "Row Count", Order = 2, GroupName = "1. Profile")]
+		[Display(Name = "Row Count", Order = 6, GroupName = "1. Profile")]
 		public int RowCount { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Row Sizing Mode", Order = 3, GroupName = "1. Profile")]
+		[Display(Name = "Row Sizing Mode", Order = 7, GroupName = "1. Profile")]
 		public VisibleRangeRowSizingMode RowSizingMode { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 200)]
-		[Display(Name = "Ticks Per Row", Order = 4, GroupName = "1. Profile")]
+		[Display(Name = "Ticks Per Row", Order = 8, GroupName = "1. Profile")]
 		public int TicksPerRow { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, 10.0)]
-		[Display(Name = "Dynamic Aggregation Multiplier", Order = 5, GroupName = "1. Profile")]
+		[Display(Name = "Dynamic Aggregation Multiplier", Order = 9, GroupName = "1. Profile")]
 		public double DynamicAggregationMultiplier { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(2, 40)]
-		[Display(Name = "Dynamic Row Min Pixels", Order = 6, GroupName = "1. Profile")]
+		[Display(Name = "Dynamic Row Min Pixels", Order = 10, GroupName = "1. Profile")]
 		public int DynamicRowMinPixels { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Delta Row Sizing Mode", Order = 7, GroupName = "1. Profile")]
+		[Display(Name = "Delta Row Sizing Mode", Order = 11, GroupName = "1. Profile")]
 		public VisibleRangeRowSizingMode DeltaRowSizingMode { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 1000)]
-		[Display(Name = "Delta Row Count", Order = 8, GroupName = "1. Profile")]
+		[Display(Name = "Delta Row Count", Order = 12, GroupName = "1. Profile")]
 		public int DeltaRowCount { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 200)]
-		[Display(Name = "Delta Ticks Per Row", Order = 9, GroupName = "1. Profile")]
+		[Display(Name = "Delta Ticks Per Row", Order = 13, GroupName = "1. Profile")]
 		public int DeltaTicksPerRow { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, 10.0)]
-		[Display(Name = "Delta Dynamic Multiplier", Order = 10, GroupName = "1. Profile")]
+		[Display(Name = "Delta Dynamic Multiplier", Order = 14, GroupName = "1. Profile")]
 		public double DeltaDynamicAggregationMultiplier { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(2, 40)]
-		[Display(Name = "Delta Dynamic Row Min Pixels", Order = 11, GroupName = "1. Profile")]
+		[Display(Name = "Delta Dynamic Row Min Pixels", Order = 15, GroupName = "1. Profile")]
 		public int DeltaDynamicRowMinPixels { get; set; }
 
 		[NinjaScriptProperty]
+		[Range(1, 100)]
+		[Display(Name = "Delta Dynamic Min Compression", Order = 16, GroupName = "1. Profile")]
+		public int DeltaDynamicMinCompression { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 500)]
+		[Display(Name = "Delta Dynamic Max Compression", Order = 17, GroupName = "1. Profile")]
+		public int DeltaDynamicMaxCompression { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(1.0, 100.0)]
-		[Display(Name = "Value Area Percent", Order = 12, GroupName = "1. Profile")]
+		[Display(Name = "Value Area Percent", Order = 18, GroupName = "1. Profile")]
 		public double ValueAreaPercent { get; set; }
 
 		[NinjaScriptProperty]
@@ -1202,6 +1649,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public byte Opacity { get; set; }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Use Delta Intensity Color", Order = 8, GroupName = "4. Colors")]
+		public bool UseDeltaIntensityColoring { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.0, 1.0)]
+		[Display(Name = "Delta Intensity Min Opacity", Order = 9, GroupName = "4. Colors")]
+		public float DeltaIntensityMinOpacity { get; set; }
+
+		[NinjaScriptProperty]
 		[Display(Name = "Show Delta Labels", Order = 1, GroupName = "5. Delta Labels")]
 		public bool ShowDeltaLabels { get; set; }
 
@@ -1233,3 +1689,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 	}
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private OrcaVisibleRangeVolumeProfile[] cacheOrcaVisibleRangeVolumeProfile;
+		public OrcaVisibleRangeVolumeProfile OrcaVisibleRangeVolumeProfile(VisibleRangeProfileDataMode profileDataMode, bool useSharedProfileDataProvider, bool useLocalTickSeriesCache, bool allowEstimatedChartFallback, bool showDataSourceLabel, int rowCount, VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, double dynamicAggregationMultiplier, int dynamicRowMinPixels, VisibleRangeRowSizingMode deltaRowSizingMode, int deltaRowCount, int deltaTicksPerRow, double deltaDynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int deltaDynamicMinCompression, int deltaDynamicMaxCompression, double valueAreaPercent, VisibleRangeProfileSide profileSide, double profileWidthPercent, double deltaWidthPercent, VisibleRangeDeltaDirection deltaDirection, int profileBarSpacingPx, bool showVolume, bool showDelta, bool showPOC, bool showValueArea, bool showVAColor, bool showVALines, bool showVAH, bool showVAL, bool showTotalVolume, float vALineThickness, VisibleRangeVALineStyle vALineStyle, bool useGradient, int gradientSteps, float minBrightness, byte opacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity, bool showDeltaLabels, float deltaLabelFontSize)
+		{
+			return OrcaVisibleRangeVolumeProfile(Input, profileDataMode, useSharedProfileDataProvider, useLocalTickSeriesCache, allowEstimatedChartFallback, showDataSourceLabel, rowCount, rowSizingMode, ticksPerRow, dynamicAggregationMultiplier, dynamicRowMinPixels, deltaRowSizingMode, deltaRowCount, deltaTicksPerRow, deltaDynamicAggregationMultiplier, deltaDynamicRowMinPixels, deltaDynamicMinCompression, deltaDynamicMaxCompression, valueAreaPercent, profileSide, profileWidthPercent, deltaWidthPercent, deltaDirection, profileBarSpacingPx, showVolume, showDelta, showPOC, showValueArea, showVAColor, showVALines, showVAH, showVAL, showTotalVolume, vALineThickness, vALineStyle, useGradient, gradientSteps, minBrightness, opacity, useDeltaIntensityColoring, deltaIntensityMinOpacity, showDeltaLabels, deltaLabelFontSize);
+		}
+
+		public OrcaVisibleRangeVolumeProfile OrcaVisibleRangeVolumeProfile(ISeries<double> input, VisibleRangeProfileDataMode profileDataMode, bool useSharedProfileDataProvider, bool useLocalTickSeriesCache, bool allowEstimatedChartFallback, bool showDataSourceLabel, int rowCount, VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, double dynamicAggregationMultiplier, int dynamicRowMinPixels, VisibleRangeRowSizingMode deltaRowSizingMode, int deltaRowCount, int deltaTicksPerRow, double deltaDynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int deltaDynamicMinCompression, int deltaDynamicMaxCompression, double valueAreaPercent, VisibleRangeProfileSide profileSide, double profileWidthPercent, double deltaWidthPercent, VisibleRangeDeltaDirection deltaDirection, int profileBarSpacingPx, bool showVolume, bool showDelta, bool showPOC, bool showValueArea, bool showVAColor, bool showVALines, bool showVAH, bool showVAL, bool showTotalVolume, float vALineThickness, VisibleRangeVALineStyle vALineStyle, bool useGradient, int gradientSteps, float minBrightness, byte opacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity, bool showDeltaLabels, float deltaLabelFontSize)
+		{
+			if (cacheOrcaVisibleRangeVolumeProfile != null)
+				for (int idx = 0; idx < cacheOrcaVisibleRangeVolumeProfile.Length; idx++)
+					if (cacheOrcaVisibleRangeVolumeProfile[idx] != null && cacheOrcaVisibleRangeVolumeProfile[idx].ProfileDataMode == profileDataMode && cacheOrcaVisibleRangeVolumeProfile[idx].UseSharedProfileDataProvider == useSharedProfileDataProvider && cacheOrcaVisibleRangeVolumeProfile[idx].UseLocalTickSeriesCache == useLocalTickSeriesCache && cacheOrcaVisibleRangeVolumeProfile[idx].AllowEstimatedChartFallback == allowEstimatedChartFallback && cacheOrcaVisibleRangeVolumeProfile[idx].ShowDataSourceLabel == showDataSourceLabel && cacheOrcaVisibleRangeVolumeProfile[idx].RowCount == rowCount && cacheOrcaVisibleRangeVolumeProfile[idx].RowSizingMode == rowSizingMode && cacheOrcaVisibleRangeVolumeProfile[idx].TicksPerRow == ticksPerRow && cacheOrcaVisibleRangeVolumeProfile[idx].DynamicAggregationMultiplier == dynamicAggregationMultiplier && cacheOrcaVisibleRangeVolumeProfile[idx].DynamicRowMinPixels == dynamicRowMinPixels && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaRowSizingMode == deltaRowSizingMode && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaRowCount == deltaRowCount && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaTicksPerRow == deltaTicksPerRow && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaDynamicAggregationMultiplier == deltaDynamicAggregationMultiplier && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaDynamicRowMinPixels == deltaDynamicRowMinPixels && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaDynamicMinCompression == deltaDynamicMinCompression && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaDynamicMaxCompression == deltaDynamicMaxCompression && cacheOrcaVisibleRangeVolumeProfile[idx].ValueAreaPercent == valueAreaPercent && cacheOrcaVisibleRangeVolumeProfile[idx].ProfileSide == profileSide && cacheOrcaVisibleRangeVolumeProfile[idx].ProfileWidthPercent == profileWidthPercent && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaWidthPercent == deltaWidthPercent && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaDirection == deltaDirection && cacheOrcaVisibleRangeVolumeProfile[idx].ProfileBarSpacingPx == profileBarSpacingPx && cacheOrcaVisibleRangeVolumeProfile[idx].ShowVolume == showVolume && cacheOrcaVisibleRangeVolumeProfile[idx].ShowDelta == showDelta && cacheOrcaVisibleRangeVolumeProfile[idx].ShowPOC == showPOC && cacheOrcaVisibleRangeVolumeProfile[idx].ShowValueArea == showValueArea && cacheOrcaVisibleRangeVolumeProfile[idx].ShowVAColor == showVAColor && cacheOrcaVisibleRangeVolumeProfile[idx].ShowVALines == showVALines && cacheOrcaVisibleRangeVolumeProfile[idx].ShowVAH == showVAH && cacheOrcaVisibleRangeVolumeProfile[idx].ShowVAL == showVAL && cacheOrcaVisibleRangeVolumeProfile[idx].ShowTotalVolume == showTotalVolume && cacheOrcaVisibleRangeVolumeProfile[idx].VALineThickness == vALineThickness && cacheOrcaVisibleRangeVolumeProfile[idx].VALineStyle == vALineStyle && cacheOrcaVisibleRangeVolumeProfile[idx].UseGradient == useGradient && cacheOrcaVisibleRangeVolumeProfile[idx].GradientSteps == gradientSteps && cacheOrcaVisibleRangeVolumeProfile[idx].MinBrightness == minBrightness && cacheOrcaVisibleRangeVolumeProfile[idx].Opacity == opacity && cacheOrcaVisibleRangeVolumeProfile[idx].UseDeltaIntensityColoring == useDeltaIntensityColoring && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaIntensityMinOpacity == deltaIntensityMinOpacity && cacheOrcaVisibleRangeVolumeProfile[idx].ShowDeltaLabels == showDeltaLabels && cacheOrcaVisibleRangeVolumeProfile[idx].DeltaLabelFontSize == deltaLabelFontSize && cacheOrcaVisibleRangeVolumeProfile[idx].EqualsInput(input))
+						return cacheOrcaVisibleRangeVolumeProfile[idx];
+			return CacheIndicator<OrcaVisibleRangeVolumeProfile>(new OrcaVisibleRangeVolumeProfile(){ ProfileDataMode = profileDataMode, UseSharedProfileDataProvider = useSharedProfileDataProvider, UseLocalTickSeriesCache = useLocalTickSeriesCache, AllowEstimatedChartFallback = allowEstimatedChartFallback, ShowDataSourceLabel = showDataSourceLabel, RowCount = rowCount, RowSizingMode = rowSizingMode, TicksPerRow = ticksPerRow, DynamicAggregationMultiplier = dynamicAggregationMultiplier, DynamicRowMinPixels = dynamicRowMinPixels, DeltaRowSizingMode = deltaRowSizingMode, DeltaRowCount = deltaRowCount, DeltaTicksPerRow = deltaTicksPerRow, DeltaDynamicAggregationMultiplier = deltaDynamicAggregationMultiplier, DeltaDynamicRowMinPixels = deltaDynamicRowMinPixels, DeltaDynamicMinCompression = deltaDynamicMinCompression, DeltaDynamicMaxCompression = deltaDynamicMaxCompression, ValueAreaPercent = valueAreaPercent, ProfileSide = profileSide, ProfileWidthPercent = profileWidthPercent, DeltaWidthPercent = deltaWidthPercent, DeltaDirection = deltaDirection, ProfileBarSpacingPx = profileBarSpacingPx, ShowVolume = showVolume, ShowDelta = showDelta, ShowPOC = showPOC, ShowValueArea = showValueArea, ShowVAColor = showVAColor, ShowVALines = showVALines, ShowVAH = showVAH, ShowVAL = showVAL, ShowTotalVolume = showTotalVolume, VALineThickness = vALineThickness, VALineStyle = vALineStyle, UseGradient = useGradient, GradientSteps = gradientSteps, MinBrightness = minBrightness, Opacity = opacity, UseDeltaIntensityColoring = useDeltaIntensityColoring, DeltaIntensityMinOpacity = deltaIntensityMinOpacity, ShowDeltaLabels = showDeltaLabels, DeltaLabelFontSize = deltaLabelFontSize }, input, ref cacheOrcaVisibleRangeVolumeProfile);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.OrcaVisibleRangeVolumeProfile OrcaVisibleRangeVolumeProfile(VisibleRangeProfileDataMode profileDataMode, bool useSharedProfileDataProvider, bool useLocalTickSeriesCache, bool allowEstimatedChartFallback, bool showDataSourceLabel, int rowCount, VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, double dynamicAggregationMultiplier, int dynamicRowMinPixels, VisibleRangeRowSizingMode deltaRowSizingMode, int deltaRowCount, int deltaTicksPerRow, double deltaDynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int deltaDynamicMinCompression, int deltaDynamicMaxCompression, double valueAreaPercent, VisibleRangeProfileSide profileSide, double profileWidthPercent, double deltaWidthPercent, VisibleRangeDeltaDirection deltaDirection, int profileBarSpacingPx, bool showVolume, bool showDelta, bool showPOC, bool showValueArea, bool showVAColor, bool showVALines, bool showVAH, bool showVAL, bool showTotalVolume, float vALineThickness, VisibleRangeVALineStyle vALineStyle, bool useGradient, int gradientSteps, float minBrightness, byte opacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity, bool showDeltaLabels, float deltaLabelFontSize)
+		{
+			return indicator.OrcaVisibleRangeVolumeProfile(Input, profileDataMode, useSharedProfileDataProvider, useLocalTickSeriesCache, allowEstimatedChartFallback, showDataSourceLabel, rowCount, rowSizingMode, ticksPerRow, dynamicAggregationMultiplier, dynamicRowMinPixels, deltaRowSizingMode, deltaRowCount, deltaTicksPerRow, deltaDynamicAggregationMultiplier, deltaDynamicRowMinPixels, deltaDynamicMinCompression, deltaDynamicMaxCompression, valueAreaPercent, profileSide, profileWidthPercent, deltaWidthPercent, deltaDirection, profileBarSpacingPx, showVolume, showDelta, showPOC, showValueArea, showVAColor, showVALines, showVAH, showVAL, showTotalVolume, vALineThickness, vALineStyle, useGradient, gradientSteps, minBrightness, opacity, useDeltaIntensityColoring, deltaIntensityMinOpacity, showDeltaLabels, deltaLabelFontSize);
+		}
+
+		public Indicators.OrcaVisibleRangeVolumeProfile OrcaVisibleRangeVolumeProfile(ISeries<double> input , VisibleRangeProfileDataMode profileDataMode, bool useSharedProfileDataProvider, bool useLocalTickSeriesCache, bool allowEstimatedChartFallback, bool showDataSourceLabel, int rowCount, VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, double dynamicAggregationMultiplier, int dynamicRowMinPixels, VisibleRangeRowSizingMode deltaRowSizingMode, int deltaRowCount, int deltaTicksPerRow, double deltaDynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int deltaDynamicMinCompression, int deltaDynamicMaxCompression, double valueAreaPercent, VisibleRangeProfileSide profileSide, double profileWidthPercent, double deltaWidthPercent, VisibleRangeDeltaDirection deltaDirection, int profileBarSpacingPx, bool showVolume, bool showDelta, bool showPOC, bool showValueArea, bool showVAColor, bool showVALines, bool showVAH, bool showVAL, bool showTotalVolume, float vALineThickness, VisibleRangeVALineStyle vALineStyle, bool useGradient, int gradientSteps, float minBrightness, byte opacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity, bool showDeltaLabels, float deltaLabelFontSize)
+		{
+			return indicator.OrcaVisibleRangeVolumeProfile(input, profileDataMode, useSharedProfileDataProvider, useLocalTickSeriesCache, allowEstimatedChartFallback, showDataSourceLabel, rowCount, rowSizingMode, ticksPerRow, dynamicAggregationMultiplier, dynamicRowMinPixels, deltaRowSizingMode, deltaRowCount, deltaTicksPerRow, deltaDynamicAggregationMultiplier, deltaDynamicRowMinPixels, deltaDynamicMinCompression, deltaDynamicMaxCompression, valueAreaPercent, profileSide, profileWidthPercent, deltaWidthPercent, deltaDirection, profileBarSpacingPx, showVolume, showDelta, showPOC, showValueArea, showVAColor, showVALines, showVAH, showVAL, showTotalVolume, vALineThickness, vALineStyle, useGradient, gradientSteps, minBrightness, opacity, useDeltaIntensityColoring, deltaIntensityMinOpacity, showDeltaLabels, deltaLabelFontSize);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.OrcaVisibleRangeVolumeProfile OrcaVisibleRangeVolumeProfile(VisibleRangeProfileDataMode profileDataMode, bool useSharedProfileDataProvider, bool useLocalTickSeriesCache, bool allowEstimatedChartFallback, bool showDataSourceLabel, int rowCount, VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, double dynamicAggregationMultiplier, int dynamicRowMinPixels, VisibleRangeRowSizingMode deltaRowSizingMode, int deltaRowCount, int deltaTicksPerRow, double deltaDynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int deltaDynamicMinCompression, int deltaDynamicMaxCompression, double valueAreaPercent, VisibleRangeProfileSide profileSide, double profileWidthPercent, double deltaWidthPercent, VisibleRangeDeltaDirection deltaDirection, int profileBarSpacingPx, bool showVolume, bool showDelta, bool showPOC, bool showValueArea, bool showVAColor, bool showVALines, bool showVAH, bool showVAL, bool showTotalVolume, float vALineThickness, VisibleRangeVALineStyle vALineStyle, bool useGradient, int gradientSteps, float minBrightness, byte opacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity, bool showDeltaLabels, float deltaLabelFontSize)
+		{
+			return indicator.OrcaVisibleRangeVolumeProfile(Input, profileDataMode, useSharedProfileDataProvider, useLocalTickSeriesCache, allowEstimatedChartFallback, showDataSourceLabel, rowCount, rowSizingMode, ticksPerRow, dynamicAggregationMultiplier, dynamicRowMinPixels, deltaRowSizingMode, deltaRowCount, deltaTicksPerRow, deltaDynamicAggregationMultiplier, deltaDynamicRowMinPixels, deltaDynamicMinCompression, deltaDynamicMaxCompression, valueAreaPercent, profileSide, profileWidthPercent, deltaWidthPercent, deltaDirection, profileBarSpacingPx, showVolume, showDelta, showPOC, showValueArea, showVAColor, showVALines, showVAH, showVAL, showTotalVolume, vALineThickness, vALineStyle, useGradient, gradientSteps, minBrightness, opacity, useDeltaIntensityColoring, deltaIntensityMinOpacity, showDeltaLabels, deltaLabelFontSize);
+		}
+
+		public Indicators.OrcaVisibleRangeVolumeProfile OrcaVisibleRangeVolumeProfile(ISeries<double> input , VisibleRangeProfileDataMode profileDataMode, bool useSharedProfileDataProvider, bool useLocalTickSeriesCache, bool allowEstimatedChartFallback, bool showDataSourceLabel, int rowCount, VisibleRangeRowSizingMode rowSizingMode, int ticksPerRow, double dynamicAggregationMultiplier, int dynamicRowMinPixels, VisibleRangeRowSizingMode deltaRowSizingMode, int deltaRowCount, int deltaTicksPerRow, double deltaDynamicAggregationMultiplier, int deltaDynamicRowMinPixels, int deltaDynamicMinCompression, int deltaDynamicMaxCompression, double valueAreaPercent, VisibleRangeProfileSide profileSide, double profileWidthPercent, double deltaWidthPercent, VisibleRangeDeltaDirection deltaDirection, int profileBarSpacingPx, bool showVolume, bool showDelta, bool showPOC, bool showValueArea, bool showVAColor, bool showVALines, bool showVAH, bool showVAL, bool showTotalVolume, float vALineThickness, VisibleRangeVALineStyle vALineStyle, bool useGradient, int gradientSteps, float minBrightness, byte opacity, bool useDeltaIntensityColoring, float deltaIntensityMinOpacity, bool showDeltaLabels, float deltaLabelFontSize)
+		{
+			return indicator.OrcaVisibleRangeVolumeProfile(input, profileDataMode, useSharedProfileDataProvider, useLocalTickSeriesCache, allowEstimatedChartFallback, showDataSourceLabel, rowCount, rowSizingMode, ticksPerRow, dynamicAggregationMultiplier, dynamicRowMinPixels, deltaRowSizingMode, deltaRowCount, deltaTicksPerRow, deltaDynamicAggregationMultiplier, deltaDynamicRowMinPixels, deltaDynamicMinCompression, deltaDynamicMaxCompression, valueAreaPercent, profileSide, profileWidthPercent, deltaWidthPercent, deltaDirection, profileBarSpacingPx, showVolume, showDelta, showPOC, showValueArea, showVAColor, showVALines, showVAH, showVAL, showTotalVolume, vALineThickness, vALineStyle, useGradient, gradientSteps, minBrightness, opacity, useDeltaIntensityColoring, deltaIntensityMinOpacity, showDeltaLabels, deltaLabelFontSize);
+		}
+	}
+}
+
+#endregion

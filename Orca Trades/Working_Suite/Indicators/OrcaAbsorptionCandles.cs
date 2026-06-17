@@ -72,7 +72,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Calculate					= Calculate.OnEachTick;
 				IsOverlay					= true;
 				DisplayInDataBox			= false;
-				IsSuspendedWhileInactive	= true;
+				IsSuspendedWhileInactive	= false;
 				BarsRequiredToPlot			= 0;
 				PaintPriceMarkers			= false;
 
@@ -83,6 +83,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IntensityLookback           = 50;
 				DeltaMode                   = DeltaCalculationMode.BidAsk;
 				ShowHistoricalColor         = true;
+				PaintNativeCandles          = true;
 
 				HighlightDivergence         = true;
 				BullishDivergenceColor      = Brushes.Cyan;
@@ -131,7 +132,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			SolidColorBrush n100 = new SolidColorBrush(Color.FromArgb(255, negColor.R, negColor.G, negColor.B));
 			n100.Freeze();
 			neg100Brush = n100;
-			
+
 			SolidColorBrush p50 = new SolidColorBrush(Color.FromArgb(127, posColor.R, posColor.G, posColor.B));
 			p50.Freeze();
 			pos50Brush = p50;
@@ -148,7 +149,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				double intensity = (double)i / (NUM_BRUSHES - 1); // 0.0 to 1.0
 				double opacity = BaseOpacity + (1.0 - BaseOpacity) * intensity;
-				
+
 				byte posA = (byte)(opacity * posColor.A);
 				byte negA = (byte)(opacity * negColor.A);
 
@@ -195,6 +196,116 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return barSyntheticDelta[barIdx];
 		}
 
+		public Brush GetBodyBrushForBar(int barIdx)
+		{
+			if (barIdx < 0 || barTickDelta == null || barHasData == null || barSyntheticDelta == null || barIdx >= barTickDelta.Count)
+				return null;
+
+			bool hasReal = barIdx < barHasData.Count && barHasData[barIdx];
+			bool useSynthetic = !hasReal && ShowHistoricalColor;
+			if (!hasReal && !useSynthetic)
+				return null;
+
+			double delta = hasReal ? barTickDelta[barIdx] : ComputeSyntheticDelta(barIdx);
+			double open = Open.GetValueAt(barIdx);
+			double close = Close.GetValueAt(barIdx);
+			bool isBullishDivergence = delta < 0 && close > open;
+			bool isBearishDivergence = delta > 0 && close < open;
+			bool isDivergent = isBullishDivergence || isBearishDivergence;
+
+			bool passesThreshold = true;
+			if (ThresholdMode == AbsorptionThresholdMode.FixedValue)
+			{
+				passesThreshold = Math.Abs(delta) >= FixedThreshold;
+			}
+			else if (ThresholdMode == AbsorptionThresholdMode.PercentageOfAverage)
+			{
+				double sum = 0;
+				int count = 0;
+				int avgStartIdx = Math.Max(0, barIdx - AvgLookback);
+				for (int i = barIdx - 1; i >= avgStartIdx; i--)
+				{
+					double absD = 0;
+					if (i < barHasData.Count && barHasData[i])
+						absD = Math.Abs(barTickDelta[i]);
+					else if (ShowHistoricalColor && i < barSyntheticDelta.Count)
+						absD = Math.Abs(ComputeSyntheticDelta(i));
+					else
+						continue;
+					sum += absD;
+					count++;
+				}
+				double avg = count > 0 ? (sum / count) : 0;
+				passesThreshold = Math.Abs(delta) >= (avg * (PercentageThreshold / 100.0));
+			}
+
+			bool enforceThreshold = ThresholdMode != AbsorptionThresholdMode.None && !passesThreshold;
+
+			if (DivColorMode == DivergenceColorMode.TwoColorOpacity)
+			{
+				Brush standardBody = enforceThreshold ? NeutralColor : (delta >= 0 ? pos50Brush : neg50Brush);
+				if (!HighlightDivergence || !isDivergent)
+					return standardBody;
+
+				if (DivergenceOutlineOnly)
+				{
+					if (DivColorBasis == DivergenceColorBasis.DeltaDirection)
+						return delta >= 0 ? pos50Brush : neg50Brush;
+					return close >= open ? pos50Brush : neg50Brush;
+				}
+
+				if (DivColorBasis == DivergenceColorBasis.DeltaDirection)
+					return delta >= 0 ? pos100Brush : neg100Brush;
+				return close >= open ? pos100Brush : neg100Brush;
+			}
+
+			int brushIdx = 0;
+			Brush gradientBody;
+
+			if (enforceThreshold)
+			{
+				gradientBody = NeutralColor;
+			}
+			else
+			{
+				double maxDelta = 0;
+				int startIdx = Math.Max(0, barIdx - IntensityLookback);
+				for (int i = barIdx; i >= startIdx; i--)
+				{
+					double absD;
+					if (i < barHasData.Count && barHasData[i])
+						absD = Math.Abs(barTickDelta[i]);
+					else if (ShowHistoricalColor && i < barSyntheticDelta.Count)
+						absD = Math.Abs(ComputeSyntheticDelta(i));
+					else
+						continue;
+					if (absD > maxDelta) maxDelta = absD;
+				}
+
+				if (maxDelta == 0) maxDelta = 1;
+
+				double intensity = Math.Abs(delta) / maxDelta;
+				brushIdx = (int)Math.Round(intensity * (NUM_BRUSHES - 1));
+				if (brushIdx < 0) brushIdx = 0;
+				if (brushIdx >= NUM_BRUSHES) brushIdx = NUM_BRUSHES - 1;
+
+				gradientBody = delta >= 0 ? positiveBrushes[brushIdx] : negativeBrushes[brushIdx];
+			}
+
+			if (!HighlightDivergence || !isDivergent)
+				return gradientBody;
+
+			if (DivergenceOutlineOnly)
+			{
+				if (enforceThreshold) return NeutralColor;
+				if (DivColorBasis == DivergenceColorBasis.DeltaDirection)
+					return delta >= 0 ? positiveBrushes[brushIdx] : negativeBrushes[brushIdx];
+				return close >= open ? positiveBrushes[brushIdx] : negativeBrushes[brushIdx];
+			}
+
+			return isBullishDivergence ? BullishDivergenceColor : BearishDivergenceColor;
+		}
+
 		protected override void OnMarketData(MarketDataEventArgs e)
 		{
 			if (DeltaMode == DeltaCalculationMode.BidAsk)
@@ -216,15 +327,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// ============================================
 			if (BarsInProgress == 1)
 			{
-				double price = Close[0];
-				long vol = (long)Volume[0];
+				double price = Closes[1][0];
+				long vol = (long)Volumes[1][0];
 				if (vol <= 0) return;
 
 				if (Instrument.MasterInstrument.InstrumentType == InstrumentType.CryptoCurrency)
 					vol = (long)Core.Globals.ToCryptocurrencyVolume(vol);
 
 				long signed = 0;
-				
+
 				if (DeltaMode == DeltaCalculationMode.BidAsk && !double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
 				{
 					if (price >= lastAsk) signed = vol;
@@ -248,10 +359,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				else if (signed < 0) lastDirection = -1;
 
 				prevLast = price;
-				
+
 				if (signed == 0) return;
 
-				int primaryIdx = BarsArray[0].GetBar(Time[0]);
+				DateTime tickTime = Times[1][0];
+				int primaryIdx = BarsArray[0].GetBar(tickTime);
 				if (primaryIdx < 0) return;
 
 				EnsureBarLists(primaryIdx);
@@ -266,12 +378,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (BarsInProgress == 0)
 			{
 				EnsureBarLists(CurrentBar);
-				
+
 				if (Bars.IsFirstBarOfSession && IsFirstTickOfBar)
 				{
 					lastBid = double.NaN;
 					lastAsk = double.NaN;
 					prevLast = double.NaN;
+				}
+
+				if (!PaintNativeCandles)
+				{
+					BarBrush = Brushes.Transparent;
+					CandleOutlineBrush = Brushes.Transparent;
+					return;
 				}
 
 				// Determine the delta value to use: real tick data or synthetic OHLC fallback
@@ -281,7 +400,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (hasReal || useSynthetic)
 				{
 					double delta = hasReal ? barTickDelta[CurrentBar] : ComputeSyntheticDelta(CurrentBar);
-					
+
 					bool isBullishDivergence = delta < 0 && Close[0] > Open[0];
 					bool isBearishDivergence = delta > 0 && Close[0] < Open[0];
 					bool isDivergent = isBullishDivergence || isBearishDivergence;
@@ -329,7 +448,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									b = delta >= 0 ? pos50Brush : neg50Brush;
 								else
 									b = Close[0] >= Open[0] ? pos50Brush : neg50Brush;
-									
+
 								BarBrush = b;
 								CandleOutlineBrush = divOutlineBrush;
 							}
@@ -340,7 +459,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									b = delta >= 0 ? pos100Brush : neg100Brush;
 								else
 									b = Close[0] >= Open[0] ? pos100Brush : neg100Brush;
-									
+
 								BarBrush = b;
 								CandleOutlineBrush = divOutlineBrush;
 							}
@@ -356,7 +475,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						// MultiColorGradient Mode
 						int brushIdx = 0;
 						Brush standardBody;
-						
+
 						if (enforceThreshold)
 						{
 							standardBody = NeutralColor;
@@ -365,7 +484,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						{
 							double maxDelta = 0;
 							int startIdx = Math.Max(0, CurrentBar - IntensityLookback);
-							
+
 							for (int i = CurrentBar; i >= startIdx; i--)
 							{
 								double absD;
@@ -398,7 +517,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									b = delta >= 0 ? positiveBrushes[brushIdx] : negativeBrushes[brushIdx];
 								else
 									b = Close[0] >= Open[0] ? positiveBrushes[brushIdx] : negativeBrushes[brushIdx];
-									
+
 								BarBrush = b;
 								CandleOutlineBrush = divOutlineBrush;
 							}
@@ -457,22 +576,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool ShowHistoricalColor { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "4. Threshold Mode", Order = 4, GroupName = "2. Parameters", Description = "Method used to filter which candles light up with absorption colors.")]
+		[Display(Name = "4. Paint Native Candles", Order = 4, GroupName = "2. Parameters", Description = "When false, this indicator still calculates absorption colors for other Orca tools but does not paint NinjaTrader's native candles.")]
+		public bool PaintNativeCandles { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "5. Threshold Mode", Order = 5, GroupName = "2. Parameters", Description = "Method used to filter which candles light up with absorption colors.")]
 		public AbsorptionThresholdMode ThresholdMode { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.0, double.MaxValue)]
-		[Display(Name = "5. Fixed Threshold", Order = 5, GroupName = "2. Parameters", Description = "Delta must be >= this value when mode is FixedValue.")]
+		[Display(Name = "6. Fixed Threshold", Order = 6, GroupName = "2. Parameters", Description = "Delta must be >= this value when mode is FixedValue.")]
 		public double FixedThreshold { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, int.MaxValue)]
-		[Display(Name = "6. Average Lookback", Order = 6, GroupName = "2. Parameters", Description = "Number of preceding bars to average when mode is PercentageOfAverage.")]
+		[Display(Name = "7. Average Lookback", Order = 7, GroupName = "2. Parameters", Description = "Number of preceding bars to average when mode is PercentageOfAverage.")]
 		public int AvgLookback { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.0, double.MaxValue)]
-		[Display(Name = "7. Percentage Threshold", Order = 7, GroupName = "2. Parameters", Description = "Required percentage of the average (e.g. 150 for 150%) when mode is PercentageOfAverage.")]
+		[Display(Name = "8. Percentage Threshold", Order = 8, GroupName = "2. Parameters", Description = "Required percentage of the average (e.g. 150 for 150%) when mode is PercentageOfAverage.")]
 		public double PercentageThreshold { get; set; }
 
 		[NinjaScriptProperty]
@@ -524,18 +647,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private OrcaAbsorptionCandles[] cacheOrcaAbsorptionCandles;
-		public OrcaAbsorptionCandles OrcaAbsorptionCandles(bool showHistoricalColor)
+		public OrcaAbsorptionCandles OrcaAbsorptionCandles(int intensityLookback, DeltaCalculationMode deltaMode, bool showHistoricalColor, bool paintNativeCandles, AbsorptionThresholdMode thresholdMode, double fixedThreshold, int avgLookback, double percentageThreshold, bool highlightDivergence, DivergenceColorMode divColorMode, DivergenceColorBasis divColorBasis, double divergenceOutlineOpacity, bool divergenceOutlineOnly)
 		{
-			return OrcaAbsorptionCandles(Input, showHistoricalColor);
+			return OrcaAbsorptionCandles(Input, intensityLookback, deltaMode, showHistoricalColor, paintNativeCandles, thresholdMode, fixedThreshold, avgLookback, percentageThreshold, highlightDivergence, divColorMode, divColorBasis, divergenceOutlineOpacity, divergenceOutlineOnly);
 		}
 
-		public OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input, bool showHistoricalColor)
+		public OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input, int intensityLookback, DeltaCalculationMode deltaMode, bool showHistoricalColor, bool paintNativeCandles, AbsorptionThresholdMode thresholdMode, double fixedThreshold, int avgLookback, double percentageThreshold, bool highlightDivergence, DivergenceColorMode divColorMode, DivergenceColorBasis divColorBasis, double divergenceOutlineOpacity, bool divergenceOutlineOnly)
 		{
 			if (cacheOrcaAbsorptionCandles != null)
 				for (int idx = 0; idx < cacheOrcaAbsorptionCandles.Length; idx++)
-					if (cacheOrcaAbsorptionCandles[idx] != null && cacheOrcaAbsorptionCandles[idx].ShowHistoricalColor == showHistoricalColor && cacheOrcaAbsorptionCandles[idx].EqualsInput(input))
+					if (cacheOrcaAbsorptionCandles[idx] != null && cacheOrcaAbsorptionCandles[idx].IntensityLookback == intensityLookback && cacheOrcaAbsorptionCandles[idx].DeltaMode == deltaMode && cacheOrcaAbsorptionCandles[idx].ShowHistoricalColor == showHistoricalColor && cacheOrcaAbsorptionCandles[idx].PaintNativeCandles == paintNativeCandles && cacheOrcaAbsorptionCandles[idx].ThresholdMode == thresholdMode && cacheOrcaAbsorptionCandles[idx].FixedThreshold == fixedThreshold && cacheOrcaAbsorptionCandles[idx].AvgLookback == avgLookback && cacheOrcaAbsorptionCandles[idx].PercentageThreshold == percentageThreshold && cacheOrcaAbsorptionCandles[idx].HighlightDivergence == highlightDivergence && cacheOrcaAbsorptionCandles[idx].DivColorMode == divColorMode && cacheOrcaAbsorptionCandles[idx].DivColorBasis == divColorBasis && cacheOrcaAbsorptionCandles[idx].DivergenceOutlineOpacity == divergenceOutlineOpacity && cacheOrcaAbsorptionCandles[idx].DivergenceOutlineOnly == divergenceOutlineOnly && cacheOrcaAbsorptionCandles[idx].EqualsInput(input))
 						return cacheOrcaAbsorptionCandles[idx];
-			return CacheIndicator<OrcaAbsorptionCandles>(new OrcaAbsorptionCandles(){ ShowHistoricalColor = showHistoricalColor }, input, ref cacheOrcaAbsorptionCandles);
+			return CacheIndicator<OrcaAbsorptionCandles>(new OrcaAbsorptionCandles(){ IntensityLookback = intensityLookback, DeltaMode = deltaMode, ShowHistoricalColor = showHistoricalColor, PaintNativeCandles = paintNativeCandles, ThresholdMode = thresholdMode, FixedThreshold = fixedThreshold, AvgLookback = avgLookback, PercentageThreshold = percentageThreshold, HighlightDivergence = highlightDivergence, DivColorMode = divColorMode, DivColorBasis = divColorBasis, DivergenceOutlineOpacity = divergenceOutlineOpacity, DivergenceOutlineOnly = divergenceOutlineOnly }, input, ref cacheOrcaAbsorptionCandles);
 		}
 	}
 }
@@ -544,14 +667,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(bool showHistoricalColor)
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(int intensityLookback, DeltaCalculationMode deltaMode, bool showHistoricalColor, bool paintNativeCandles, AbsorptionThresholdMode thresholdMode, double fixedThreshold, int avgLookback, double percentageThreshold, bool highlightDivergence, DivergenceColorMode divColorMode, DivergenceColorBasis divColorBasis, double divergenceOutlineOpacity, bool divergenceOutlineOnly)
 		{
-			return indicator.OrcaAbsorptionCandles(Input, showHistoricalColor);
+			return indicator.OrcaAbsorptionCandles(Input, intensityLookback, deltaMode, showHistoricalColor, paintNativeCandles, thresholdMode, fixedThreshold, avgLookback, percentageThreshold, highlightDivergence, divColorMode, divColorBasis, divergenceOutlineOpacity, divergenceOutlineOnly);
 		}
 
-		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input , bool showHistoricalColor)
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input , int intensityLookback, DeltaCalculationMode deltaMode, bool showHistoricalColor, bool paintNativeCandles, AbsorptionThresholdMode thresholdMode, double fixedThreshold, int avgLookback, double percentageThreshold, bool highlightDivergence, DivergenceColorMode divColorMode, DivergenceColorBasis divColorBasis, double divergenceOutlineOpacity, bool divergenceOutlineOnly)
 		{
-			return indicator.OrcaAbsorptionCandles(input, showHistoricalColor);
+			return indicator.OrcaAbsorptionCandles(input, intensityLookback, deltaMode, showHistoricalColor, paintNativeCandles, thresholdMode, fixedThreshold, avgLookback, percentageThreshold, highlightDivergence, divColorMode, divColorBasis, divergenceOutlineOpacity, divergenceOutlineOnly);
 		}
 	}
 }
@@ -560,14 +683,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(bool showHistoricalColor)
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(int intensityLookback, DeltaCalculationMode deltaMode, bool showHistoricalColor, bool paintNativeCandles, AbsorptionThresholdMode thresholdMode, double fixedThreshold, int avgLookback, double percentageThreshold, bool highlightDivergence, DivergenceColorMode divColorMode, DivergenceColorBasis divColorBasis, double divergenceOutlineOpacity, bool divergenceOutlineOnly)
 		{
-			return indicator.OrcaAbsorptionCandles(Input, showHistoricalColor);
+			return indicator.OrcaAbsorptionCandles(Input, intensityLookback, deltaMode, showHistoricalColor, paintNativeCandles, thresholdMode, fixedThreshold, avgLookback, percentageThreshold, highlightDivergence, divColorMode, divColorBasis, divergenceOutlineOpacity, divergenceOutlineOnly);
 		}
 
-		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input , bool showHistoricalColor)
+		public Indicators.OrcaAbsorptionCandles OrcaAbsorptionCandles(ISeries<double> input , int intensityLookback, DeltaCalculationMode deltaMode, bool showHistoricalColor, bool paintNativeCandles, AbsorptionThresholdMode thresholdMode, double fixedThreshold, int avgLookback, double percentageThreshold, bool highlightDivergence, DivergenceColorMode divColorMode, DivergenceColorBasis divColorBasis, double divergenceOutlineOpacity, bool divergenceOutlineOnly)
 		{
-			return indicator.OrcaAbsorptionCandles(input, showHistoricalColor);
+			return indicator.OrcaAbsorptionCandles(input, intensityLookback, deltaMode, showHistoricalColor, paintNativeCandles, thresholdMode, fixedThreshold, avgLookback, percentageThreshold, highlightDivergence, divColorMode, divColorBasis, divergenceOutlineOpacity, divergenceOutlineOnly);
 		}
 	}
 }

@@ -13,10 +13,15 @@ $OrcaTradesRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $SourceSuiteRoot = Join-Path $OrcaTradesRoot $SourceSuite
 $SourceIndicators = Join-Path $SourceSuiteRoot "Indicators"
 $SourceAddOns = Join-Path $SourceSuiteRoot "AddOns"
+$SourceDrawingTools = Join-Path $SourceSuiteRoot "DrawingTools"
+$SourceBarsTypes = Join-Path $SourceSuiteRoot "BarsTypes"
 $LiveIndicators = Join-Path $LiveCustomRoot "Indicators"
 $LiveAddOns = Join-Path $LiveCustomRoot "AddOns"
+$LiveDrawingTools = Join-Path $LiveCustomRoot "DrawingTools"
+$LiveBarsTypes = Join-Path $LiveCustomRoot "BarsTypes"
 $MirrorIndicators = Join-Path $OrcaTradesRoot "NinjaTrader\Indicators"
 $MirrorAddOns = Join-Path $OrcaTradesRoot "NinjaTrader\AddOns"
+$MirrorDrawingTools = Join-Path $OrcaTradesRoot "NinjaTrader\DrawingTools"
 
 function Assert-Directory {
     param ([string]$Path)
@@ -72,9 +77,17 @@ Assert-Directory $SourceAddOns
 
 $indicatorFiles = Get-SourceFiles -Directory $SourceIndicators -RequestedTarget $Target
 $addOnFiles = Get-SourceFiles -Directory $SourceAddOns -RequestedTarget $Target
+$drawingToolFiles = @()
+if (Test-Path -LiteralPath $SourceDrawingTools -PathType Container) {
+    $drawingToolFiles = Get-SourceFiles -Directory $SourceDrawingTools -RequestedTarget $Target
+}
+$barsTypeFiles = @()
+if (Test-Path -LiteralPath $SourceBarsTypes -PathType Container) {
+    $barsTypeFiles = Get-SourceFiles -Directory $SourceBarsTypes -RequestedTarget $Target
+}
 
-if ($Target -ne "All" -and $indicatorFiles.Count -eq 0 -and $addOnFiles.Count -eq 0) {
-    throw "Target '$Target' was not found in $SourceSuite Indicators or AddOns."
+if ($Target -ne "All" -and $indicatorFiles.Count -eq 0 -and $addOnFiles.Count -eq 0 -and $drawingToolFiles.Count -eq 0 -and $barsTypeFiles.Count -eq 0) {
+    throw "Target '$Target' was not found in $SourceSuite Indicators, AddOns, DrawingTools, or BarsTypes."
 }
 
 Write-Host "Orca deploy source: $SourceSuiteRoot"
@@ -89,6 +102,9 @@ if ($SyncLocalMirror) {
     foreach ($file in $addOnFiles) {
         Copy-OrcaFile -File $file -DestinationDirectory $MirrorAddOns -Label "MIRROR AddOn"
     }
+    foreach ($file in $drawingToolFiles) {
+        Copy-OrcaFile -File $file -DestinationDirectory $MirrorDrawingTools -Label "MIRROR DrawingTool"
+    }
     Write-Host ""
 }
 
@@ -98,6 +114,12 @@ foreach ($file in $indicatorFiles) {
 }
 foreach ($file in $addOnFiles) {
     Copy-OrcaFile -File $file -DestinationDirectory $LiveAddOns -Label "LIVE AddOn"
+}
+foreach ($file in $drawingToolFiles) {
+    Copy-OrcaFile -File $file -DestinationDirectory $LiveDrawingTools -Label "LIVE DrawingTool"
+}
+foreach ($file in $barsTypeFiles) {
+    Copy-OrcaFile -File $file -DestinationDirectory $LiveBarsTypes -Label "LIVE BarsType"
 }
 
 Write-Host ""
