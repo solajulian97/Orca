@@ -1,0 +1,143 @@
+# Orca Product State
+
+Last updated: 2026-06-25
+
+## Current Status
+
+Orca is a commercial NinjaTrader 8 suite for futures/order-flow visualization, profile work, VWAP/session context, execution visualization, and risk/trade-management add-ons.
+
+Active development source is `Orca Trades/Working_Suite`. `Orca Trades/Full_Suite` is the validated promotion target and should not be changed until Julian confirms NinjaTrader compile and manual behavior.
+
+This first pass was documentation and source audit only. No production indicator logic was changed.
+
+## Current Suite Inventory
+
+Working_Suite currently contains:
+
+- Indicators: `OrcaAbsorptionCandles`, `OrcaAnchoredVWAPs`, `OrcaCandleVolumeProfile`, `OrcaCumulativeDelta`, `OrcaExecutionLines`, `OrcaExecutionLines2`, `OrcaLegtoLegProfile`, `OrcaMGIDaily`, `OrcaMGIStatistics`, `OrcaMGIWeekly`, `OrcaPrints`, `OrcaProfileDataProvider`, `OrcaRollingProfiles`, `OrcaSessionContextMap`, `OrcaStepProfile`, `OrcaTickDirectionIndex`, `OrcaTimeStatistics`, `OrcaTimeVWAPs`, `OrcaVisibleRangeVolumeProfile`, `OrcaVisualOrders`, `OrcaVolumeProfileCore`.
+- OrcaPrints partials: `OrcaPrints.Engine`, `OrcaPrints.Models`, `OrcaPrints.Rendering`, `OrcaPrints.Scoring`.
+- Drawing tools: `OrcaFixedRangeProfile`, `OrcaManualAnchoredVWAP`.
+- Bars types: `OrcaAtrAdaptiveRangeBarsType`.
+- Add-ons/support: `OrcaCopyAddOn`, `OrcaCopyEngine`, `OrcaCopyNetwork`, `OrcaDisciplineGuardAddOn`, `OrcaExecutionRouterAddOn`, `OrcaRiskManagerAddOn`, `OrcaTradeCopierAddOn`, `OrcaTradeCopierEngine`, `OrcaTradeCopierNetwork`.
+
+## Development Versus Validated Status
+
+Known current development state from Git status on 2026-06-25:
+
+- Modified Working_Suite files: `OrcaRiskManagerAddOn.cs`, `OrcaLegtoLegProfile.cs`, `OrcaMGIDaily.cs`, `OrcaPrints.Rendering.cs`, `OrcaPrints.cs`, `OrcaRollingProfiles.cs`, `OrcaStepProfile.cs`.
+- Untracked paths: `.codex-backups/`, `Orca Full Suite/`, `Orca_NinjaTrader_sync_55d9422.zip`.
+- These dirty files were not edited in this pass.
+
+Validated status remains unknown unless a handoff or Julian confirms NinjaTrader compile and behavior. Do not infer validation from repo state.
+
+## Current Active Work
+
+The active reliability concern is workspace startup, historical-load completeness, Tick Replay amplification, cache/state sequencing, and render/calculation cost across a distributed multi-chart workspace.
+
+## Historical-Data And Startup Incident Summary
+
+Facts reported by Julian:
+
+- Some existing MNQ September-contract charts appeared to have roughly a ten-minute historical gap after NinjaTrader restart.
+- A clean new MNQ one-minute chart loaded complete data immediately.
+- A one-minute chart from an existing template also loaded complete data and included Orca Prints, MGI-related tools, and Rolling VWAP.
+- Some affected charts had Tick Replay disabled.
+- Enabling Tick Replay on a chart with about five days of MNQ data stayed in Calculating for more than fifteen minutes.
+- Later, the complete workspace loaded successfully with all data and became usable in roughly two minutes.
+
+Interpretation:
+
+- The gap is not proven to be missing broker/NinjaTrader historical data.
+- The current evidence fits startup sequencing, chart-instance state, hidden/secondary series hydration, shared cache availability, Tick Replay amplification, rendering, or stale chart state.
+- Broad data reloads and broad cache clearing are not default recovery actions.
+
+## Tick Replay Risk Summary
+
+Tick Replay risk is highest in components that process every tick or maintain hidden 1-tick series:
+
+- `OrcaAbsorptionCandles`
+- `OrcaCumulativeDelta`
+- `OrcaCandleVolumeProfile`
+- `OrcaLegtoLegProfile`
+- `OrcaProfileDataProvider`
+- `OrcaRollingProfiles`
+- `OrcaStepProfile`
+- `OrcaTickDirectionIndex`
+- `OrcaVisibleRangeVolumeProfile`
+- `OrcaPrints`
+
+Tick Replay may be needed for historical per-tick accuracy in some order-flow tools, but this must be measured per component and configuration.
+
+## Current Performance Evidence
+
+Reported NinjaScript Utilization Monitor cumulative entries after workspace load included high bars-type totals for 1 Tick, 15 Second, 30 Second, 30 Minute, 930 Minute, range bars, 5 Minute, and smaller visible entries for Orca Manual Anchored VWAP, OrcaTimeVWAPs, PriceLine, and OrcaExecutionLines.
+
+This is a ranking signal only. It is not startup-only timing and does not identify a specific source chart or indicator instance.
+
+## Known Unknowns
+
+- Which chart instances in the real workspace own each hidden 1-tick, 30-second, minute, range, or custom series.
+- Whether the MNQ gap came from data availability, chart state, cache state, indicator model state, or rendering.
+- Which Orca modules require Tick Replay for historical correctness versus live intrabar behavior only.
+- Whether shared provider registration timing is delayed during workspace startup.
+- Whether local tick-series hydration duplicates work that could use `OrcaProfileDataProvider`.
+- Whether render work is significant during the startup window.
+- Whether `OrcaProfileDataProvider` persistent cache is enabled in Julian's workspace.
+
+## Root-Cause Hypothesis Matrix
+
+This matrix ranks current hypotheses from code inspection and Julian's observations only. It is not a confirmed root-cause list.
+
+| Hypothesis | Probability | User impact | Ease of measurement | Ease of remediation | Evidence needed |
+| --- | --- | --- | --- | --- | --- |
+| Multiple Orca modules hydrate independent hidden 1-tick series for the same MNQ range during startup. | High | High | High with series-map diagnostics | Medium; may use shared provider defaults or dedupe | Per-instance series map, Tick Replay event counts, provider availability timing |
+| Tick Replay amplifies per-tick historical work across profile/prints/delta tools. | High | High | High with lifecycle/event counters | Medium; component-specific fast paths may be possible | Off/on benchmarks for one-day and five-day MNQ history |
+| Shared provider/cache data is unavailable or late during workspace startup, forcing local fallbacks or empty models. | Medium | High | Medium with cache registration/snapshot telemetry | Medium | Provider registration timestamps, snapshot hit/miss, source age, fallback reason |
+| Stale chart-instance state or startup sequencing caused the visible MNQ gap while raw historical data was complete. | Medium | High | Medium; needs workspace startup report and chart-state capture | Low to medium if isolated to reload/recreate chart workflow | Compare affected chart instance against clean chart/template with same series and tools |
+| Render-triggered profile rebuild or snapshot refresh delays chart usability. | Medium | Medium | Medium with render sampling and profile rebuild counters | Medium | `OnRender` timing, rebuild count, snapshot age, cache-read-in-render detection |
+| Persistent/local cache contains partial or stale tick data for a narrow range. | Low to medium | High | Medium with cache gap telemetry | Medium; recovery must be scoped | Cache key, returned tick count, first/last tick timestamp, largest gap |
+| Broker/NinjaTrader historical data was genuinely missing. | Low based on clean-chart evidence | High | High with clean chart and raw historical comparison | Low only if platform-side reload is scoped | Same instrument/contract/time range comparison outside Orca paths |
+## Open Decisions
+
+- Standard diagnostic output location and retention policy.
+- Whether diagnostics are per-indicator settings, a shared global setting, or both.
+- Whether Phase 1 writes JSONL, CSV, or both.
+- Whether shared-provider adoption should become default for profile consumers after measurement.
+- Whether Tick Replay compatibility labels should be shown in UI or kept internal.
+
+## Highest-Priority Next Steps
+
+1. Add a disabled-by-default diagnostics core with `Off`, `StartupSummary`, and `Verbose`.
+2. Instrument lifecycle, series map, shared cache registration/snapshot, and render timing without changing trading behavior.
+3. Run a distributed workspace benchmark: clean launch, normal restart, Tick Replay off/on, one day/five days MNQ, cold/warm cache.
+4. Use measurements to decide whether to optimize shared cache, local tick-series hydration, Tick Replay paths, profile rebuilds, or render snapshots.
+
+## Recent Benchmark Records
+
+No reproducible benchmark records exist in-repo yet. The utilization monitor table from the prompt is observational evidence, not a controlled benchmark.
+
+## Files Requiring Audit Or Instrumentation
+
+Highest priority:
+
+- `Orca Trades/Working_Suite/Indicators/OrcaProfileDataProvider.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaVolumeProfileCore.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaRollingProfiles.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaVisibleRangeVolumeProfile.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaStepProfile.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaLegtoLegProfile.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaPrints.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaPrints.Engine.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaPrints.Rendering.cs`
+- `Orca Trades/Working_Suite/BarsTypes/OrcaAtrAdaptiveRangeBarsType.cs`
+
+Second priority:
+
+- `Orca Trades/Working_Suite/Indicators/OrcaCumulativeDelta.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaAbsorptionCandles.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaTickDirectionIndex.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaSessionContextMap.cs`
+- `Orca Trades/Working_Suite/Indicators/OrcaMGIDaily.cs`
+- `Orca Trades/Working_Suite/DrawingTools/OrcaFixedRangeProfile.cs`
+- `Orca Trades/Working_Suite/DrawingTools/OrcaManualAnchoredVWAP.cs`

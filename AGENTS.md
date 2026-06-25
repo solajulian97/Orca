@@ -1,42 +1,81 @@
-# Agent Instructions
+﻿# Orca Agent Coordination Protocol
 
-These instructions apply to Codex, Claude Code, and any other coding assistant working in this repo.
+## Source of truth
 
-## Source Of Truth
+- Active development source: `Orca Trades/Working_Suite`
+- Validated promotion target: `Orca Trades/Full_Suite`
+- Do not modify or promote files into `Full_Suite` until Julian has compiled and manually validated the change in NinjaTrader.
+- Do not copy from `Orca Trades/NinjaTrader`, `Stable_Release`, `decompiled`, or local NinjaTrader folders into `Working_Suite` or `Full_Suite` unless Julian explicitly confirms that the source file is newer and intended to replace the current version.
 
-`Orca Trades/Working_Suite` is the editable local working copy.
+## Required reading before any task
 
-Edit:
+Read, in order:
 
-- `Orca Trades/Working_Suite/Indicators`
-- `Orca Trades/Working_Suite/AddOns`
+1. `AGENTS.md`
+2. `docs/ORCA_PRODUCT_STATE.md`
+3. `docs/ORCA_ARCHITECTURE.md`
+4. `docs/ORCA_DIAGNOSTICS_SPEC.md`
+5. Relevant component documentation in `docs/indicators/`
+6. Recent relevant files in `docs/handoffs/`
+7. Current Git status, recent Git log, and relevant diffs
 
-`Orca Trades/Full_Suite` is the clean validated suite. Promote into it only after Julia confirms the change compiled and behaved correctly in NinjaTrader.
+Also read `docs/collaboration-workflow.md` and `docs/engineering-notes.md` before substantial implementation work.
 
-Do not copy from `Orca Trades/NinjaTrader`, `Stable_Release`, `decompiled`, or local NinjaTrader folders into `Working_Suite` or `Full_Suite` unless Julia explicitly confirms that the source file is newer and intended to replace the current version.
+## Required handoff after every completed logical change
 
-## Collaboration Safety
+Every agent must create or update:
 
-- Run `git status --short --branch` before edits.
-- Keep edits targeted.
-- Avoid broad formatting.
-- Do not overwrite uncommitted changes from Julia or another agent.
-- If another agent changed a file, inspect the diff and continue from the latest content rather than reverting.
-- If source-of-truth is ambiguous, pause and ask Julia.
+`docs/handoffs/YYYY-MM-DD_<component>_<short-topic>.md`
 
-## Deployment
+Each handoff must include:
 
-Use `Orca Trades/Scripts/deploy_orca.ps1`. It deploys from `Working_Suite` by default.
+- Objective
+- Files changed
+- Behavior added, changed, or removed
+- User-facing settings added, changed, deprecated, or removed
+- Secondary series added or changed, including Tick, Second, Bid, Ask, Last, Volumetric, or custom series
+- Tick Replay implications
+- Historical-load implications
+- Cache implications
+- Rendering implications
+- Performance implications
+- Tests performed in NinjaTrader
+- Compile status
+- Manual-validation status
+- Known issues, risks, and follow-up work
+- Whether the change is eligible for promotion to `Full_Suite`
 
-After deployment, NinjaTrader still requires pressing `F5` in the NinjaScript Editor to compile.
+Do not treat "compiled" as "validated." Code is validated only after Julian confirms live NinjaTrader behavior.
 
-After Julia approves the behavior, use `Orca Trades/Scripts/promote_working_to_full_suite.ps1 -Target <FileName>` to copy the validated file into `Full_Suite`.
+Every completed logical change should be committed with its corresponding handoff documentation when Git is available.
 
-## NinjaTrader Cautions
+## Performance-sensitive rules
 
-- Ghost files in `Documents/NinjaTrader 8/bin/Custom` can cause compiler errors unrelated to current repo source.
-- SharpDX resources must be disposed correctly.
-- WPF brushes need explicit serializable string companion properties.
-- Historical and realtime order-flow behavior can differ.
+Before adding or changing profile, prints, VWAP, execution, session-context, MGI, or data-driven features:
 
-See `docs/collaboration-workflow.md` and `docs/engineering-notes.md` before substantial work.
+- Search for existing shared data/cache services before adding new data access or secondary series.
+- Do not add redundant Tick, Bid, Ask, Second, Volumetric, or custom series without documenting why.
+- Document all uses of `AddDataSeries`, `OnMarketData`, `Calculate.OnEachTick`, `Calculate.OnPriceChange`, Tick Replay, and shared cache access.
+- Do not perform full historical rebuilds inside per-tick paths.
+- Do not perform profile calculation, cache reads, allocation-heavy work, mutation, or synchronization waits inside `OnRender`.
+- Keep rendering snapshot-based and precomputed.
+- Add or preserve diagnostics around historical warm-up, series maps, cache wait time, profile-build time, and render time where relevant.
+- Do not make destructive historical-data, cache, database, or workspace changes without explicit user approval.
+
+## Product-manager review routine
+
+When asked for a project review, the product manager must:
+
+1. Review Git status, recent commits, diffs, handoff files, component documentation, and current source code.
+2. Update `docs/ORCA_PRODUCT_STATE.md` with validated work, active development, open risks, benchmark findings, and next priorities.
+3. Identify cross-indicator conflicts, duplicated data series, duplicated caches, inconsistent settings, lifecycle risks, Tick Replay risks, historical-load risks, and performance risks.
+4. Convert cross-cutting findings into file-aware implementation plans.
+5. Do not write indicator logic unless explicitly asked. Produce a concrete plan first.
+
+## Documentation quality
+
+- Prefer precise, dated, file-aware documentation.
+- Record facts separately from hypotheses.
+- Link each performance conclusion to a reproducible test or measurement.
+- Do not claim a root cause without evidence.
+- Keep module documentation current when behavior or settings change.
