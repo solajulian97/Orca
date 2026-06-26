@@ -97,6 +97,38 @@ This matrix ranks current hypotheses from code inspection and Julian's observati
 | Render-triggered profile rebuild or snapshot refresh delays chart usability. | Medium | Medium | Medium with render sampling and profile rebuild counters | Medium | `OnRender` timing, rebuild count, snapshot age, cache-read-in-render detection |
 | Persistent/local cache contains partial or stale tick data for a narrow range. | Low to medium | High | Medium with cache gap telemetry | Medium; recovery must be scoped | Cache key, returned tick count, first/last tick timestamp, largest gap |
 | Broker/NinjaTrader historical data was genuinely missing. | Low based on clean-chart evidence | High | High with clean chart and raw historical comparison | Low only if platform-side reload is scoped | Same instrument/contract/time range comparison outside Orca paths |
+## 2026-06-26 Orca Prints Tick Replay Chart Incident
+
+Facts reported by Julian on 2026-06-26:
+
+- A one-minute chart with three days of history and Tick Replay enabled took about ten minutes to finish loading/calculating.
+- After calculation completed, the chart showed an approximately 30-minute no-data gap around 10:00 a.m. to 10:30 a.m.
+- Chart indicators were `OrcaPrints`, `OrcaStepProfile`, `OrcaAbsorptionCandles`, `OrcaLegtoLegProfile`, and `Orca Time VWAPs`.
+- Tick Replay was enabled specifically to inspect historical Orca Prints.
+
+Chart-specific source-map interpretation:
+
+- `OrcaPrints` processes replayed `OnMarketData` Last/Bid/Ask events and has `Calculate.OnEachTick`; it does not add its own secondary series.
+- `OrcaStepProfile` adds a hidden 1-tick series and processes `BarsInProgress == 1` tick events.
+- `OrcaAbsorptionCandles` adds a hidden 1-tick series and processes `BarsInProgress == 1` tick events.
+- `OrcaLegtoLegProfile` defaults to `SecondaryTickSeries`, which adds a hidden 1-tick series; it also has a `TickReplayLastEvents` mode that avoids this secondary series path.
+- `Orca Time VWAPs` does not add a secondary series, but it still updates on primary price changes and uses volume deltas by bar.
+
+Current interpretation:
+
+- The ten-minute load is plausible but not acceptable for this chart stack because Tick Replay plus three separate hidden 1-tick series can multiply historical tick work.
+- The 30-minute gap is not expected and must be separated into either price-bar data absent, Orca model absent, or render output absent.
+- Do not assume broker/NinjaTrader data loss until the same time window is checked on a clean chart with the same instrument, contract, trading-hours template, and Tick Replay setting.
+
+Immediate measurement sequence:
+
+1. Open a clean one-minute chart for the same instrument/contract, same trading-hours template, same three-day range, Tick Replay on, no Orca indicators. Confirm whether price bars exist from 10:00 to 10:30 and record load time.
+2. Add only `OrcaPrints`. Record load time and whether historical prints appear before, during, and after 10:00 to 10:30.
+3. Add `Orca Time VWAPs`. Record load time and whether price bars/prints remain intact.
+4. Add `OrcaAbsorptionCandles` only, then test again.
+5. Add `OrcaStepProfile` only, then test again.
+6. Add `OrcaLegtoLegProfile` in default `SecondaryTickSeries` mode, then test again.
+7. Repeat `OrcaLegtoLegProfile` with `Trade Source Mode = TickReplayLastEvents`, if available in the deployed build, to test whether removing one hidden 1-tick secondary series materially improves load time or gap behavior.
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.
