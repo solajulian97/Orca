@@ -82,3 +82,22 @@ Not manually validated by Codex. Julian reported the runtime behavior on the act
 ## Promotion Eligibility
 
 Not applicable. No `Full_Suite` promotion should occur for documentation-only incident capture.
+
+## Updated Evidence After Indicator Removal
+
+Julian later removed all indicators from the same one-minute, three-day MNQ Tick Replay chart and reloaded it. The chart loaded quickly, but the approximately 10:00-10:30 gap remained. Julian also reloaded historical data and the gap still remained.
+
+Julian also observed that enabling Tick Replay or reloading history on one MNQ chart appears to cause other open MNQ charts to reload or recalculate, which may explain why the original chart stack took much longer when other MNQ charts and Orca indicators were open.
+
+Updated interpretation:
+
+- The missing 10:00-10:30 bars are now unlikely to be caused by Orca indicator rendering or model state on that chart, because the gap persists with all indicators removed.
+- Orca indicators remain a likely contributor to slow calculation when loaded, especially `OrcaStepProfile`, `OrcaAbsorptionCandles`, and `OrcaLegtoLegProfile` due to hidden 1-tick series plus Tick Replay event volume.
+- The gap should now be triaged as a NinjaTrader chart instance, chart template, trading-hours template, historical data cache, instrument/contract, or provider/session issue until a brand-new chart proves otherwise.
+
+Next diagnostic sequence:
+
+1. Create a brand-new MNQ one-minute chart, same contract, same trading-hours template, same three-day range, Tick Replay on, no Orca indicators.
+2. If the new chart has complete 10:00-10:30 bars, save a screenshot and treat the original chart/template instance as suspect. Rebuild that chart from a clean chart rather than continuing to debug Orca logic.
+3. If the new chart has the same gap, test the same contract/time window with Tick Replay off and then a different minute range such as five days. If the gap persists, the issue is likely historical data/session/provider-side rather than Orca.
+4. If complete bars return only after closing the other MNQ charts or restarting NinjaTrader, record that as workspace-level reload contention/state behavior.

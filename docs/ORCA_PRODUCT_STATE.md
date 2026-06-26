@@ -97,6 +97,7 @@ This matrix ranks current hypotheses from code inspection and Julian's observati
 | Render-triggered profile rebuild or snapshot refresh delays chart usability. | Medium | Medium | Medium with render sampling and profile rebuild counters | Medium | `OnRender` timing, rebuild count, snapshot age, cache-read-in-render detection |
 | Persistent/local cache contains partial or stale tick data for a narrow range. | Low to medium | High | Medium with cache gap telemetry | Medium; recovery must be scoped | Cache key, returned tick count, first/last tick timestamp, largest gap |
 | Broker/NinjaTrader historical data was genuinely missing. | Low based on clean-chart evidence | High | High with clean chart and raw historical comparison | Low only if platform-side reload is scoped | Same instrument/contract/time range comparison outside Orca paths |
+
 ## 2026-06-26 Orca Prints Tick Replay Chart Incident
 
 Facts reported by Julian on 2026-06-26:
@@ -129,6 +130,20 @@ Immediate measurement sequence:
 5. Add `OrcaStepProfile` only, then test again.
 6. Add `OrcaLegtoLegProfile` in default `SecondaryTickSeries` mode, then test again.
 7. Repeat `OrcaLegtoLegProfile` with `Trade Source Mode = TickReplayLastEvents`, if available in the deployed build, to test whether removing one hidden 1-tick secondary series materially improves load time or gap behavior.
+
+Updated evidence from Julian later on 2026-06-26:
+
+- Screenshot shows a visible time-axis gap after reload.
+- Julian removed all indicators and reloaded the same one-minute, three-day, Tick Replay chart; the chart loaded quickly, but the 10:00-10:30 gap remained.
+- Julian then reloaded historical data; the gap remained.
+- Julian observed that enabling Tick Replay or reloading history on one MNQ chart appears to trigger reload/calculation behavior across several other open MNQ charts.
+
+Updated interpretation:
+
+- Missing bars are now more likely a NinjaTrader chart/data-series/session/template/cache/provider issue than an Orca indicator issue, because the gap survived with all indicators removed.
+- Orca indicators remain likely contributors to the earlier long calculation time when loaded on the chart, especially due to hidden 1-tick series and Tick Replay event volume.
+- The immediate next test is a brand-new MNQ one-minute chart with the same contract, same trading-hours template, same three-day range, and Tick Replay on. If the new chart has complete bars, the old chart/template instance is suspect. If the new chart has the same gap, the missing span is likely upstream of Orca and should be checked against NinjaTrader historical data/session settings/data provider behavior.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.
