@@ -179,6 +179,19 @@ Current conclusion:
 - Orca indicators can still add calculation load, but they are not the cause of the missing time window.
 - Recovery should be a targeted historical tick-data repair/redownload for the exact MNQ contract and date/time range, not an Orca code change or broad workspace reset.
 
+Mixed bar-type evidence from Julian on 2026-06-26:
+
+- Julian downloaded MNQ September tick data for Ask, Bid, and Last from June 25 through June 26.
+- After reloading, the missing window still did not appear on the 1-tick chart.
+- The window did appear on 30-second and 5-second charts.
+- The window did not appear on the 1-minute chart.
+
+Updated interpretation:
+
+- NinjaTrader appears to have inconsistent historical stores or cached aggregations by bar type/data type: second bars are available, while tick and one-minute chart paths still show the hole.
+- This is still outside Orca indicator logic.
+- Next safe recovery should target the specific MNQ September 2026 Tick and Minute data stores for June 26, not Second data and not the whole database.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.

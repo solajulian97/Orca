@@ -146,3 +146,20 @@ Recommended recovery path:
 2. Attempt a targeted historical tick-data redownload/repair for that MNQ contract/date range.
 3. Re-test a 1-tick chart first.
 4. Only after the 1-tick chart is complete should Tick Replay be retested on the one-minute Orca chart.
+
+## Mixed Bar-Type Result After Tick Download
+
+Julian downloaded historical tick data for MNQ September using Ask, Bid, and Last from June 25 through June 26. After reloading, the missing window still did not appear on the 1-tick chart. The data did appear on 30-second and 5-second charts, but did not appear on the 1-minute chart.
+
+Updated conclusion:
+
+- NinjaTrader is showing a bar-type/data-store inconsistency: second-based historical data appears available, while tick and one-minute paths still show the affected hole.
+- This remains outside Orca indicator logic.
+- The safest next recovery path is targeted cleanup/redownload for MNQ September Tick and Minute data for June 26 only, leaving Second data and broader databases untouched.
+
+Recommended next test:
+
+1. In Historical Data > Edit, inspect MNQ September for June 26 under Last/Tick and Last/Minute if available.
+2. If the 9:49-10:41 hole is visible there, delete only the affected MNQ September June 26 Tick and/or Minute day entries.
+3. Redownload Last Tick and Last Minute for June 25 through June 26.
+4. Re-test in this order: 1-tick chart, 1-minute Tick Replay off, 1-minute Tick Replay on.
