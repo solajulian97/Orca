@@ -236,6 +236,17 @@ Current resolution:
 - The reversible cache-folder rename was the successful recovery path.
 - Future similar incidents should first verify Historical Data Edit rows, then rebuild `db\cache` before deleting real historical data.
 
+Workspace validation after cache rebuild on 2026-06-26:
+
+- Julian reopened the real workspace after the cache rebuild and reported that it completed, loaded fine, and everything appeared to function correctly.
+- The cache incident is resolved for the live workspace, but it exposed a broader product need: workspace-level observability during startup, RTH open, news spikes, and MNQ high-tick-volume conditions.
+
+Next product priority:
+
+- Build Orca Diagnostics / Workspace Load Observatory as an internal live reliability surface, not only a startup log.
+- First questions it must answer: which order-flow source each indicator uses, whether each indicator is receiving live real data, which modules add hidden secondary series, which modules are lagging behind realtime, and where tick/event/render work is concentrated.
+- Optimization should follow measured evidence, with special focus on reducing redundant hidden 1-tick consumers and moving toward shared order-flow/provider paths where behavior remains correct.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.

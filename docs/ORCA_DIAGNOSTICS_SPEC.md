@@ -1,4 +1,4 @@
-﻿# Orca Diagnostics / Workspace Load Observatory
+# Orca Diagnostics / Workspace Load Observatory
 
 Last updated: 2026-06-25
 
@@ -114,6 +114,51 @@ Constraints:
 
 - No profile calculation, cache access, mutation, heavy allocation, or full historical scanning should occur in `OnRender`.
 - Phase 1 can measure current violations or borderline patterns before refactoring.
+
+## Live Workspace Observatory Requirements
+
+The observatory must support live trading-session visibility, not only startup summaries. This is required because MNQ can lag during RTH open and news-volume spikes, especially when multiple charts and indicators process tick-level data.
+
+Primary live questions:
+
+- Which order-flow source is each Orca indicator using right now: primary chart series, Tick Replay Last events, hidden secondary tick series, shared `OrcaProfileDataProvider`, shared chart cache, or local cache?
+- Is each indicator receiving live real data, stale data, fallback-estimated data, or no data?
+- Which chart/indicator instances are behind realtime, and by how much?
+- Which indicators own hidden Tick, Second, Bid, Ask, Last, Volumetric, or custom series?
+- Which modules are processing the most `OnMarketData`, `OnBarUpdate`, profile rebuild, cache snapshot, and render work?
+- Are multiple Orca modules independently requesting overlapping tick/order-flow streams for the same instrument/range?
+- Is chart lag caused by data access, event processing, model/profile building, rendering, cache locks, or NinjaTrader chart/cache state?
+
+Required live status fields per instance:
+
+- Module name and instance ID
+- Instrument and contract
+- Primary bar type/value and trading-hours template
+- Tick Replay state when accessible
+- Data source mode and source health: live, replay, secondary-series, shared-provider, local-cache, estimated, stale, unavailable
+- Last input timestamp received and wall-clock lag to current time
+- `OnMarketData` counts by Last/Bid/Ask
+- `OnBarUpdate` counts by BarsInProgress
+- Hidden/secondary series map
+- Cache hit/miss and source age where applicable
+- Last profile/model update timestamp
+- Render count, sampled render time, and max render time
+- Warning flags: behind realtime, no live events, duplicate tick source, stale provider, excessive render time, cache wait, replay gap, fallback active
+
+Initial operator surfaces:
+
+- A lightweight internal AddOn window: `Tools > Orca Diagnostics`.
+- A single workspace status table with rows grouped by chart/instrument/module.
+- Optional per-chart compact overlay later, after the logging and aggregation layer is stable.
+- JSONL/CSV startup output remains useful, but live status must be readable without opening log files.
+
+Implementation constraints:
+
+- Diagnostics remain Off by default.
+- `StartupSummary` may log summaries; live observatory mode must aggregate in memory and refresh at a low fixed cadence, not per tick.
+- Do not write files, allocate large objects, or block inside `OnMarketData`, `OnBarUpdate`, or `OnRender`.
+- Prefer cheap counters and timestamps in hot paths, with snapshot publication to the diagnostics AddOn.
+- Diagnostics failures must fail closed and never affect trading/chart behavior.
 
 ## Metrics
 
