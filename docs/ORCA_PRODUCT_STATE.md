@@ -203,6 +203,17 @@ Updated interpretation:
 - NinjaTrader may be serving or caching 1-minute, 2-minute, 5-minute, second, and tick data through distinct historical requests or stored aggregations.
 - Targeted cleanup should prioritize MNQ September June 26 `Last > 1 Minute` if visible in Historical Data Edit, otherwise the June 26 `Last > Minute` node, plus the affected Tick nodes needed for Tick Replay.
 
+Historical Data Edit screenshot evidence from Julian on 2026-06-26:
+
+- Historical Data Edit for `MNQ SEP26 > Last > Minute > June 2026 > 6/26/2026` shows minute rows through the suspected window, including 9:49 through 10:41, with OHLC and volume values present.
+
+Updated interpretation:
+
+- The NinjaTrader historical minute database contains the affected one-minute bars.
+- The 1-minute chart gap is therefore more likely a chart/bar-cache construction or loaded-chart state issue than absent `Last > Minute` rows.
+- Do not delete minute data based on current evidence. Next check should be `MNQ SEP26 > Last > Tick > 6/26/2026` for the same 9:49-10:41 window.
+- If tick rows are present too, then recovery should focus on forcing chart/bar cache rebuild or opening a new chart/session rather than deleting valid historical rows.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.

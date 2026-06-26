@@ -174,3 +174,19 @@ Updated conclusion:
 - The affected paths appear to be the 1-minute chart/bar-cache path and the 1-tick/Tick Replay path.
 - If Historical Data Edit exposes value-specific minute entries, delete only the affected MNQ September June 26 `1 Minute` data. If it only exposes a generic Minute node, delete only MNQ September June 26 `Last > Minute`, then redownload Minute for June 25-26.
 - Keep second data untouched because 5-second and 30-second charts are currently working.
+
+## Historical Data Edit Minute Rows Present
+
+Julian provided a screenshot of Historical Data Edit for `MNQ SEP26 > Last > Minute > June 2026 > 6/26/2026`. The table shows the suspected window, including 9:49 through 10:41, with OHLC and volume values present.
+
+Updated conclusion:
+
+- `Last > Minute` data is present in the database for the affected window.
+- The 1-minute chart gap is therefore more likely a chart/bar-cache construction or loaded-chart state issue than absent minute rows.
+- Do not delete `Last > Minute` data unless later evidence proves it is corrupt despite visible rows.
+
+Recommended next test:
+
+1. Inspect `MNQ SEP26 > Last > Tick > 6/26/2026` in Historical Data Edit for 9:49 through 10:41.
+2. If tick rows are missing, repair/redownload only tick data.
+3. If tick rows are present, stop deleting historical rows and force a chart/bar cache rebuild path: close all MNQ charts, restart NinjaTrader, open a fresh 1-minute chart and fresh 1-tick chart, then reload historical data.
