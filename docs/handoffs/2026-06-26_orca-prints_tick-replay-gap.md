@@ -128,3 +128,21 @@ Next diagnostic sequence:
 2. Test the same contract/window on a 1-tick chart or other Tick Replay-dependent view, if safe, to see whether tick history itself has the same hole.
 3. Test a nearby date or wider lookback with Tick Replay on to see whether the problem is isolated to one replay segment.
 4. If the replay gap persists, perform only a targeted NinjaTrader historical/tick cache repair for MNQ and the affected date range, not a broad workspace or database reset.
+
+## Confirmed 1-Tick Chart Gap
+
+Julian tested a 1-tick MNQ chart for the same contract/window. The 1-tick chart is also missing data, approximately 9:49 a.m. to 10:41 a.m.
+
+Conclusion:
+
+- The visible gap is now confirmed as a historical tick-data problem for the affected MNQ contract/time range.
+- Tick Replay on the one-minute chart exposes that tick-history hole.
+- Tick Replay off can still show complete one-minute bars because minute historical data exists separately.
+- Orca indicators are not required to reproduce the missing window and should not be modified for this gap.
+
+Recommended recovery path:
+
+1. Record exact contract, date, trading-hours template, and missing window: roughly 9:49 to 10:41.
+2. Attempt a targeted historical tick-data redownload/repair for that MNQ contract/date range.
+3. Re-test a 1-tick chart first.
+4. Only after the 1-tick chart is complete should Tick Replay be retested on the one-minute Orca chart.

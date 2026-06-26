@@ -167,6 +167,18 @@ Current strongest conclusion:
 - The reproducible failure path is Tick Replay/tick-level historical replay for MNQ on that window.
 - Next troubleshooting should be scoped to NinjaTrader Tick Replay data/cache/provider behavior for the affected contract and date/time window, not broad Orca changes.
 
+Confirmed tick-history evidence from Julian on 2026-06-26:
+
+- Julian tested a 1-tick MNQ chart for the same contract/window.
+- The 1-tick chart is also missing data, approximately 9:49 a.m. to 10:41 a.m.
+
+Current conclusion:
+
+- The root issue for the visible gap is missing or corrupt historical tick data for the affected MNQ contract/time range.
+- Tick Replay on the one-minute chart exposes the same tick-history hole; Tick Replay off can still build minute bars from available minute historical data.
+- Orca indicators can still add calculation load, but they are not the cause of the missing time window.
+- Recovery should be a targeted historical tick-data repair/redownload for the exact MNQ contract and date/time range, not an Orca code change or broad workspace reset.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.
