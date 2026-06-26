@@ -111,3 +111,20 @@ Updated interpretation:
 - Regular one-minute historical data for the window appears to exist.
 - The missing region is now most consistent with Tick Replay/tick-level historical data, Tick Replay cache/state, or replay-specific chart construction rather than Orca indicator logic or missing minute bars.
 - The next useful comparison is the same chart/template after a full NinjaTrader restart with other MNQ charts closed: Tick Replay off first, then Tick Replay on.
+
+## Bare One-Chart Restart Reproduction
+
+Julian restarted NinjaTrader and tested only one MNQ one-minute chart. With Tick Replay off, all one-minute data loaded correctly. With Tick Replay on, the large gap returned.
+
+Updated conclusion:
+
+- This is now a Tick Replay/tick-level historical replay issue for the affected MNQ contract/window until proven otherwise.
+- Regular one-minute historical data is present.
+- Orca indicators and the original chart template can still contribute to calculation time, but they are not required to reproduce the missing-bar gap.
+
+Next diagnostic sequence:
+
+1. Confirm the exact MNQ contract, trading-hours template, and date/time of the gap.
+2. Test the same contract/window on a 1-tick chart or other Tick Replay-dependent view, if safe, to see whether tick history itself has the same hole.
+3. Test a nearby date or wider lookback with Tick Replay on to see whether the problem is isolated to one replay segment.
+4. If the replay gap persists, perform only a targeted NinjaTrader historical/tick cache repair for MNQ and the affected date range, not a broad workspace or database reset.
