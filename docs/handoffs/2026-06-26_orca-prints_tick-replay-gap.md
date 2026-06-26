@@ -163,3 +163,14 @@ Recommended next test:
 2. If the 9:49-10:41 hole is visible there, delete only the affected MNQ September June 26 Tick and/or Minute day entries.
 3. Redownload Last Tick and Last Minute for June 25 through June 26.
 4. Re-test in this order: 1-tick chart, 1-minute Tick Replay off, 1-minute Tick Replay on.
+
+## Additional 2-Minute And 5-Minute Evidence
+
+Julian reported that 2-minute and 5-minute MNQ charts show the previously missing window, while the 1-minute chart still does not.
+
+Updated conclusion:
+
+- The issue is narrower than all minute-based historical data.
+- The affected paths appear to be the 1-minute chart/bar-cache path and the 1-tick/Tick Replay path.
+- If Historical Data Edit exposes value-specific minute entries, delete only the affected MNQ September June 26 `1 Minute` data. If it only exposes a generic Minute node, delete only MNQ September June 26 `Last > Minute`, then redownload Minute for June 25-26.
+- Keep second data untouched because 5-second and 30-second charts are currently working.

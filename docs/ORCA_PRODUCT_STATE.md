@@ -192,6 +192,17 @@ Updated interpretation:
 - This is still outside Orca indicator logic.
 - Next safe recovery should target the specific MNQ September 2026 Tick and Minute data stores for June 26, not Second data and not the whole database.
 
+Additional bar-period evidence from Julian on 2026-06-26:
+
+- The 2-minute and 5-minute MNQ charts show the previously missing window.
+- The 1-minute MNQ chart still does not show the window.
+
+Updated interpretation:
+
+- The problem is not all minute-style historical bars. It appears specific to the 1-minute historical/bar-cache path plus the 1-tick/Tick Replay path.
+- NinjaTrader may be serving or caching 1-minute, 2-minute, 5-minute, second, and tick data through distinct historical requests or stored aggregations.
+- Targeted cleanup should prioritize MNQ September June 26 `Last > 1 Minute` if visible in Historical Data Edit, otherwise the June 26 `Last > Minute` node, plus the affected Tick nodes needed for Tick Replay.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.
