@@ -190,3 +190,21 @@ Recommended next test:
 1. Inspect `MNQ SEP26 > Last > Tick > 6/26/2026` in Historical Data Edit for 9:49 through 10:41.
 2. If tick rows are missing, repair/redownload only tick data.
 3. If tick rows are present, stop deleting historical rows and force a chart/bar cache rebuild path: close all MNQ charts, restart NinjaTrader, open a fresh 1-minute chart and fresh 1-tick chart, then reload historical data.
+
+## Historical Data Edit Tick Rows Present
+
+Julian provided a screenshot of Historical Data Edit for `MNQ SEP26 > Last > Tick > June 2026 > 6/26/2026`. The 10:00 AM bucket contains many items, and the visible table shows tick rows at 10:00:00.xxx with price and volume values.
+
+Updated conclusion:
+
+- `Last > Tick` data appears present in Historical Data Edit for at least the 10:00 hour.
+- Combined with the prior `Last > Minute` screenshot, the missing chart region is now more likely a chart/bar-cache/session construction or loaded chart state problem than absent historical rows.
+- Do not delete historical rows based on current evidence.
+
+Recommended next test:
+
+1. Close all MNQ charts.
+2. Restart NinjaTrader.
+3. Open a brand-new MNQ September chart without applying the suspect template.
+4. Test 1-minute Tick Replay off, then 1-minute Tick Replay on, then 1-tick.
+5. If the fresh chart still omits a period that exists in Historical Data Edit, treat it as a NinjaTrader chart/cache/session bug and avoid further Orca debugging for the gap.

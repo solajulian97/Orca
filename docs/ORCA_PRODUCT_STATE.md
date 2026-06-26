@@ -214,6 +214,17 @@ Updated interpretation:
 - Do not delete minute data based on current evidence. Next check should be `MNQ SEP26 > Last > Tick > 6/26/2026` for the same 9:49-10:41 window.
 - If tick rows are present too, then recovery should focus on forcing chart/bar cache rebuild or opening a new chart/session rather than deleting valid historical rows.
 
+Historical Data Edit tick screenshot evidence from Julian on 2026-06-26:
+
+- Historical Data Edit for `MNQ SEP26 > Last > Tick > June 2026 > 6/26/2026` shows tick rows in the 10:00 a.m. hour, including rows at 10:00:00.xxx with price and volume values.
+- The tree shows the 10:00 AM tick bucket has many items.
+
+Updated interpretation:
+
+- Both `Last > Minute` and `Last > Tick` appear to contain data for the affected period in Historical Data Edit.
+- The chart gap is now more consistent with chart/bar-cache/session construction or loaded chart state than absent historical rows.
+- Do not delete historical minute or tick rows based on current evidence. Next recovery should focus on forcing NinjaTrader to rebuild chart bars from existing data: close affected charts, restart NinjaTrader, open a fresh chart, and avoid reusing the suspect chart/tab/template until the fresh chart behavior is known.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.
