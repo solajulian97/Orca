@@ -101,3 +101,13 @@ Next diagnostic sequence:
 2. If the new chart has complete 10:00-10:30 bars, save a screenshot and treat the original chart/template instance as suspect. Rebuild that chart from a clean chart rather than continuing to debug Orca logic.
 3. If the new chart has the same gap, test the same contract/time window with Tick Replay off and then a different minute range such as five days. If the gap persists, the issue is likely historical data/session/provider-side rather than Orca.
 4. If complete bars return only after closing the other MNQ charts or restarting NinjaTrader, record that as workspace-level reload contention/state behavior.
+
+## Updated Evidence With Tick Replay Off
+
+Julian then loaded the original one-minute chart template with Tick Replay off so the chart would load quickly before restarting NinjaTrader. With Tick Replay off, the same one-minute data loaded complete and the visible 10:00-10:30 gap was no longer apparent.
+
+Updated interpretation:
+
+- Regular one-minute historical data for the window appears to exist.
+- The missing region is now most consistent with Tick Replay/tick-level historical data, Tick Replay cache/state, or replay-specific chart construction rather than Orca indicator logic or missing minute bars.
+- The next useful comparison is the same chart/template after a full NinjaTrader restart with other MNQ charts closed: Tick Replay off first, then Tick Replay on.
