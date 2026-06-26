@@ -208,3 +208,20 @@ Recommended next test:
 3. Open a brand-new MNQ September chart without applying the suspect template.
 4. Test 1-minute Tick Replay off, then 1-minute Tick Replay on, then 1-tick.
 5. If the fresh chart still omits a period that exists in Historical Data Edit, treat it as a NinjaTrader chart/cache/session bug and avoid further Orca debugging for the gap.
+
+## Resolution Cache Rename Fixed Tick Replay Gap
+
+Julian closed NinjaTrader and renamed `Documents\NinjaTrader 8\db\cache` to `cache_backup_2026-06-26`, leaving `day`, `minute`, `tick`, `replay`, and `NinjaTrader.sqlite` untouched. After reopening NinjaTrader, a one-minute MNQ September chart with Tick Replay on showed all data correctly.
+
+Conclusion:
+
+- The missing chart window was caused by stale or corrupt NinjaTrader chart/bar cache state.
+- Historical minute and tick rows were present in Historical Data Edit.
+- Orca indicators were not the cause of the gap.
+- The successful recovery was a reversible cache-folder rename, not deletion of historical data.
+
+Follow-up:
+
+- Keep `cache_backup_2026-06-26` temporarily as a recovery artifact.
+- If NinjaTrader remains stable after a few sessions, the backup cache folder can be deleted manually.
+- For future similar issues, verify Historical Data Edit rows first, then rebuild `db\cache` before deleting `tick`, `minute`, or database files.

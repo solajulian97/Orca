@@ -225,6 +225,17 @@ Updated interpretation:
 - The chart gap is now more consistent with chart/bar-cache/session construction or loaded chart state than absent historical rows.
 - Do not delete historical minute or tick rows based on current evidence. Next recovery should focus on forcing NinjaTrader to rebuild chart bars from existing data: close affected charts, restart NinjaTrader, open a fresh chart, and avoid reusing the suspect chart/tab/template until the fresh chart behavior is known.
 
+Resolution evidence from Julian on 2026-06-26:
+
+- Julian renamed `Documents\NinjaTrader 8\db\cache` to `cache_backup_2026-06-26` with NinjaTrader closed, leaving `day`, `minute`, `tick`, `replay`, and `NinjaTrader.sqlite` untouched.
+- After reopening NinjaTrader, a one-minute MNQ September chart with Tick Replay on showed all data correctly.
+
+Current resolution:
+
+- The gap was caused by stale or corrupt NinjaTrader chart/bar cache state, not missing historical minute/tick rows and not Orca indicator logic.
+- The reversible cache-folder rename was the successful recovery path.
+- Future similar incidents should first verify Historical Data Edit rows, then rebuild `db\cache` before deleting real historical data.
+
 ## Open Decisions
 
 - Standard diagnostic output location and retention policy.
