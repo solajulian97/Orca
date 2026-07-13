@@ -65,17 +65,19 @@ The live NinjaTrader deployment copy was updated at `Documents/NinjaTrader 8/bin
 - Targeted deployment completed with `deploy_orca.ps1 -Target OrcaExecutionLines`.
 - NinjaTrader regenerated only its generated wrapper section after deployment.
 - Normalized authored-source SHA-256 matched between Working_Suite and the live deployment: `B7AC72553279DF10D07B555FA8BFD2FD0BA37E1D793D1511EEAA38B4C871075A`.
-- NinjaTrader F5 compile has not yet been performed by Julian.
+- Julian confirmed a successful NinjaTrader F5 compile after duplicate live generated wrappers were cleaned and duplicate backup `.cs` files were disabled.
+- Julian confirmed the indicator/property surface was fixed after recompilation.
 - No live trade was placed as part of this implementation pass.
 
 ## Compile status
 
 - `git diff --check` passed with only the existing LF-to-CRLF warning.
-- NinjaTrader F5 compile is pending.
+- NinjaTrader F5 compile succeeded and was confirmed by Julian on 2026-07-13.
 
 ## Manual-validation status
 
-- Pending.
+- Settings visibility and compile recovery were manually confirmed by Julian.
+- Live account-day P&L snapshot accuracy across one or more closed trades remains pending.
 - Enable `Show Account Day P&L On Label`, close a trade, and hover the completed aggregate execution line.
 - Confirm the label matches the selected account's Control Center realized P&L after commissions.
 - Close a second trade and confirm the first label keeps its earlier value while the second label shows the new cumulative account total.
@@ -87,6 +89,7 @@ The live NinjaTrader deployment copy was updated at `Documents/NinjaTrader 8/bin
 - Account providers can differ in when they publish the final realized-P&L update relative to the execution callback; live validation should confirm the captured value includes the closing execution on Julian's configured accounts.
 - If callback ordering proves late, follow-up should use a bounded account-item update correlation rather than per-tick polling.
 - Raw whole-file source/live hashes differ because NinjaTrader regenerated the generated wrapper section; the authored portion matches.
+- The compile blocker was operational rather than feature logic: NinjaTrader was compiling duplicate backup `.cs` classes and had duplicated generated wrapper regions in three live files. Backup sources were preserved as `.cs.disabled`; no `Working_Suite` logic in Rolling Profiles or Time Statistics was changed for this feature.
 
 ## Full_Suite promotion eligibility
 
