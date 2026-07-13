@@ -100,6 +100,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public double HeatTakenPnl;
 			public double LastPrice;
 			public DateTime LastPriceTime;
+			public double AccountDayPnlAfterClose;
+			public bool HasAccountDayPnlAfterClose;
 			public int ExecutionSequence;
 
 			public double AvgEntryPrice { get { return EntryQtyTotal <= 0 ? 0.0 : EntryPriceSum / (double)EntryQtyTotal; } }
@@ -157,6 +159,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty][Display(Name="Show MAE/MFE",          GroupName="1. Visibility", Order=6)] public bool ShowMAEMFE           { get; set; }
 		[Display(Name="Open Trade Rendering",                        GroupName="1. Visibility", Order=7)] public OrcaOpenTradeRenderMode OpenTradeRendering { get; set; }
 		[Display(Name="Show Session Total",                          GroupName="1. Visibility", Order=8)] public bool ShowSessionTotal     { get; set; }
+		[Display(Name="Show Account Day P&L On Label",               GroupName="1. Visibility", Order=9)] public bool ShowAccountDayPnlOnLabel { get; set; }
 		[Display(Name="Session Total Position",                      GroupName="3. Appearance", Order=2)] public TextPosition SessionTotalPosition { get; set; }
 
 		[NinjaScriptProperty][Display(Name="Enable Shot Clock",      GroupName="5. Shot Clock", Order=0)] public bool EnableShotClock     { get; set; }
@@ -208,6 +211,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowMAEMFE           = true;
 				OpenTradeRendering  = OrcaOpenTradeRenderMode.Off;
 				ShowSessionTotal     = true;
+				ShowAccountDayPnlOnLabel = false;
 				SessionTotalPosition = TextPosition.TopRight;
 				LoadTodayHistory     = true;
 				LoadSqliteHistory    = true;
@@ -335,12 +339,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (e.Execution.Order == null) return;
 				string acct = e.Execution.Account != null ? e.Execution.Account.Name : "Unknown";
 				bool isBuy  = e.Execution.Order.OrderAction == OrderAction.Buy || e.Execution.Order.OrderAction == OrderAction.BuyToCover;
-				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct);
+				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct, e.Execution.Account);
 			}
 			catch (Exception ex) { Print("OrcaExecLines OnExec: " + ex.Message); }
 		}
 
 		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName)
+		{
+			ProcessExecution(isBuy, price, quantity, time, accountName, null);
+		}
+
+		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName, Account executionAccount)
 		{
 			lock (tradeLock)
 			{
@@ -395,6 +404,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (toClose == Math.Abs(prev) && st.CurrentRT != null)
 					{
 						UpdateRoundTripPnl(st.CurrentRT, price, time);
+						CaptureAccountDayPnl(st.CurrentRT, executionAccount);
 						st.CurrentRT.IsComplete = true;
 						st.CurrentRT.MAEMFECalculated = true;
 						ApplyNoteToRoundTrip(st.CurrentRT);
@@ -424,6 +434,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				st.NetPosition = next;
 			}
+		}
+
+		private void CaptureAccountDayPnl(RoundTrip rt, Account account)
+		{
+			if (rt == null || account == null) return;
+			try
+			{
+				double value = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
+				if (double.IsNaN(value) || double.IsInfinity(value)) return;
+				rt.AccountDayPnlAfterClose = value;
+				rt.HasAccountDayPnlAfterClose = true;
+			}
+			catch {}
 		}
 
 		private void StartNewRoundTrip(AccountState st, bool isBuy, double price, int qty, DateTime time, string acct)
@@ -2210,6 +2233,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				string label   = "#" + rt.Number + (isFill?" (Fill)":"") + " " + (rt.IsLong?"Long":"Short") + (qty>1?" x"+qty:"")
 				               + "\n" + points.ToString("+0.##;-0.##;0") + " pts | " + Fmt(dollars);
 				if (RiskAmount > 0) label += " | " + (dollars/RiskAmount).ToString("+0.##;-0.##;0") + "R";
+				if (!isFill && ShowAccountDayPnlOnLabel && rt.HasAccountDayPnlAfterClose)
+					label += "\nDay P&L after trade: " + Fmt(rt.AccountDayPnlAfterClose);
 				if (!isFill && ShowMAEMFE && rt.MAEMFECalculated)
 					label += "\nMax Profit Seen: " + FmtAbs(rt.HighestProfitPnl) + "  |  Heat Taken: " + FmtAbs(rt.HeatTakenPnl);
 				string tagPreview = FormatTagsPreview(GetRoundTripTags(rt));
