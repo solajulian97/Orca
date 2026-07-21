@@ -381,10 +381,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 						|| Instrument == null || rt.InstrumentFullName != Instrument.FullName)
 						return;
 
+					// Multi-fill closes can publish intermediate account totals; keep the latest value in the bounded window.
 					rt.AccountDayPnlAfterClose = e.Value;
 					rt.HasAccountDayPnlAfterClose = true;
-					st.PendingAccountDayPnlRoundTrip = null;
-					st.PendingAccountDayPnlUntilUtc = DateTime.MinValue;
 					needsRedraw = true;
 					refreshed = true;
 				}
