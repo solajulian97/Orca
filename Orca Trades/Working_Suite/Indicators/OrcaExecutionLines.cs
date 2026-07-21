@@ -114,6 +114,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public List<PendingEntry> OpenFills  = new List<PendingEntry>();
 			public List<RoundTrip>   RoundTrips  = new List<RoundTrip>();
 			public RoundTrip CurrentRT;
+			public RoundTrip PendingAccountDayPnlRoundTrip;
+			public DateTime PendingAccountDayPnlUntilUtc;
 			public int RTCounter;
 			public int NetPosition;
 		}
@@ -133,6 +135,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string activeAccountName;
 		private string lastDrawnAccount;
 		private readonly object tradeLock = new object();
+		private static readonly TimeSpan AccountDayPnlRefreshWindow = TimeSpan.FromSeconds(2);
 		private bool needsRedraw;
 		private bool historyLoaded;
 		private DateTime shotClockEnd = DateTime.MinValue;
@@ -284,6 +287,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				foreach (Account a in Account.All)
 				{
 					a.ExecutionUpdate += OnExecutionUpdate;
+					a.AccountItemUpdate += OnAccountItemUpdate;
 					hookedAccounts.Add(a);
 				}
 			}
@@ -295,7 +299,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			try
 			{
 				foreach (Account a in hookedAccounts)
-					try { a.ExecutionUpdate -= OnExecutionUpdate; } catch {}
+					try
+					{
+						a.ExecutionUpdate -= OnExecutionUpdate;
+						a.AccountItemUpdate -= OnAccountItemUpdate;
+					}
+					catch {}
 				hookedAccounts.Clear();
 			}
 			catch {}
@@ -342,6 +351,51 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct, e.Execution.Account);
 			}
 			catch (Exception ex) { Print("OrcaExecLines OnExec: " + ex.Message); }
+		}
+
+		private void OnAccountItemUpdate(object sender, AccountItemEventArgs e)
+		{
+			bool refreshed = false;
+			try
+			{
+				if (e == null || e.Account == null
+					|| e.AccountItem != AccountItem.RealizedProfitLoss
+					|| e.Currency != Currency.UsDollar
+					|| double.IsNaN(e.Value) || double.IsInfinity(e.Value))
+					return;
+
+				lock (tradeLock)
+				{
+					AccountState st;
+					if (!accountStates.TryGetValue(e.Account.Name, out st) || st == null)
+						return;
+
+					RoundTrip rt = st.PendingAccountDayPnlRoundTrip;
+					if (rt == null || DateTime.UtcNow > st.PendingAccountDayPnlUntilUtc)
+					{
+						st.PendingAccountDayPnlRoundTrip = null;
+						st.PendingAccountDayPnlUntilUtc = DateTime.MinValue;
+						return;
+					}
+					if (!rt.IsComplete || rt.AccountName != e.Account.Name
+						|| Instrument == null || rt.InstrumentFullName != Instrument.FullName)
+						return;
+
+					rt.AccountDayPnlAfterClose = e.Value;
+					rt.HasAccountDayPnlAfterClose = true;
+					st.PendingAccountDayPnlRoundTrip = null;
+					st.PendingAccountDayPnlUntilUtc = DateTime.MinValue;
+					needsRedraw = true;
+					refreshed = true;
+				}
+
+				if (refreshed && ChartControl != null)
+					ChartControl.Dispatcher.InvokeAsync(() =>
+					{
+						try { if (ChartControl != null) ChartControl.InvalidateVisual(); } catch {}
+					});
+			}
+			catch (Exception ex) { Print("OrcaExecLines OnAccountItem: " + ex.Message); }
 		}
 
 		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName)
@@ -404,6 +458,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (toClose == Math.Abs(prev) && st.CurrentRT != null)
 					{
 						UpdateRoundTripPnl(st.CurrentRT, price, time);
+						ArmAccountDayPnlRefresh(st, st.CurrentRT, executionAccount);
 						CaptureAccountDayPnl(st.CurrentRT, executionAccount);
 						st.CurrentRT.IsComplete = true;
 						st.CurrentRT.MAEMFECalculated = true;
@@ -447,6 +502,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				rt.HasAccountDayPnlAfterClose = true;
 			}
 			catch {}
+		}
+
+		private void ArmAccountDayPnlRefresh(AccountState st, RoundTrip rt, Account account)
+		{
+			if (st == null || rt == null || account == null || account.Name != rt.AccountName)
+				return;
+			st.PendingAccountDayPnlRoundTrip = rt;
+			st.PendingAccountDayPnlUntilUtc = DateTime.UtcNow.Add(AccountDayPnlRefreshWindow);
 		}
 
 		private void StartNewRoundTrip(AccountState st, bool isBuy, double price, int qty, DateTime time, string acct)
