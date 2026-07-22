@@ -1,6 +1,6 @@
 ﻿# Orca Source Map
 
-Last updated: 2026-06-25
+Last updated: 2026-07-21
 
 This source map is based on `Orca Trades/Working_Suite` code inspection only.
 
@@ -10,7 +10,7 @@ This source map is based on `Orca Trades/Working_Suite` code inspection only.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `OrcaAbsorptionCandles` | Yes | 1 Tick | `OnMarketData` tracks Bid, Ask, Last | Maps hidden ticks to primary bars and computes absorption/delta state | High risk of large historical event volume | No shared provider found | Paints bars; no explicit SharpDX render found in first pass |
 | `OrcaCumulativeDelta` | Yes | 1 Tick | Bid, Ask, Last; fallback classification | Per-tick delta and primary-bar carry-forward | High; may also use shared provider | Consumes `OrcaProfileDataCache` order-flow snapshots | Explicit `OnRender` |
-| `OrcaCandleVolumeProfile` | Yes | 1 Tick | Bid, Ask, Last | Per-candle volume/delta maps | High; hidden tick hydration can be expensive | Local maps; no primary shared consumer role found | Explicit SharpDX `OnRender` |
+| `OrcaCandleVolumeProfile` | Conditional | 1 Tick only in `SecondaryTickSeries`; none in `TickReplayLastEvents` | Bid, Ask, Last; strict quote classification for Bid x Ask and tick-direction fallback for Delta | Per-candle volume, delta, strict bid, strict ask, and unclassified maps | High in secondary-series mode; Tick Replay Last events avoid a duplicate series but replay every Last event | Publishes volume/up/down maps to `OrcaProfileDataCache` when enabled | Snapshot-based SharpDX `OnRender`; Volume, Delta, combined, Cluster, and Histogram displays |
 | `OrcaLegtoLegProfile` | Yes | 1 Tick | Bid, Ask, Last | Per-tick leg volume/delta aggregation | High | Internal maps/locks | Explicit SharpDX `OnRender` |
 | `OrcaProfileDataProvider` | Yes | 1 Tick | Bid, Ask, Last | Publishes order-flow buckets and optional chart profile maps | High but intended shared producer | Registers sources in `OrcaProfileDataCache`; optional persisted cache | `OnRender` refreshes registration only |
 | `OrcaRollingProfiles` | Conditional | 1 Tick when local cache enabled and shared provider disabled | Bid, Ask; Last via tick series | Rolling tick buckets and profile state | High in local mode; shared-provider mode may reduce duplicate series | Consumes `OrcaProfileDataCache` order-flow snapshots | Explicit SharpDX `OnRender` |

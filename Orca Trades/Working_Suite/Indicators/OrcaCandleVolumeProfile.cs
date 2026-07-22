@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Linq;
 using System.Xml.Serialization;
 
@@ -45,6 +46,78 @@ namespace NinjaTrader.NinjaScript.Indicators
 	{
 		SecondaryTickSeries = 0,
 		TickReplayLastEvents = 1
+	}
+
+	public enum CandleProfileDisplayMode
+	{
+		LegacyVisibility = -1,
+		Off = 0,
+		Volume = 1,
+		Delta = 2,
+		VolumeAndDelta = 3,
+		BidAsk = 4
+	}
+
+	public enum CandleProfileBidAskStyle
+	{
+		Cluster = 0,
+		Histogram = 1
+	}
+
+	public class CandleProfileDisplayModeConverter : EnumConverter
+	{
+		public CandleProfileDisplayModeConverter() : base(typeof(CandleProfileDisplayMode))
+		{
+		}
+
+		public override bool GetStandardValuesExclusive(ITypeDescriptorContext context)
+		{
+			return true;
+		}
+
+		public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context)
+		{
+			return new StandardValuesCollection(new[]
+			{
+				CandleProfileDisplayMode.Off,
+				CandleProfileDisplayMode.Volume,
+				CandleProfileDisplayMode.Delta,
+				CandleProfileDisplayMode.VolumeAndDelta,
+				CandleProfileDisplayMode.BidAsk
+			});
+		}
+
+		public override object ConvertTo(ITypeDescriptorContext context, CultureInfo culture, object value, Type destinationType)
+		{
+			if (destinationType == typeof(string) && value is CandleProfileDisplayMode)
+			{
+				switch ((CandleProfileDisplayMode)value)
+				{
+					case CandleProfileDisplayMode.Off: return "Off";
+					case CandleProfileDisplayMode.Delta: return "Delta";
+					case CandleProfileDisplayMode.VolumeAndDelta: return "Volume + Delta";
+					case CandleProfileDisplayMode.BidAsk: return "Bid x Ask";
+					default: return "Volume";
+				}
+			}
+
+			return base.ConvertTo(context, culture, value, destinationType);
+		}
+
+		public override object ConvertFrom(ITypeDescriptorContext context, CultureInfo culture, object value)
+		{
+			string text = value as string;
+			if (!string.IsNullOrWhiteSpace(text))
+			{
+				if (string.Equals(text, "Off", StringComparison.OrdinalIgnoreCase)) return CandleProfileDisplayMode.Off;
+				if (string.Equals(text, "Volume", StringComparison.OrdinalIgnoreCase)) return CandleProfileDisplayMode.Volume;
+				if (string.Equals(text, "Delta", StringComparison.OrdinalIgnoreCase)) return CandleProfileDisplayMode.Delta;
+				if (string.Equals(text, "Volume + Delta", StringComparison.OrdinalIgnoreCase)) return CandleProfileDisplayMode.VolumeAndDelta;
+				if (string.Equals(text, "Bid x Ask", StringComparison.OrdinalIgnoreCase)) return CandleProfileDisplayMode.BidAsk;
+			}
+
+			return base.ConvertFrom(context, culture, value);
+		}
 	}
 
 	public enum CandleProfileTextFontWeight
@@ -111,6 +184,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private List<Dictionary<double, long>> barVolumeMaps;
 		private List<Dictionary<double, long>> barDeltaVolumeMaps;
 		private List<Dictionary<double, long>> barDeltaMaps;
+		private List<Dictionary<double, long>> barAskVolumeMaps;
+		private List<Dictionary<double, long>> barBidVolumeMaps;
+		private List<Dictionary<double, long>> barUnclassifiedVolumeMaps;
 		private List<Dictionary<double, long>> sharedVolumeMaps;
 		private List<Dictionary<double, long>> sharedUpVolumeMaps;
 		private List<Dictionary<double, long>> sharedDownVolumeMaps;
@@ -147,6 +223,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int lastBuiltDeltaIntensitySteps = -1;
 		private float lastBuiltDeltaIntensityMinOpacity = -1f;
 		private float lastBuiltDeltaIntensityMaxOpacity = -1f;
+		private SolidColorBrush[] bidAskPositiveIntensityBrushes;
+		private SolidColorBrush[] bidAskNegativeIntensityBrushes;
+		private SolidColorBrush[] bidAskNeutralIntensityBrushes;
+		private int lastBuiltBidAskIntensitySteps = -1;
+		private float lastBuiltBidAskMinOpacity = -1f;
+		private float lastBuiltBidAskMaxOpacity = -1f;
 
 		// Volume gradient palette (dark → bright) — outside VA
 		private SolidColorBrush[] volGradientBrushes;
@@ -164,6 +246,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// Text resources
 		private SolidColorBrush deltaTextBrushDx;
 		private SolidColorBrush volumeTextBrushDx;
+		private SolidColorBrush bidAskTextBrushDx;
 		private TextFormat      textFormatDx;
 		private Dictionary<int, TextFormat> textFormatsBySize = new Dictionary<int, TextFormat>();
 		private Dictionary<string, float> textWidthCache = new Dictionary<string, float>();
@@ -177,7 +260,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Name        = "OrcaCandleVolumeProfile";
-				Description = "Custom footprint chart: draws candles + per-candle volume profiles with optional delta coloring and Value Area.";
+				Description = "Custom footprint chart with Volume, Delta, combined, and strict Bid x Ask profile displays.";
 				Calculate   = Calculate.OnPriceChange;
 				IsOverlay   = true;
 
@@ -194,11 +277,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DynamicDeltaMaxCompression = 100;
 				PublishSharedProfileCache = true;
 				TradeSourceMode = CandleProfileTradeSourceMode.SecondaryTickSeries;
+				ProfileDisplayMode = CandleProfileDisplayMode.LegacyVisibility;
+				BidAskStyle = CandleProfileBidAskStyle.Cluster;
 
 				// Layout
 				CandleWidthPx       = 14;
 				ProfileWidthPx      = 80;
 				DeltaProfileWidthPx = 40;
+				BidAskWidthPx = 96;
 				ProfileArrangement  = CandleProfileSideArrangement.DeltaLeft_VolumeRight;
 				DynamicProfileWidth = true;
 				ProfileWidthScale   = 1.0;
@@ -223,6 +309,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowVolumeText = false;
 				VolumeTextMinThreshold = 1;
 				VolumeTextFontSize = 8f;
+				ShowBidAskText = true;
+				BidAskTextMinThreshold = 0;
+				BidAskTextFontSize = 8f;
 				TextFontFamily = "Segoe UI";
 				TextFontWeight = CandleProfileTextFontWeight.Bold;
 				UseDynamicTextSizing = false;
@@ -260,11 +349,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DeltaOpacity       = 0.85f;
 				UseDeltaIntensityColoring = true;
 				DeltaIntensityMinOpacity = 0.35f;
+				BidAskPositiveBrush = WpfBrushes.DodgerBlue;
+				BidAskNegativeBrush = WpfBrushes.Crimson;
+				BidAskNeutralBrush = WpfBrushes.DimGray;
+				BidAskMinOpacity = 0.20f;
+				BidAskMaxOpacity = 0.90f;
+				BidAskTextBrush = WpfBrushes.White;
 				DeltaTextBrush     = WpfBrushes.White;
 				VolumeTextBrush    = WpfBrushes.White;
 			}
 			else if (State == State.Configure)
 			{
+				ResolveLegacyProfileDisplayMode();
 				if (TradeSourceMode == CandleProfileTradeSourceMode.SecondaryTickSeries)
 					AddDataSeries(BarsPeriodType.Tick, 1);
 			}
@@ -274,6 +370,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				barDeltaVolumeMaps = new List<Dictionary<double, long>>(4096);
 				barDeltaMaps  = new List<Dictionary<double, long>>(4096);
 				sharedVolumeMaps = new List<Dictionary<double, long>>(4096);
+				barAskVolumeMaps = new List<Dictionary<double, long>>(4096);
+				barBidVolumeMaps = new List<Dictionary<double, long>>(4096);
+				barUnclassifiedVolumeMaps = new List<Dictionary<double, long>>(4096);
 				sharedUpVolumeMaps = new List<Dictionary<double, long>>(4096);
 				sharedDownVolumeMaps = new List<Dictionary<double, long>>(4096);
 				barVACache    = new List<double[]>(4096);
@@ -295,6 +394,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 				OrcaProfileDataCache.UnregisterSource(sharedSourceId);
 				DisposeDx();
 			}
+		}
+
+		private void ResolveLegacyProfileDisplayMode()
+		{
+			if (ProfileDisplayMode == CandleProfileDisplayMode.LegacyVisibility)
+			{
+				if (ShowVolumeProfile && ShowDeltaProfile)
+					ProfileDisplayMode = CandleProfileDisplayMode.VolumeAndDelta;
+				else if (ShowDeltaProfile)
+					ProfileDisplayMode = CandleProfileDisplayMode.Delta;
+				else if (ShowVolumeProfile)
+					ProfileDisplayMode = CandleProfileDisplayMode.Volume;
+				else
+					ProfileDisplayMode = CandleProfileDisplayMode.Off;
+			}
+
+			ShowVolumeProfile = ProfileDisplayMode == CandleProfileDisplayMode.Volume || ProfileDisplayMode == CandleProfileDisplayMode.VolumeAndDelta;
+			ShowDeltaProfile = ProfileDisplayMode == CandleProfileDisplayMode.Delta || ProfileDisplayMode == CandleProfileDisplayMode.VolumeAndDelta;
 		}
 
 		#region Dispose
@@ -325,11 +442,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				negDeltaBrushDx?.Dispose();
 				DisposeBrushPalette(ref positiveDeltaIntensityBrushes);
 				DisposeBrushPalette(ref negativeDeltaIntensityBrushes);
+				DisposeBrushPalette(ref bidAskPositiveIntensityBrushes);
+				DisposeBrushPalette(ref bidAskNegativeIntensityBrushes);
+				DisposeBrushPalette(ref bidAskNeutralIntensityBrushes);
 				vaVolBrushDx?.Dispose();
 				vaLineBrushDx?.Dispose();
 				vaLineStrokeDx?.Dispose();
 				deltaTextBrushDx?.Dispose();
 				volumeTextBrushDx?.Dispose();
+				bidAskTextBrushDx?.Dispose();
 				textFormatDx?.Dispose();
 				DisposeTextFormats();
 
@@ -357,11 +478,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastBuiltDeltaIntensitySteps = -1;
 				lastBuiltDeltaIntensityMinOpacity = -1f;
 				lastBuiltDeltaIntensityMaxOpacity = -1f;
+				lastBuiltBidAskIntensitySteps = -1;
+				lastBuiltBidAskMinOpacity = -1f;
+				lastBuiltBidAskMaxOpacity = -1f;
 				vaVolBrushDx       = null;
 				vaLineBrushDx      = null;
 				vaLineStrokeDx     = null;
 				deltaTextBrushDx   = null;
 				volumeTextBrushDx  = null;
+				bidAskTextBrushDx = null;
 				textFormatDx       = null;
 				volGradientBrushes = null;
 				vaGradientBrushes  = null;
@@ -450,6 +575,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			while (barDeltaMaps.Count <= primaryBarIndex)
 				barDeltaMaps.Add(new Dictionary<double, long>());
+
+			if (ProfileDisplayMode == CandleProfileDisplayMode.BidAsk)
+			{
+				while (barAskVolumeMaps.Count <= primaryBarIndex)
+					barAskVolumeMaps.Add(new Dictionary<double, long>());
+				while (barBidVolumeMaps.Count <= primaryBarIndex)
+					barBidVolumeMaps.Add(new Dictionary<double, long>());
+				while (barUnclassifiedVolumeMaps.Count <= primaryBarIndex)
+					barUnclassifiedVolumeMaps.Add(new Dictionary<double, long>());
+			}
 
 			while (sharedVolumeMaps.Count <= primaryBarIndex)
 				sharedVolumeMaps.Add(new Dictionary<double, long>());
@@ -600,24 +735,29 @@ namespace NinjaTrader.NinjaScript.Indicators
 						sharedCoverageBarCount++;
 				}
 
-				// --- DELTA ---
-				long signed = ClassifySignedVolume(last, vol);
+				// --- DELTA + STRICT BID/ASK ---
+				bool usedBidAsk;
+				long signed = ClassifySignedVolume(last, vol, out usedBidAsk);
+
+				if (ProfileDisplayMode == CandleProfileDisplayMode.BidAsk)
+				{
+					if (usedBidAsk)
+					{
+						Dictionary<double, long> strictMap = signed > 0 ? barAskVolumeMaps[primaryIndex] : barBidVolumeMaps[primaryIndex];
+						AddVolumeToMap(strictMap, deltaBucketPrice, vol);
+					}
+					else
+						AddVolumeToMap(barUnclassifiedVolumeMaps[primaryIndex], deltaBucketPrice, vol);
+				}
 
 				if (signed != 0)
 				{
-					var dmap = barDeltaMaps[primaryIndex];
-					if (dmap.TryGetValue(deltaBucketPrice, out long dExisting))
-						dmap[deltaBucketPrice] = dExisting + signed;
-					else
-						dmap[deltaBucketPrice] = signed;
+					AddVolumeToMap(barDeltaMaps[primaryIndex], deltaBucketPrice, signed);
 
 					if (PublishSharedProfileCache)
 					{
-						var directionalMap = signed > 0 ? sharedUpVolumeMaps[primaryIndex] : sharedDownVolumeMaps[primaryIndex];
-						if (directionalMap.TryGetValue(deltaBucketPrice, out long dirExisting))
-							directionalMap[deltaBucketPrice] = dirExisting + vol;
-						else
-							directionalMap[deltaBucketPrice] = vol;
+						Dictionary<double, long> directionalMap = signed > 0 ? sharedUpVolumeMaps[primaryIndex] : sharedDownVolumeMaps[primaryIndex];
+						AddVolumeToMap(directionalMap, deltaBucketPrice, vol);
 					}
 				}
 
@@ -629,26 +769,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private long ClassifySignedVolume(double price, long volume)
+		private long ClassifySignedVolume(double price, long volume, out bool usedBidAsk)
 		{
+			usedBidAsk = false;
 			if (volume <= 0)
 				return 0;
 
 			long signed = 0;
-			if (!double.IsNaN(lastAsk) && !double.IsNaN(lastBid) && lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid)
+			bool haveUsableQuotes = !double.IsNaN(lastAsk) && !double.IsNaN(lastBid)
+				&& lastAsk > 0 && lastBid > 0 && lastAsk >= lastBid;
+			if (haveUsableQuotes)
 			{
 				if (price >= lastAsk)
-					signed = +volume;
-				else if (price <= lastBid)
-					signed = -volume;
-				else if (!double.IsNaN(prevLast))
 				{
-					if (price > prevLast) signed = +volume;
-					else if (price < prevLast) signed = -volume;
-					else signed = lastDirection * volume;
+					signed = +volume;
+					usedBidAsk = true;
+				}
+				else if (price <= lastBid)
+				{
+					signed = -volume;
+					usedBidAsk = true;
 				}
 			}
-			else if (!double.IsNaN(prevLast))
+
+			if (!usedBidAsk && !double.IsNaN(prevLast))
 			{
 				if (price > prevLast) signed = +volume;
 				else if (price < prevLast) signed = -volume;
@@ -662,6 +806,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastDirection = -1;
 
 			return signed;
+		}
+
+		private static void AddVolumeToMap(Dictionary<double, long> map, double price, long volume)
+		{
+			long existing;
+			if (map.TryGetValue(price, out existing))
+				map[price] = existing + volume;
+			else
+				map[price] = volume;
 		}
 
 		private int ResolvePrimaryBarIndex(DateTime tickTime, double price)
@@ -901,34 +1054,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 					// --- Draw Profiles ---
 					if (profilesVisible && HasRenderableProfile(barIdx))
 					{
-						bool showVolumeProfile = ShowVolumeProfile;
-						bool showDeltaProfile = ShowDeltaProfile;
-						if (!showVolumeProfile && !showDeltaProfile)
-							continue;
+						bool showBidAsk = ProfileDisplayMode == CandleProfileDisplayMode.BidAsk;
+						bool showVolumeProfile = ProfileDisplayMode == CandleProfileDisplayMode.Volume || ProfileDisplayMode == CandleProfileDisplayMode.VolumeAndDelta;
+						bool showDeltaProfile = ProfileDisplayMode == CandleProfileDisplayMode.Delta || ProfileDisplayMode == CandleProfileDisplayMode.VolumeAndDelta;
 
-						float widthScale = (float)Math.Max(0.1, Math.Min(1.0, ProfileWidthScale));
-						float dualWidthScale = showVolumeProfile && showDeltaProfile ? (float)Math.Max(0.1, Math.Min(1.0, DualProfileWidthScale)) : 1f;
-						bool volumeOnRight = ProfileArrangement == CandleProfileSideArrangement.DeltaLeft_VolumeRight;
-						bool deltaOnRight = !showVolumeProfile ? true : !volumeOnRight;
-						float availableRightWidth = ResolveAvailableProfileWidth(chartControl, barIdx, barCenterX, halfCandle, activeCandleWidth, true);
-						float availableLeftWidth = ResolveAvailableProfileWidth(chartControl, barIdx, barCenterX, halfCandle, activeCandleWidth, false);
-						float volumeAvailableWidth = (volumeOnRight ? availableRightWidth : availableLeftWidth) * dualWidthScale;
-						float deltaAvailableWidth = (deltaOnRight ? availableRightWidth : availableLeftWidth) * dualWidthScale;
-
-						float drawVolumeWidth = ResolveSideProfileWidth(volumeAvailableWidth, ProfileWidthPx, widthScale, false);
-						float drawDeltaWidth = ResolveSideProfileWidth(deltaAvailableWidth, DeltaProfileWidthPx, widthScale, true);
-
-						if (showVolumeProfile)
+						if (showBidAsk)
 						{
-							float volumeRootX = volumeOnRight ? candleRight + CandleProfileGapPx : candleLeft - CandleProfileGapPx;
-							DrawBarVolumeProfile(chartScale, barIdx, volumeRootX, panelTop, panelBottom, drawVolumeWidth, volumeCompressionTicks, volumeOnRight);
+							float bidAskWidth = ResolveCenteredProfileWidth(chartControl, barIdx, barCenterX, averageBarSpacing);
+							DrawBarBidAskProfile(chartScale, barIdx, barCenterX, panelTop, panelBottom, bidAskWidth, deltaCompressionTicks);
+							DrawCandleSpine(barCenterX, yHigh, yLow, bodyTop, bodyHeight, bodyBrush, wickBrush);
 						}
-
-						if (showDeltaProfile)
+						else if (showVolumeProfile || showDeltaProfile)
 						{
-							float deltaRootX = deltaOnRight ? candleRight + CandleProfileGapPx : candleLeft - CandleProfileGapPx;
-							TextAlignment deltaTextAlignment = showVolumeProfile ? TextAlignment.Trailing : TextAlignment.Leading;
-							DrawBarDeltaProfile(chartScale, barIdx, deltaRootX, panelTop, panelBottom, drawDeltaWidth, deltaCompressionTicks, deltaOnRight, deltaTextAlignment, !showVolumeProfile);
+							float widthScale = (float)Math.Max(0.1, Math.Min(1.0, ProfileWidthScale));
+							float dualWidthScale = showVolumeProfile && showDeltaProfile ? (float)Math.Max(0.1, Math.Min(1.0, DualProfileWidthScale)) : 1f;
+							bool volumeOnRight = ProfileArrangement == CandleProfileSideArrangement.DeltaLeft_VolumeRight;
+							bool deltaOnRight = !showVolumeProfile ? true : !volumeOnRight;
+							float availableRightWidth = ResolveAvailableProfileWidth(chartControl, barIdx, barCenterX, halfCandle, activeCandleWidth, true);
+							float availableLeftWidth = ResolveAvailableProfileWidth(chartControl, barIdx, barCenterX, halfCandle, activeCandleWidth, false);
+							float volumeAvailableWidth = (volumeOnRight ? availableRightWidth : availableLeftWidth) * dualWidthScale;
+							float deltaAvailableWidth = (deltaOnRight ? availableRightWidth : availableLeftWidth) * dualWidthScale;
+
+							float drawVolumeWidth = ResolveSideProfileWidth(volumeAvailableWidth, ProfileWidthPx, widthScale, false);
+							float drawDeltaWidth = ResolveSideProfileWidth(deltaAvailableWidth, DeltaProfileWidthPx, widthScale, true);
+
+							if (showVolumeProfile)
+							{
+								float volumeRootX = volumeOnRight ? candleRight + CandleProfileGapPx : candleLeft - CandleProfileGapPx;
+								DrawBarVolumeProfile(chartScale, barIdx, volumeRootX, panelTop, panelBottom, drawVolumeWidth, volumeCompressionTicks, volumeOnRight);
+							}
+
+							if (showDeltaProfile)
+							{
+								float deltaRootX = deltaOnRight ? candleRight + CandleProfileGapPx : candleLeft - CandleProfileGapPx;
+								TextAlignment deltaTextAlignment = showVolumeProfile ? TextAlignment.Trailing : TextAlignment.Leading;
+								DrawBarDeltaProfile(chartScale, barIdx, deltaRootX, panelTop, panelBottom, drawDeltaWidth, deltaCompressionTicks, deltaOnRight, deltaTextAlignment, !showVolumeProfile);
+							}
 						}
 					}
 				}
@@ -945,6 +1106,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return barVolumeMaps != null && barIdx >= 0 && barIdx < barVolumeMaps.Count && barVolumeMaps[barIdx] != null && barVolumeMaps[barIdx].Count > 0 && barIdx < barVACache.Count;
 		}
 
+
+		private void DrawCandleSpine(float barCenterX, float yHigh, float yLow, float bodyTop, float bodyHeight, SolidColorBrush bodyBrush, SolidColorBrush wickBrush)
+		{
+			if (bodyBrush == null || wickBrush == null)
+				return;
+
+			float spineWidth = Math.Max(1f, Math.Min(2f, WickWidthPx));
+			RenderTarget.FillRectangle(new RectangleF(barCenterX - spineWidth / 2f, yHigh, spineWidth, Math.Max(1f, yLow - yHigh)), wickBrush);
+			RenderTarget.FillRectangle(new RectangleF(barCenterX - spineWidth / 2f, bodyTop, spineWidth, Math.Max(1f, bodyHeight)), bodyBrush);
+		}
+
+		private float ResolveCenteredProfileWidth(ChartControl chartControl, int barIdx, float barCenterX, float averageBarSpacing)
+		{
+			float availableWidth = averageBarSpacing > 0f ? averageBarSpacing - 2f : BidAskWidthPx;
+
+			try
+			{
+				if (chartControl != null && ChartBars != null)
+				{
+					float nearest = float.MaxValue;
+					if (barIdx > 0)
+						nearest = Math.Min(nearest, Math.Abs(barCenterX - chartControl.GetXByBarIndex(ChartBars, barIdx - 1)));
+					if (barIdx + 1 < ChartBars.Count)
+						nearest = Math.Min(nearest, Math.Abs(chartControl.GetXByBarIndex(ChartBars, barIdx + 1) - barCenterX));
+
+					if (nearest < float.MaxValue && nearest > 0f)
+						availableWidth = nearest - 2f;
+				}
+			}
+			catch { }
+
+			if (float.IsNaN(availableWidth) || float.IsInfinity(availableWidth) || availableWidth <= 0f)
+				availableWidth = BidAskWidthPx;
+
+			return Math.Max(2f, Math.Min(BidAskWidthPx, availableWidth));
+		}
 		private float GetAverageVisibleBarSpacing(ChartControl chartControl, int fromIdx, int toIdx)
 		{
 			try
@@ -1319,6 +1516,173 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+
+		private void DrawBarBidAskProfile(ChartScale chartScale, int barIdx, float barCenterX, float panelTop, float panelBottom, float drawProfileWidth, int compressionTicks)
+		{
+			Dictionary<double, long> askSource;
+			Dictionary<double, long> bidSource;
+			Dictionary<double, long> unclassifiedSource;
+			lock (barDataSync)
+			{
+				if (barIdx < 0 || barAskVolumeMaps == null || barBidVolumeMaps == null || barUnclassifiedVolumeMaps == null
+					|| barIdx >= barAskVolumeMaps.Count || barIdx >= barBidVolumeMaps.Count || barIdx >= barUnclassifiedVolumeMaps.Count)
+					return;
+
+				askSource = new Dictionary<double, long>(barAskVolumeMaps[barIdx]);
+				bidSource = new Dictionary<double, long>(barBidVolumeMaps[barIdx]);
+				unclassifiedSource = new Dictionary<double, long>(barUnclassifiedVolumeMaps[barIdx]);
+			}
+
+			Dictionary<double, long> askMap = BuildAggregatedMap(askSource, compressionTicks, 1);
+			Dictionary<double, long> bidMap = BuildAggregatedMap(bidSource, compressionTicks, 1);
+			Dictionary<double, long> unclassifiedMap = BuildAggregatedMap(unclassifiedSource, compressionTicks, 1);
+			HashSet<double> priceSet = new HashSet<double>(askMap.Keys);
+			priceSet.UnionWith(bidMap.Keys);
+			priceSet.UnionWith(unclassifiedMap.Keys);
+			if (priceSet.Count == 0)
+				return;
+
+			List<double> prices = new List<double>(priceSet);
+			prices.Sort();
+			long maxRowTotal = 0;
+			long maxSideVolume = 0;
+			double pocPrice = double.NaN;
+			foreach (double price in prices)
+			{
+				long ask = GetMapVolume(askMap, price);
+				long bid = GetMapVolume(bidMap, price);
+				long unclassified = GetMapVolume(unclassifiedMap, price);
+				long rowTotal = ask + bid + unclassified;
+				if (rowTotal > maxRowTotal)
+				{
+					maxRowTotal = rowTotal;
+					pocPrice = price;
+				}
+				maxSideVolume = Math.Max(maxSideVolume, Math.Max(ask, bid));
+			}
+
+			if (maxRowTotal <= 0)
+				return;
+			if (maxSideVolume <= 0)
+				maxSideVolume = 1;
+
+			float fullWidth = Math.Max(2f, drawProfileWidth);
+			float halfWidth = fullWidth / 2f;
+			float left = barCenterX - halfWidth;
+			double compHeight = Math.Max(1, compressionTicks) * TickSize;
+
+			foreach (double price in prices)
+			{
+				long ask = GetMapVolume(askMap, price);
+				long bid = GetMapVolume(bidMap, price);
+				long unclassified = GetMapVolume(unclassifiedMap, price);
+				long rowTotal = ask + bid + unclassified;
+				if (rowTotal <= 0)
+					continue;
+
+				int yTop = chartScale.GetYByValue(price + compHeight);
+				int yBot = chartScale.GetYByValue(price);
+				if (yBot < panelTop - 20 || yTop > panelBottom + 20)
+					continue;
+
+				int rowHeight = Math.Max(1, Math.Abs(yBot - yTop) - ProfileBarSpacingPx);
+				float drawY = Math.Min(yTop, yBot) + ProfileBarSpacingPx / 2f;
+				RectangleF rowRect = new RectangleF(left, drawY, fullWidth, rowHeight);
+
+				if (BidAskStyle == CandleProfileBidAskStyle.Cluster)
+				{
+					long rowDelta = ask - bid;
+					SolidColorBrush brush = SelectBidAskBrush(rowDelta, rowTotal, maxRowTotal);
+					if (brush != null)
+						RenderTarget.FillRectangle(rowRect, brush);
+					DrawBidAskClusterText(bid, ask, rowTotal, rowRect);
+				}
+				else
+				{
+					if (unclassified > 0)
+					{
+						SolidColorBrush neutralBrush = SelectBidAskBrush(0, unclassified, maxRowTotal);
+						if (neutralBrush != null)
+							RenderTarget.FillRectangle(rowRect, neutralBrush);
+					}
+
+					float bidWidth = (float)(halfWidth * (bid / (double)maxSideVolume));
+					float askWidth = (float)(halfWidth * (ask / (double)maxSideVolume));
+					if (bidWidth >= 0.5f)
+					{
+						SolidColorBrush bidBrush = SelectBidAskBrush(-1, bid, maxSideVolume);
+						if (bidBrush != null)
+							RenderTarget.FillRectangle(new RectangleF(barCenterX - bidWidth, drawY, bidWidth, rowHeight), bidBrush);
+					}
+					if (askWidth >= 0.5f)
+					{
+						SolidColorBrush askBrush = SelectBidAskBrush(1, ask, maxSideVolume);
+						if (askBrush != null)
+							RenderTarget.FillRectangle(new RectangleF(barCenterX, drawY, askWidth, rowHeight), askBrush);
+					}
+					DrawBidAskHistogramText(bid, ask, rowTotal, left, barCenterX, halfWidth, drawY, rowHeight);
+				}
+
+				if (ShowPOC && Math.Abs(price - pocPrice) < TickSize * 0.01 && pocBrushDx != null)
+					RenderTarget.DrawRectangle(rowRect, pocBrushDx, 1f);
+			}
+		}
+
+		private static long GetMapVolume(Dictionary<double, long> map, double price)
+		{
+			long value;
+			return map != null && map.TryGetValue(price, out value) ? value : 0;
+		}
+
+		private SolidColorBrush SelectBidAskBrush(long deltaSign, long intensityValue, long maxIntensity)
+		{
+			SolidColorBrush[] palette = deltaSign > 0
+				? bidAskPositiveIntensityBrushes
+				: deltaSign < 0 ? bidAskNegativeIntensityBrushes : bidAskNeutralIntensityBrushes;
+			if (palette == null || palette.Length == 0)
+				return deltaSign > 0 ? posDeltaBrushDx : deltaSign < 0 ? negDeltaBrushDx : volBrushDx;
+
+			double intensity = intensityValue / Math.Max(1.0, maxIntensity);
+			intensity = Math.Max(0.0, Math.Min(1.0, intensity));
+			int brushIdx = (int)Math.Round(intensity * (palette.Length - 1));
+			brushIdx = Math.Max(0, Math.Min(palette.Length - 1, brushIdx));
+			return palette[brushIdx];
+		}
+
+		private void DrawBidAskClusterText(long bid, long ask, long rowTotal, RectangleF rowRect)
+		{
+			if (!ShowBidAskText || bidAskTextBrushDx == null || bid + ask < BidAskTextMinThreshold)
+				return;
+
+			float fontSize = ResolveProfileTextFontSize(rowRect.Height, BidAskTextFontSize);
+			if (rowRect.Height < Math.Max(5f, fontSize - 1f) || rowRect.Width < 16f)
+				return;
+
+			DrawTextInRectangle(bid.ToString("N0") + " x " + ask.ToString("N0"), bidAskTextBrushDx, rowRect, fontSize, TextAlignment.Center);
+		}
+
+		private void DrawBidAskHistogramText(long bid, long ask, long rowTotal, float left, float center, float halfWidth, float drawY, float rowHeight)
+		{
+			if (!ShowBidAskText || bidAskTextBrushDx == null || bid + ask < BidAskTextMinThreshold)
+				return;
+
+			float fontSize = ResolveProfileTextFontSize(rowHeight, BidAskTextFontSize);
+			if (rowHeight < Math.Max(5f, fontSize - 1f) || halfWidth < 8f)
+				return;
+
+			DrawTextInRectangle(bid.ToString("N0"), bidAskTextBrushDx, new RectangleF(left + 1f, drawY - 1f, Math.Max(4f, halfWidth - 3f), rowHeight + 2f), fontSize, TextAlignment.Trailing);
+			DrawTextInRectangle(ask.ToString("N0"), bidAskTextBrushDx, new RectangleF(center + 2f, drawY - 1f, Math.Max(4f, halfWidth - 3f), rowHeight + 2f), fontSize, TextAlignment.Leading);
+		}
+
+		private void DrawTextInRectangle(string label, SolidColorBrush brush, RectangleF rectangle, float fontSize, TextAlignment alignment)
+		{
+			if (string.IsNullOrEmpty(label) || brush == null)
+				return;
+
+			TextFormat format = GetProfileTextFormat(fontSize, alignment);
+			if (format != null)
+				RenderTarget.DrawText(label, format, rectangle, brush);
+		}
 		private SolidColorBrush SelectDeltaBrush(long delta, long maxAbsDelta)
 		{
 			if (!UseDeltaIntensityColoring || maxAbsDelta <= 0 || positiveDeltaIntensityBrushes == null || negativeDeltaIntensityBrushes == null)
@@ -1566,6 +1930,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			format.TextAlignment = alignment;
 			format.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center;
+			format.WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap;
 			return format;
 		}
 
@@ -1645,10 +2010,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastBuiltDeltaIntensityMinOpacity = deltaIntensityMinOpacity;
 				lastBuiltDeltaIntensityMaxOpacity = deltaIntensityMaxOpacity;
 			}
+
+			int bidAskIntensitySteps = Math.Max(2, GradientSteps);
+			float bidAskMinOpacity = (float)Math.Max(0.05, Math.Min(1.0, BidAskMinOpacity));
+			float bidAskMaxOpacity = (float)Math.Max(bidAskMinOpacity, Math.Min(1.0, BidAskMaxOpacity));
+			if (ProfileDisplayMode != CandleProfileDisplayMode.BidAsk)
+			{
+				DisposeBrushPalette(ref bidAskPositiveIntensityBrushes);
+				DisposeBrushPalette(ref bidAskNegativeIntensityBrushes);
+				DisposeBrushPalette(ref bidAskNeutralIntensityBrushes);
+			}
+			else if (bidAskPositiveIntensityBrushes == null
+				|| bidAskNegativeIntensityBrushes == null
+				|| bidAskNeutralIntensityBrushes == null
+				|| lastBuiltBidAskIntensitySteps != bidAskIntensitySteps
+				|| Math.Abs(lastBuiltBidAskMinOpacity - bidAskMinOpacity) > 0.001f
+				|| Math.Abs(lastBuiltBidAskMaxOpacity - bidAskMaxOpacity) > 0.001f)
+			{
+				DisposeBrushPalette(ref bidAskPositiveIntensityBrushes);
+				DisposeBrushPalette(ref bidAskNegativeIntensityBrushes);
+				DisposeBrushPalette(ref bidAskNeutralIntensityBrushes);
+				bidAskPositiveIntensityBrushes = BuildOpacityPalette(BidAskPositiveBrush, bidAskIntensitySteps, bidAskMinOpacity, bidAskMaxOpacity);
+				bidAskNegativeIntensityBrushes = BuildOpacityPalette(BidAskNegativeBrush, bidAskIntensitySteps, bidAskMinOpacity, bidAskMaxOpacity);
+				bidAskNeutralIntensityBrushes = BuildOpacityPalette(BidAskNeutralBrush, bidAskIntensitySteps, bidAskMinOpacity, bidAskMaxOpacity);
+				lastBuiltBidAskIntensitySteps = bidAskIntensitySteps;
+				lastBuiltBidAskMinOpacity = bidAskMinOpacity;
+				lastBuiltBidAskMaxOpacity = bidAskMaxOpacity;
+			}
 			if (deltaTextBrushDx == null)
 				deltaTextBrushDx = new SolidColorBrush(RenderTarget, ToDxColor(DeltaTextBrush, 1f));
 			if (volumeTextBrushDx == null)
 				volumeTextBrushDx = new SolidColorBrush(RenderTarget, ToDxColor(VolumeTextBrush, 1f));
+			if (bidAskTextBrushDx == null)
+				bidAskTextBrushDx = new SolidColorBrush(RenderTarget, ToDxColor(BidAskTextBrush, 1f));
 			string textFormatSignature = GetProfileTextFormatSignature();
 			float deltaTextSize = Math.Max(6f, Math.Min(20f, DeltaTextFontSize));
 			if (textFormatDx == null || Math.Abs(lastBuiltDeltaTextFontSize - deltaTextSize) > 0.001f || !string.Equals(lastBuiltDeltaTextFormatSignature, textFormatSignature, StringComparison.Ordinal))
@@ -1752,6 +2146,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return palette;
 		}
 
+		private SolidColorBrush[] BuildOpacityPalette(WpfBrush baseBrush, int steps, float minOpacity, float maxOpacity)
+		{
+			var baseColor = BrushToMediaColor(baseBrush);
+			var palette = new SolidColorBrush[steps];
+
+			for (int i = 0; i < steps; i++)
+			{
+				float t = i / (float)(steps - 1);
+				float opacity = minOpacity + t * (maxOpacity - minOpacity);
+
+				var c = new Color4(
+					baseColor.R / 255f,
+					baseColor.G / 255f,
+					baseColor.B / 255f,
+					(baseColor.A / 255f) * opacity);
+
+				palette[i] = new SolidColorBrush(RenderTarget, c);
+			}
+
+			return palette;
+		}
+
 		private static System.Windows.Media.Color BrushToMediaColor(WpfBrush b)
 		{
 			return (b as WpfSolidColorBrush)?.Color ?? WpfColors.White;
@@ -1766,10 +2182,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		#region Properties
 
+		// --- Profile Setup ---
+		[NinjaScriptProperty]
+		[TypeConverter(typeof(CandleProfileDisplayModeConverter))]
+		[Display(Name = "Profile Display", Description = "Choose Volume, Delta, both profiles, or the Bid x Ask footprint.", GroupName = "Profile Setup", Order = 0)]
+		public CandleProfileDisplayMode ProfileDisplayMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Bid/Ask Style", Description = "Cluster draws fixed-width Bid x Ask cells. Histogram draws executed sells left and buys right.", GroupName = "Profile Setup", Order = 1)]
+		public CandleProfileBidAskStyle BidAskStyle { get; set; }
+
 		// --- Data ---
 		[NinjaScriptProperty]
 		[Range(1, 100)]
-		[Display(Name = "Tick Compression", GroupName = "Data", Order = 0)]
+		[Display(Name = "Volume Row Size (ticks)", Description = "Fixed volume row height when dynamic volume aggregation is off.", GroupName = "Data", Order = 0)]
 		public int TickCompression { get; set; }
 
 		[NinjaScriptProperty]
@@ -1788,31 +2214,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(1, 100)]
-		[Display(Name = "Delta Tick Compression", Description = "Fixed delta row height when dynamic delta aggregation is off.", GroupName = "Data", Order = 4)]
+		[Display(Name = "Order Flow Row Size (ticks)", Description = "Fixed row height for Delta and Bid x Ask when dynamic order-flow aggregation is off.", GroupName = "Data", Order = 4)]
 		public int DeltaTickCompression { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Dynamic Delta Aggregation", Description = "Dynamically increases delta row height as the visible price range expands.", GroupName = "Data", Order = 5)]
+		[Display(Name = "Dynamic Order Flow Aggregation", Description = "Dynamically increases Delta and Bid x Ask row height as the visible price range expands.", GroupName = "Data", Order = 5)]
 		public bool UseDynamicDeltaAggregation { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(2, 40)]
-		[Display(Name = "Delta Dynamic Row Min Pixels", Description = "Target minimum delta row height used before applying the multiplier.", GroupName = "Data", Order = 6)]
+		[Display(Name = "Order Flow Row Min Pixels", Description = "Target minimum Delta and Bid x Ask row height before applying the multiplier.", GroupName = "Data", Order = 6)]
 		public int DeltaDynamicRowMinPixels { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, 5.0)]
-		[Display(Name = "Delta Dynamic Multiplier", Description = "Lower values keep delta rows more granular; higher values aggregate sooner.", GroupName = "Data", Order = 7)]
+		[Display(Name = "Order Flow Dynamic Multiplier", Description = "Lower values keep order-flow rows more granular; higher values aggregate sooner.", GroupName = "Data", Order = 7)]
 		public double DeltaDynamicMultiplier { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 100)]
-		[Display(Name = "Dynamic Delta Min Compression", GroupName = "Data", Order = 8)]
+		[Display(Name = "Dynamic Order Flow Min Ticks", GroupName = "Data", Order = 8)]
 		public int DynamicDeltaMinCompression { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 500)]
-		[Display(Name = "Dynamic Delta Max Compression", GroupName = "Data", Order = 9)]
+		[Display(Name = "Dynamic Order Flow Max Ticks", GroupName = "Data", Order = 9)]
 		public int DynamicDeltaMaxCompression { get; set; }
 
 		[NinjaScriptProperty]
@@ -1820,7 +2246,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool PublishSharedProfileCache { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Trade Source Mode", Description = "Secondary Tick Series is the legacy path. Tick Replay Last Events reads replayed Last events and their trade volume, matching Orca Prints more closely; use it on Tick Replay charts.", GroupName = "Data", Order = 11)]
+		[Display(Name = "Trade Source Mode", Description = "Secondary Tick Series is the fast legacy path but may lack historical quotes. For historical Bid x Ask, use Tick Replay Last Events on a chart with Tick Replay enabled.", GroupName = "Data", Order = 11)]
 		public CandleProfileTradeSourceMode TradeSourceMode { get; set; }
 
 		// --- Layout ---
@@ -1831,7 +2257,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(10, 500)]
-		[Display(Name = "Profile Width (px)", GroupName = "Layout", Order = 2)]
+		[Display(Name = "Volume Profile Width (px)", GroupName = "Layout", Order = 2)]
 		public int ProfileWidthPx { get; set; }
 
 		[NinjaScriptProperty]
@@ -1840,64 +2266,69 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public int DeltaProfileWidthPx { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Profile Arrangement", Description = "Choose which side of the candle gets volume versus delta.", GroupName = "Layout", Order = 4)]
+		[Range(24, 500)]
+		[Display(Name = "Bid x Ask Width (px)", Description = "Total centered width of Bid x Ask cells; capped to avoid overlapping neighboring candles.", GroupName = "Layout", Order = 4)]
+		public int BidAskWidthPx { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Volume + Delta Arrangement", Description = "Choose which side of the candle gets volume versus delta when both are displayed.", GroupName = "Layout", Order = 5)]
 		public CandleProfileSideArrangement ProfileArrangement { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Dynamic Profile Width", Description = "Dynamically adjusts profile width to fit between candles", GroupName = "Layout", Order = 5)]
+		[Display(Name = "Dynamic Volume/Delta Width", Description = "Dynamically adjusts side-profile width to fit between candles.", GroupName = "Layout", Order = 6)]
 		public bool DynamicProfileWidth { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, 1.0)]
-		[Display(Name = "Profile Width Scale", Description = "Scales profile width after dynamic sizing. 0.90 uses 90% of the available space.", GroupName = "Layout", Order = 6)]
+		[Display(Name = "Volume/Delta Width Scale", Description = "Scales side-profile width after dynamic sizing. 0.90 uses 90% of the available space.", GroupName = "Layout", Order = 7)]
 		public double ProfileWidthScale { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, 1.0)]
-		[Display(Name = "Dual Profile Width Scale", Description = "Scales each side when volume and delta profiles are both visible. Lower values leave more room between candles.", GroupName = "Layout", Order = 7)]
+		[Display(Name = "Volume + Delta Width Scale", Description = "Scales each side when volume and delta are both visible. Lower values leave more room between candles.", GroupName = "Layout", Order = 8)]
 		public double DualProfileWidthScale { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Auto Hide Profiles When Compressed", Description = "Hide per-candle profiles when visible bar spacing gets too tight, while still drawing candles.", GroupName = "Layout", Order = 8)]
+		[Display(Name = "Auto Hide Profiles When Compressed", Description = "Hide per-candle profiles when visible bar spacing gets too tight, while still drawing candles.", GroupName = "Layout", Order = 9)]
 		public bool AutoHideProfilesWhenCompressed { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(2, 100)]
-		[Display(Name = "Min Bar Spacing To Show Profiles", Description = "Profiles hide when average visible bar spacing is below this many pixels.", GroupName = "Layout", Order = 9)]
+		[Display(Name = "Min Bar Spacing To Show Profiles", Description = "Profiles hide when average visible bar spacing is below this many pixels.", GroupName = "Layout", Order = 10)]
 		public int MinBarSpacingToShowProfilesPx { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 30)]
-		[Display(Name = "Compressed Candle Max Width", Description = "Maximum CVP candle width while profiles are auto-hidden. Actual width follows the chart bar width so Alt+Up/Down still works.", GroupName = "Layout", Order = 10)]
+		[Display(Name = "Compressed Candle Max Width", Description = "Maximum CVP candle width while profiles are auto-hidden. Actual width follows the chart bar width so Alt+Up/Down still works.", GroupName = "Layout", Order = 11)]
 		public int CompressedCandleWidthPx { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Use Absorption Colors For Candles", Description = "When OrcaAbsorptionCandles is on the chart, use its delta-intensity colors for CVP candle bodies.", GroupName = "Layout", Order = 11)]
+		[Display(Name = "Use Absorption Colors For Candles", Description = "When OrcaAbsorptionCandles is on the chart, use its delta-intensity colors for CVP candle bodies.", GroupName = "Layout", Order = 12)]
 		public bool UseAbsorptionColorsWhenCompressed { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 20)]
-		[Display(Name = "Absorption Candle Min Width", Description = "Minimum CVP candle body width when using absorption colors. Wick width remains controlled by Wick Width.", GroupName = "Layout", Order = 12)]
+		[Display(Name = "Absorption Candle Min Width", Description = "Minimum CVP candle body width when using absorption colors. Wick width remains controlled by Wick Width.", GroupName = "Layout", Order = 13)]
 		public int AbsorptionCandleMinWidthPx { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0, 50)]
-		[Display(Name = "Candle-Profile Gap (px)", GroupName = "Layout", Order = 13)]
+		[Display(Name = "Candle-Profile Gap (px)", GroupName = "Layout", Order = 14)]
 		public int CandleProfileGapPx { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0, 10)]
-		[Display(Name = "Profile Bar Spacing (px)", GroupName = "Layout", Order = 14)]
+		[Display(Name = "Profile Row Spacing (px)", GroupName = "Layout", Order = 15)]
 		public int ProfileBarSpacingPx { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 6)]
-		[Display(Name = "Wick Width (px)", GroupName = "Layout", Order = 15)]
+		[Display(Name = "Wick Width (px)", GroupName = "Layout", Order = 16)]
 		public int WickWidthPx { get; set; }
 
 		// --- Visibility ---
 		[NinjaScriptProperty]
-		[Display(Name = "Show Volume Profile", GroupName = "Visibility", Order = 9)]
+		[Browsable(false)]
 		public bool ShowVolumeProfile { get; set; }
 
 		[NinjaScriptProperty]
@@ -1909,7 +2340,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool ShowDelta { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Delta Profile", GroupName = "Visibility", Order = 12)]
+		[Browsable(false)]
 		public bool ShowDeltaProfile { get; set; }
 
 		[NinjaScriptProperty]
@@ -1965,21 +2396,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{ get { return Serialize.BrushToString(VolumeTextBrush); } set { VolumeTextBrush = Serialize.StringToBrush(value); } }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Show Bid x Ask Text", GroupName = "Text Labels", Order = 9)]
+		public bool ShowBidAskText { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 1000000)]
+		[Display(Name = "Bid x Ask Text Min Threshold", Description = "Minimum classified row volume needed before drawing Bid x Ask values.", GroupName = "Text Labels", Order = 10)]
+		public int BidAskTextMinThreshold { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(6, 24)]
+		[Display(Name = "Bid x Ask Text Font Size", Description = "Fixed footprint label size, or the base size when dynamic text sizing is enabled.", GroupName = "Text Labels", Order = 11)]
+		public float BidAskTextFontSize { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bid x Ask Text Color", GroupName = "Text Labels", Order = 12)]
+		public WpfBrush BidAskTextBrush { get; set; }
+		[Browsable(false)]
+		public string BidAskTextBrushSerialize
+		{ get { return Serialize.BrushToString(BidAskTextBrush); } set { BidAskTextBrush = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
 		[TypeConverter(typeof(CandleProfileTextFontFamilyConverter))]
-		[Display(Name = "Text Font Family", Description = "Font used for both delta and volume profile labels.", GroupName = "Text Labels", Order = 9)]
+		[Display(Name = "Text Font Family", Description = "Font used for Volume, Delta, and Bid x Ask labels.", GroupName = "Text Labels", Order = 13)]
 		public string TextFontFamily { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Text Font Weight", Description = "Weight used for both delta and volume profile labels.", GroupName = "Text Labels", Order = 10)]
+		[Display(Name = "Text Font Weight", Description = "Weight used for Volume, Delta, and Bid x Ask labels.", GroupName = "Text Labels", Order = 14)]
 		public CandleProfileTextFontWeight TextFontWeight { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Dynamic Text Size", Description = "Lets volume and delta labels grow with the rendered row height, capped by Dynamic Text Max Size.", GroupName = "Text Labels", Order = 11)]
+		[Display(Name = "Dynamic Text Size", Description = "Lets Volume, Delta, and Bid x Ask labels grow with row height, capped by Dynamic Text Max Size.", GroupName = "Text Labels", Order = 15)]
 		public bool UseDynamicTextSizing { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(6, 32)]
-		[Display(Name = "Dynamic Text Max Size", Description = "Largest font size dynamic labels are allowed to use.", GroupName = "Text Labels", Order = 12)]
+		[Display(Name = "Dynamic Text Max Size", Description = "Largest font size dynamic labels are allowed to use.", GroupName = "Text Labels", Order = 16)]
 		public float DynamicTextMaxFontSize { get; set; }
 
 		// --- Value Area ---
@@ -2105,6 +2557,38 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(0.05, 1.0)]
 		[Display(Name = "Delta Intensity Min Opacity", Description = "Minimum opacity used for the weakest visible delta rows.", GroupName = "Colors", Order = 42)]
 		public float DeltaIntensityMinOpacity { get; set; }
+
+		// --- Colors: Bid x Ask ---
+		[XmlIgnore]
+		[Display(Name = "Bid x Ask Positive", GroupName = "Colors", Order = 43)]
+		public WpfBrush BidAskPositiveBrush { get; set; }
+		[Browsable(false)]
+		public string BidAskPositiveBrushSerialize
+		{ get { return Serialize.BrushToString(BidAskPositiveBrush); } set { BidAskPositiveBrush = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bid x Ask Negative", GroupName = "Colors", Order = 44)]
+		public WpfBrush BidAskNegativeBrush { get; set; }
+		[Browsable(false)]
+		public string BidAskNegativeBrushSerialize
+		{ get { return Serialize.BrushToString(BidAskNegativeBrush); } set { BidAskNegativeBrush = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bid x Ask Neutral", GroupName = "Colors", Order = 45)]
+		public WpfBrush BidAskNeutralBrush { get; set; }
+		[Browsable(false)]
+		public string BidAskNeutralBrushSerialize
+		{ get { return Serialize.BrushToString(BidAskNeutralBrush); } set { BidAskNeutralBrush = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0.05, 1.0)]
+		[Display(Name = "Bid x Ask Min Opacity", Description = "Opacity used for the weakest footprint rows.", GroupName = "Colors", Order = 46)]
+		public float BidAskMinOpacity { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.1, 1.0)]
+		[Display(Name = "Bid x Ask Max Opacity", Description = "Opacity used for the strongest footprint rows.", GroupName = "Colors", Order = 47)]
+		public float BidAskMaxOpacity { get; set; }
 
 		#endregion
 	}
