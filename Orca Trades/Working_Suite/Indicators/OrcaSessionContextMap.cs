@@ -301,6 +301,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private readonly List<SessionState> sessions = new List<SessionState>(64);
 		private readonly List<PriorSessionSnapshot> snapshots = new List<PriorSessionSnapshot>(64);
 		private readonly List<PendingLabel> pendingLabels = new List<PendingLabel>(256);
+		private readonly Dictionary<int, int> labelLaneCounts = new Dictionary<int, int>();
 		private readonly List<RenderProfileRow> renderRows = new List<RenderProfileRow>(1024);
 		private readonly Dictionary<int, RenderProfileRow> renderRowMap = new Dictionary<int, RenderProfileRow>();
 		private readonly Dictionary<double, long> valueAreaScratch = new Dictionary<double, long>();
@@ -310,6 +311,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double lastAsk = double.NaN;
 		private double previousTradePrice = double.NaN;
 		private int lastTradeDirection;
+		private bool trueVolumeSeriesEnabled;
+		private double previousTrueVolumeTradePrice = double.NaN;
+		private int lastTrueVolumeTradeDirection;
 		private int lastVolumeBarIndex = -1;
 		private double lastBarVolume;
 		private DateTime lastPruneClock = DateTime.MinValue;
@@ -468,6 +472,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				Calculate = UpdateMode == OrcaSessionUpdateMode.EachTick ? Calculate.OnEachTick : Calculate.OnPriceChange;
 				AddDataSeries(BarsPeriodType.Second, 30);
+				trueVolumeSeriesEnabled = ShowSessionVolumeProfile;
+				if (trueVolumeSeriesEnabled)
+					AddDataSeries(BarsPeriodType.Tick, 1);
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -491,6 +498,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			lastAsk = double.NaN;
 			previousTradePrice = double.NaN;
 			lastTradeDirection = 0;
+			previousTrueVolumeTradePrice = double.NaN;
+			lastTrueVolumeTradeDirection = 0;
 			lastVolumeBarIndex = -1;
 			lastBarVolume = 0;
 			lastPruneClock = DateTime.MinValue;
@@ -595,6 +604,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 			}
 
+			if (trueVolumeSeriesEnabled && BarsInProgress == 2)
+			{
+				UpdateTrueVolumeFromTickSeries();
+				return;
+			}
+
 			if (BarsInProgress != 0 || CurrentBar < 0)
 				return;
 
@@ -622,13 +637,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			string key = BuildSessionKey(activeDefinition, sessionStart);
 			SessionState state = GetOrCreateSession(activeDefinition, key, sessionStart, sessionEnd);
 
-			double tickVolume = GetIncrementalVolume();
+			double tickVolume = trueVolumeSeriesEnabled ? 0 : GetIncrementalVolume();
 			double open = Open[0];
 			double high = High[0];
 			double low = Low[0];
 			double close = Close[0];
 			double typicalPrice = (high + low + close) / 3.0;
-			double signedDelta = CalculateSignedDelta(close, tickVolume);
+			double signedDelta = trueVolumeSeriesEnabled ? 0 : CalculateSignedDelta(close, tickVolume);
 
 			UpdateSessionState(state, sessionClock, CurrentBar, open, high, low, close, typicalPrice, tickVolume, signedDelta);
 			UpdateLastBarVolume();
@@ -665,6 +680,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 			PruneOldState(sessionClock);
 		}
 
+		private void UpdateTrueVolumeFromTickSeries()
+		{
+			if (!trueVolumeSeriesEnabled || CurrentBars == null || CurrentBars.Length <= 2 || CurrentBars[2] < 0)
+				return;
+
+			DateTime tradeTime = Times[2][0];
+			if (MaxHistoricalDaysToProcess > 0 && State == State.Historical)
+			{
+				DateTime cutoff = DateTime.Now.Date.AddDays(-Math.Max(1, MaxHistoricalDaysToProcess) - 2);
+				if (tradeTime.Date < cutoff)
+					return;
+			}
+
+			DateTime sessionClock = ConvertToSessionClock(tradeTime);
+			CloseExpiredSessions(sessionClock, CurrentBars[0] >= 0 ? CurrentBars[0] : -1);
+
+			SessionDefinition activeDefinition = GetActiveDefinition(sessionClock);
+			if (activeDefinition == null)
+				return;
+
+			double volume = Volumes[2][0];
+			double price = Closes[2][0];
+			if (volume <= 0 || double.IsNaN(price) || double.IsInfinity(price))
+				return;
+
+			DateTime sessionStart;
+			DateTime sessionEnd;
+			GetSessionBounds(activeDefinition, sessionClock, out sessionStart, out sessionEnd);
+			string key = BuildSessionKey(activeDefinition, sessionStart);
+			SessionState state = GetOrCreateSession(activeDefinition, key, sessionStart, sessionEnd);
+			double signedDelta = CalculateTrueVolumeSignedDelta(price, volume);
+			int primaryBarIndex = CurrentBars[0] >= 0 ? CurrentBars[0] : -1;
+
+			UpdateSessionTrueVolume(state, primaryBarIndex, price, volume, signedDelta);
+			PruneOldState(sessionClock);
+		}
+
 		private void UpdateLastBarVolume()
 		{
 			lastVolumeBarIndex = CurrentBar;
@@ -683,6 +735,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private double CalculateSignedDelta(double price, double volume)
 		{
+			return CalculateSignedDelta(price, volume, ref previousTradePrice, ref lastTradeDirection);
+		}
+
+		private double CalculateTrueVolumeSignedDelta(double price, double volume)
+		{
+			return CalculateSignedDelta(price, volume, ref previousTrueVolumeTradePrice, ref lastTrueVolumeTradeDirection);
+		}
+
+		private double CalculateSignedDelta(double price, double volume, ref double previousPrice, ref int lastDirection)
+		{
 			if (volume <= 0 || DeltaMode == OrcaSessionDeltaMode.Disabled)
 				return 0;
 
@@ -697,19 +759,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 					direction = -1;
 			}
 
-			if (direction == 0 && !double.IsNaN(previousTradePrice))
+			if (direction == 0 && !double.IsNaN(previousPrice))
 			{
-				if (price > previousTradePrice)
+				if (price > previousPrice)
 					direction = 1;
-				else if (price < previousTradePrice)
+				else if (price < previousPrice)
 					direction = -1;
 				else
-					direction = lastTradeDirection;
+					direction = lastDirection;
 			}
 
-			previousTradePrice = price;
+			previousPrice = price;
 			if (direction != 0)
-				lastTradeDirection = direction;
+				lastDirection = direction;
 
 			return direction * volume;
 		}
@@ -828,15 +890,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (!state.OpenLocationClassified && !double.IsNaN(state.Open))
 				ClassifyOpenLocation(state);
 
-			if (volume > 0)
+			if (volume > 0 && !trueVolumeSeriesEnabled)
 			{
 				state.CumulativeVolume += volume;
 				state.CumulativeDelta += signedDelta;
 				state.SumPV += typicalPrice * volume;
 				state.SumVolume += volume;
 				state.SessionVWAP = state.SumVolume > 0 ? state.SumPV / state.SumVolume : double.NaN;
-				AddProfileVolume(state, high, low, volume, signedDelta);
-				UpdateProfileSummary(state);
 			}
 
 			if (!double.IsNaN(state.SessionVWAP))
@@ -853,6 +913,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 			UpdateTrendCounters(state, close);
 			EvaluateContextEvents(state, high, low, close, barIndex, sessionClock);
 			ClassifyTrendBalance(state, sessionClock);
+		}
+
+		private void UpdateSessionTrueVolume(SessionState state, int barIndex, double price, double volume, double signedDelta)
+		{
+			if (state == null || volume <= 0)
+				return;
+
+			state.CumulativeVolume += volume;
+			state.CumulativeDelta += signedDelta;
+			state.SumPV += price * volume;
+			state.SumVolume += volume;
+			state.SessionVWAP = state.SumVolume > 0 ? state.SumPV / state.SumVolume : double.NaN;
+			AddProfileTrade(state, price, volume, signedDelta);
+			UpdateProfileSummary(state);
+
+			if (barIndex < 0 || double.IsNaN(state.SessionVWAP))
+				return;
+
+			if (double.IsNaN(state.FirstVwap))
+				state.FirstVwap = state.SessionVWAP;
+			state.LastVwap = state.SessionVWAP;
+			if (state.VwapPoints.Count == 0 || state.VwapPoints[state.VwapPoints.Count - 1].BarIndex != barIndex)
+				state.VwapPoints.Add(new VwapPoint { BarIndex = barIndex, Price = state.SessionVWAP });
+			else
+				state.VwapPoints[state.VwapPoints.Count - 1].Price = state.SessionVWAP;
 		}
 
 		private void UpdateOpeningRange(SessionState state, DateTime sessionClock, double high, double low)
@@ -873,41 +958,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void AddProfileVolume(SessionState state, double high, double low, double volume, double signedDelta)
+		private void AddProfileTrade(SessionState state, double price, double volume, double signedDelta)
 		{
-			if (state == null || volume <= 0)
+			if (state == null || volume <= 0 || double.IsNaN(price) || double.IsInfinity(price))
 				return;
 
 			double tickSize = GetSafeTickSize();
-			int lowTick = PriceToTick(low);
-			int highTick = PriceToTick(high);
-			if (highTick < lowTick)
+			int tick = PriceToTick(price);
+			ProfileRow row;
+			if (!state.ProfileRows.TryGetValue(tick, out row))
 			{
-				int tmp = highTick;
-				highTick = lowTick;
-				lowTick = tmp;
+				row = new ProfileRow { PriceTick = tick, Price = tick * tickSize };
+				state.ProfileRows[tick] = row;
 			}
 
-			int tickCount = Math.Max(1, highTick - lowTick + 1);
-			double perTickVolume = volume / tickCount;
-			double perTickDelta = signedDelta / tickCount;
-
-			for (int tick = lowTick; tick <= highTick; tick++)
-			{
-				ProfileRow row;
-				if (!state.ProfileRows.TryGetValue(tick, out row))
-				{
-					row = new ProfileRow { PriceTick = tick, Price = tick * tickSize };
-					state.ProfileRows[tick] = row;
-				}
-
-				row.Volume += perTickVolume;
-				row.Delta += perTickDelta;
-				if (perTickDelta >= 0)
-					row.AskVolume += perTickVolume;
-				else
-					row.BidVolume += perTickVolume;
-			}
+			row.Volume += volume;
+			row.Delta += signedDelta;
+			if (signedDelta > 0)
+				row.AskVolume += volume;
+			else if (signedDelta < 0)
+				row.BidVolume += volume;
 		}
 
 		private void UpdateProfileSummary(SessionState state)
@@ -1649,7 +1719,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			if (ShowProfilePOC && !double.IsNaN(state.Poc))
-				DrawPriceLine(chartScale, state.Poc, sessionStartX, sessionEndX, BrushPoc, 1f, OrcaSessionDashStyle.Dot, "POC", true, panelTop, panelBottom);
+				DrawPriceLine(chartScale, state.Poc, sessionStartX, sessionEndX, BrushPoc, 1f, OrcaSessionDashStyle.Dot, "POC", false, panelTop, panelBottom);
 			if (ShowProfileValueArea)
 			{
 				if (!double.IsNaN(state.Vah))
@@ -1825,7 +1895,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (y >= panelTop - 5 && y <= panelBottom + 5)
 			{
 				RenderTarget.DrawLine(new Vector2(startX, y), new Vector2(endX, y), brush, 1f, GetStroke(OrcaSessionDashStyle.Dash));
-				AddPendingLabel(endX, y, BrushCarry, label);
 			}
 			brush.Opacity = oldOpacity;
 		}
@@ -1874,7 +1943,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawProjectionLine(ChartScale chartScale, double price, float startX, float endX, string label, float panelTop, float panelBottom)
 		{
-			DrawPriceLine(chartScale, price, startX, endX, BrushProjection, 1f, OrcaSessionDashStyle.Dot, label, true, panelTop, panelBottom);
+			DrawPriceLine(chartScale, price, startX, endX, BrushProjection, 1f, OrcaSessionDashStyle.Dot, label, false, panelTop, panelBottom);
 		}
 
 		private void DrawPriceLine(ChartScale chartScale, double price, float startX, float endX, int brushIndex, float width, OrcaSessionDashStyle dashStyle, string label, bool showLabel, float panelTop, float panelBottom)
@@ -1906,29 +1975,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return yCompare != 0 ? yCompare : a.X.CompareTo(b.X);
 			});
 
-			float lastY = float.MinValue;
+			labelLaneCounts.Clear();
 			float labelHeight = Math.Max(12f, LabelFontSize + 5f);
+			float bucketHeight = Math.Max(1f, labelHeight * 0.65f);
 			for (int i = 0; i < pendingLabels.Count; i++)
 			{
 				PendingLabel label = pendingLabels[i];
 				if (string.IsNullOrEmpty(label.Text))
 					continue;
 
-				float drawY = label.Y;
-				if (lastY != float.MinValue && drawY - lastY < labelHeight)
-					drawY = lastY + labelHeight;
-				if (drawY + labelHeight > panelBottom)
-					drawY = panelBottom - labelHeight;
-				if (drawY < panelTop)
-					drawY = panelTop;
-				lastY = drawY;
+				int bucket = (int)Math.Round(label.Y / bucketHeight);
+				int lane;
+				if (!labelLaneCounts.TryGetValue(bucket, out lane))
+					lane = 0;
+				labelLaneCounts[bucket] = lane + 1;
 
 				float width = EstimateTextWidth(label.Text, LabelFontSize);
 				float x = label.X + 4f;
 				if (x + width > panelRight)
 					x = panelRight - width;
+				x -= lane * (width + 8f);
 				if (x < panelLeft)
 					x = panelLeft;
+
+				float drawY = label.Y - labelHeight * 0.5f;
+				if (drawY + labelHeight > panelBottom)
+					drawY = panelBottom - labelHeight;
+				if (drawY < panelTop)
+					drawY = panelTop;
 
 				DxSolidBrush brush = GetBrush(label.BrushIndex);
 				if (brush == null)
@@ -1936,7 +2010,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (brush == null)
 					continue;
 
-				RenderTarget.DrawText(label.Text, dxLabelFormat, new RectangleF(x, drawY - labelHeight * 0.5f, width, labelHeight + 2f), brush);
+				RenderTarget.DrawText(label.Text, dxLabelFormat, new RectangleF(x, drawY, width, labelHeight + 2f), brush);
 			}
 		}
 

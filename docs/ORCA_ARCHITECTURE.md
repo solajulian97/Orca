@@ -64,7 +64,7 @@ Existing shared consumers include `OrcaRollingProfiles`, `OrcaVisibleRangeVolume
 | `OrcaTickDirectionIndex` | Yes | 1 Tick | Tick-direction delta index. |
 | `OrcaVisibleRangeVolumeProfile` | Conditional | 1 Tick | Adds local tick series when true VAP and local tick cache are enabled. |
 | `OrcaMGIDaily` | Yes | 1 Minute and 30 Second | Daily/session opening-range and anchor behavior. |
-| `OrcaSessionContextMap` | Yes | 30 Second | Session context and projection support. |
+| `OrcaSessionContextMap` | Yes | 30 Second; 1 Tick when session volume profile is enabled | 30-second opening range plus true traded-at-price session profile/VWAP; no bar-range volume estimate. |
 | `OrcaAtrAdaptiveRangeBarsType` | BarsType | Built from Tick; base period Second | Custom BarsType work may appear in utilization. |
 
 No `AddVolumetric` usage was found in `Working_Suite`.
