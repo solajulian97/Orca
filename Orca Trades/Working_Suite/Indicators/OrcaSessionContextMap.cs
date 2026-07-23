@@ -238,6 +238,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public double Vah = double.NaN;
 			public double Val = double.NaN;
 			public double MaxProfileVolume;
+			public bool ProfileSummaryDirty;
 			public int BarsProcessed;
 			public int BarsAboveVwap;
 			public int BarsBelowVwap;
@@ -281,8 +282,48 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			public float X;
 			public float Y;
+			public float AnchorX;
+			public float AnchorY;
 			public int BrushIndex;
+			public int Priority;
+			public bool ShowAnchor;
 			public string Text;
+		}
+
+		private class SessionRenderSnapshot
+		{
+			public SessionDefinition Definition;
+			public bool IsActive;
+			public int FirstBarIndex = -1;
+			public int LastBarIndex = -1;
+			public double High = double.NaN;
+			public double Low = double.NaN;
+			public double Close = double.NaN;
+			public double Midpoint = double.NaN;
+			public double Range = double.NaN;
+			public double SessionVWAP = double.NaN;
+			public double CumulativeVolume;
+			public double CumulativeDelta;
+			public double OpeningRangeHigh = double.NaN;
+			public double OpeningRangeLow = double.NaN;
+			public double Poc = double.NaN;
+			public double Vah = double.NaN;
+			public double Val = double.NaN;
+			public double MaxProfileVolume;
+			public OrcaSessionClassification Classification;
+			public string OpenLocationText = string.Empty;
+			public string StatusText = string.Empty;
+			public ProfileRow[] ProfileRows = new ProfileRow[0];
+			public VwapPoint[] VwapPoints = new VwapPoint[0];
+			public SessionEvent[] DisplayEvents = new SessionEvent[0];
+		}
+
+		private class RenderStateSnapshot
+		{
+			public static readonly RenderStateSnapshot Empty = new RenderStateSnapshot();
+			public SessionRenderSnapshot[] Sessions = new SessionRenderSnapshot[0];
+			public PriorSessionSnapshot[] Priors = new PriorSessionSnapshot[0];
+			public SessionRenderSnapshot[] LatestByDefinition = new SessionRenderSnapshot[3];
 		}
 
 		private class RenderProfileRow
@@ -301,7 +342,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private readonly List<SessionState> sessions = new List<SessionState>(64);
 		private readonly List<PriorSessionSnapshot> snapshots = new List<PriorSessionSnapshot>(64);
 		private readonly List<PendingLabel> pendingLabels = new List<PendingLabel>(256);
-		private readonly Dictionary<int, int> labelLaneCounts = new Dictionary<int, int>();
+		private readonly List<RectangleF> placedLabelRects = new List<RectangleF>(256);
+		private readonly List<float> labelCandidateXs = new List<float>(512);
 		private readonly List<RenderProfileRow> renderRows = new List<RenderProfileRow>(1024);
 		private readonly Dictionary<int, RenderProfileRow> renderRowMap = new Dictionary<int, RenderProfileRow>();
 		private readonly Dictionary<double, long> valueAreaScratch = new Dictionary<double, long>();
@@ -317,6 +359,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int lastVolumeBarIndex = -1;
 		private double lastBarVolume;
 		private DateTime lastPruneClock = DateTime.MinValue;
+		private DateTime lastRenderSnapshotPublishUtc = DateTime.MinValue;
+		private DateTime lastRenderErrorUtc = DateTime.MinValue;
+		private string lastRenderErrorSignature = string.Empty;
+		private volatile RenderStateSnapshot renderSnapshot = RenderStateSnapshot.Empty;
 
 		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
 		private DxSolidBrush[] dxBrushes;
@@ -494,6 +540,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			sessions.Clear();
 			snapshots.Clear();
 			pendingLabels.Clear();
+			placedLabelRects.Clear();
+			labelCandidateXs.Clear();
 			lastBid = double.NaN;
 			lastAsk = double.NaN;
 			previousTradePrice = double.NaN;
@@ -503,6 +551,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			lastVolumeBarIndex = -1;
 			lastBarVolume = 0;
 			lastPruneClock = DateTime.MinValue;
+			lastRenderSnapshotPublishUtc = DateTime.MinValue;
+			lastRenderErrorUtc = DateTime.MinValue;
+			lastRenderErrorSignature = string.Empty;
+			renderSnapshot = RenderStateSnapshot.Empty;
 		}
 
 		private TimeZoneInfo FindEasternTimeZone()
@@ -628,6 +680,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (activeDefinition == null)
 			{
 				UpdateLastBarVolume();
+				PublishRenderSnapshotIfDue(State == State.Historical);
 				return;
 			}
 
@@ -648,6 +701,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			UpdateSessionState(state, sessionClock, CurrentBar, open, high, low, close, typicalPrice, tickVolume, signedDelta);
 			UpdateLastBarVolume();
 			PruneOldState(sessionClock);
+			PublishRenderSnapshotIfDue(State == State.Historical);
 		}
 
 		private void UpdateOpeningRangeFromThirtySecondSeries()
@@ -678,6 +732,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			UpdateOpeningRange(state, sessionClock, Highs[1][0], Lows[1][0]);
 			PruneOldState(sessionClock);
+			if (State == State.Realtime)
+				PublishRenderSnapshotIfDue(false);
 		}
 
 		private void UpdateTrueVolumeFromTickSeries()
@@ -715,6 +771,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			UpdateSessionTrueVolume(state, primaryBarIndex, price, volume, signedDelta);
 			PruneOldState(sessionClock);
+			if (State == State.Realtime)
+				PublishRenderSnapshotIfDue(false);
 		}
 
 		private void UpdateLastBarVolume()
@@ -926,7 +984,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			state.SumVolume += volume;
 			state.SessionVWAP = state.SumVolume > 0 ? state.SumPV / state.SumVolume : double.NaN;
 			AddProfileTrade(state, price, volume, signedDelta);
-			UpdateProfileSummary(state);
 
 			if (barIndex < 0 || double.IsNaN(state.SessionVWAP))
 				return;
@@ -978,12 +1035,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.AskVolume += volume;
 			else if (signedDelta < 0)
 				row.BidVolume += volume;
+
+			state.ProfileSummaryDirty = true;
+			if (row.Volume > state.MaxProfileVolume)
+			{
+				state.MaxProfileVolume = row.Volume;
+				state.Poc = row.Price;
+			}
 		}
 
 		private void UpdateProfileSummary(SessionState state)
 		{
-			if (state == null || state.ProfileRows.Count == 0)
+			if (state == null)
 				return;
+			if (state.ProfileRows.Count == 0)
+			{
+				state.ProfileSummaryDirty = false;
+				return;
+			}
 
 			double maxVolume = 0;
 			double poc = double.NaN;
@@ -1013,6 +1082,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 			valueAreaScratch.Clear();
+			state.ProfileSummaryDirty = false;
 		}
 
 		private void UpdateTrendCounters(SessionState state, double close)
@@ -1086,6 +1156,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				state.LastBarIndex = endBarIndex;
 			if (!state.OpeningRangeComplete)
 				state.OpeningRangeComplete = true;
+			if (state.ProfileSummaryDirty)
+				UpdateProfileSummary(state);
 			FillNextSessionEndpoints(state);
 			CreateSnapshot(state);
 		}
@@ -1201,6 +1273,165 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (snapshots[i].SessionEnd < cutoff)
 					snapshots.RemoveAt(i);
 			}
+		}
+
+		private void PublishRenderSnapshotIfDue(bool force)
+		{
+			DateTime nowUtc = DateTime.UtcNow;
+			if (!force && lastRenderSnapshotPublishUtc != DateTime.MinValue
+				&& (nowUtc - lastRenderSnapshotPublishUtc).TotalMilliseconds < 250)
+				return;
+
+			for (int i = 0; i < sessions.Count; i++)
+			{
+				SessionState state = sessions[i];
+				if (state != null && state.ProfileSummaryDirty)
+					UpdateProfileSummary(state);
+			}
+
+			SessionRenderSnapshot[] sessionCopies = new SessionRenderSnapshot[sessions.Count];
+			SessionRenderSnapshot[] latestByDefinition = new SessionRenderSnapshot[3];
+			for (int i = 0; i < sessions.Count; i++)
+			{
+				SessionRenderSnapshot copy = CreateSessionRenderSnapshot(sessions[i]);
+				sessionCopies[i] = copy;
+				if (copy != null && copy.Definition != null && copy.Definition.Index >= 0 && copy.Definition.Index < latestByDefinition.Length)
+					latestByDefinition[copy.Definition.Index] = copy;
+			}
+
+			PriorSessionSnapshot[] priorCopies = new PriorSessionSnapshot[snapshots.Count];
+			for (int i = 0; i < snapshots.Count; i++)
+				priorCopies[i] = ClonePriorSnapshot(snapshots[i]);
+
+			renderSnapshot = new RenderStateSnapshot
+			{
+				Sessions = sessionCopies,
+				Priors = priorCopies,
+				LatestByDefinition = latestByDefinition
+			};
+			lastRenderSnapshotPublishUtc = nowUtc;
+		}
+
+		private SessionRenderSnapshot CreateSessionRenderSnapshot(SessionState state)
+		{
+			if (state == null)
+				return null;
+
+			ProfileRow[] profileRows = new ProfileRow[state.ProfileRows.Count];
+			int profileIndex = 0;
+			foreach (ProfileRow row in state.ProfileRows.Values)
+			{
+				profileRows[profileIndex++] = new ProfileRow
+				{
+					PriceTick = row.PriceTick,
+					Price = row.Price,
+					Volume = row.Volume,
+					BidVolume = row.BidVolume,
+					AskVolume = row.AskVolume,
+					Delta = row.Delta
+				};
+			}
+
+			VwapPoint[] vwapPoints = new VwapPoint[state.VwapPoints.Count];
+			for (int i = 0; i < state.VwapPoints.Count; i++)
+			{
+				VwapPoint point = state.VwapPoints[i];
+				vwapPoints[i] = new VwapPoint { BarIndex = point.BarIndex, Price = point.Price };
+			}
+
+			return new SessionRenderSnapshot
+			{
+				Definition = state.Definition,
+				IsActive = state.IsActive,
+				FirstBarIndex = state.FirstBarIndex,
+				LastBarIndex = state.LastBarIndex,
+				High = state.High,
+				Low = state.Low,
+				Close = state.Close,
+				Midpoint = state.Midpoint,
+				Range = state.Range,
+				SessionVWAP = state.SessionVWAP,
+				CumulativeVolume = state.CumulativeVolume,
+				CumulativeDelta = state.CumulativeDelta,
+				OpeningRangeHigh = state.OpeningRangeHigh,
+				OpeningRangeLow = state.OpeningRangeLow,
+				Poc = state.Poc,
+				Vah = state.Vah,
+				Val = state.Val,
+				MaxProfileVolume = state.MaxProfileVolume,
+				Classification = state.Classification,
+				OpenLocationText = state.OpenLocationText ?? string.Empty,
+				StatusText = state.StatusText ?? string.Empty,
+				ProfileRows = profileRows,
+				VwapPoints = vwapPoints,
+				DisplayEvents = BuildDisplayEvents(state)
+			};
+		}
+
+		private SessionEvent[] BuildDisplayEvents(SessionState state)
+		{
+			if (state == null || state.Events.Count == 0)
+				return new SessionEvent[0];
+
+			Dictionary<string, SessionEvent> latestByLevel = new Dictionary<string, SessionEvent>(StringComparer.Ordinal);
+			for (int i = 0; i < state.Events.Count; i++)
+			{
+				SessionEvent ev = state.Events[i];
+				if (ev == null || ev.EventType == "Open")
+					continue;
+
+				string key = !string.IsNullOrEmpty(ev.RelatedLevel) ? ev.RelatedLevel : ev.EventType + "|" + i.ToString(CultureInfo.InvariantCulture);
+				latestByLevel[key] = ev;
+			}
+
+			List<SessionEvent> display = new List<SessionEvent>(latestByLevel.Count);
+			foreach (SessionEvent ev in latestByLevel.Values)
+			{
+				display.Add(new SessionEvent
+				{
+					EventType = ev.EventType,
+					RelatedLevel = ev.RelatedLevel,
+					Time = ev.Time,
+					BarIndex = ev.BarIndex,
+					Price = ev.Price,
+					Direction = ev.Direction,
+					LabelText = ev.LabelText
+				});
+			}
+			display.Sort(delegate(SessionEvent a, SessionEvent b) { return a.Time.CompareTo(b.Time); });
+			return display.ToArray();
+		}
+
+		private PriorSessionSnapshot ClonePriorSnapshot(PriorSessionSnapshot source)
+		{
+			if (source == null)
+				return null;
+
+			return new PriorSessionSnapshot
+			{
+				Name = source.Name,
+				DefinitionIndex = source.DefinitionIndex,
+				SessionStart = source.SessionStart,
+				SessionEnd = source.SessionEnd,
+				TradingDate = source.TradingDate,
+				StartBarIndex = source.StartBarIndex,
+				EndBarIndex = source.EndBarIndex,
+				High = source.High,
+				Low = source.Low,
+				Midpoint = source.Midpoint,
+				VWAP = source.VWAP,
+				OpeningRangeHigh = source.OpeningRangeHigh,
+				OpeningRangeLow = source.OpeningRangeLow,
+				Range = source.Range,
+				Volume = source.Volume,
+				Delta = source.Delta,
+				POC = source.POC,
+				VAH = source.VAH,
+				VAL = source.VAL,
+				FirstTouchBarIndex = source.FirstTouchBarIndex,
+				NextSessionEndBarIndex = source.NextSessionEndBarIndex,
+				NextSessionEndTime = source.NextSessionEndTime
+			};
 		}
 		#endregion
 
@@ -1562,13 +1793,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			base.OnRender(chartControl, chartScale);
-			if (chartControl == null || chartScale == null || ChartBars == null || RenderTarget == null)
+			try
+			{
+				RenderSnapshot(chartControl, chartScale);
+			}
+			catch (Exception ex)
+			{
+				ReportRenderError(ex);
+			}
+		}
+
+		private void RenderSnapshot(ChartControl chartControl, ChartScale chartScale)
+		{
+			if (chartControl == null || chartScale == null || ChartBars == null || ChartPanel == null || RenderTarget == null)
 				return;
 
 			EnsureDx();
 			if (!dxValid)
 				return;
 
+			RenderStateSnapshot current = renderSnapshot ?? RenderStateSnapshot.Empty;
+			SessionRenderSnapshot[] renderSessions = current.Sessions ?? new SessionRenderSnapshot[0];
+			PriorSessionSnapshot[] renderPriors = current.Priors ?? new PriorSessionSnapshot[0];
 			float panelLeft = ChartPanel.X;
 			float panelTop = ChartPanel.Y;
 			float panelRight = ChartPanel.X + ChartPanel.W;
@@ -1578,43 +1824,56 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			pendingLabels.Clear();
 
-			for (int i = 0; i < sessions.Count; i++)
+			for (int i = 0; i < renderSessions.Length; i++)
 			{
-				SessionState state = sessions[i];
-				if (!ShouldRenderSession(state, fromIndex, toIndex))
-					continue;
-
-				DrawSessionShading(chartControl, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
+				SessionRenderSnapshot state = renderSessions[i];
+				if (ShouldRenderSession(state, fromIndex, toIndex))
+					DrawSessionShading(chartControl, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
 			}
 
-			for (int i = 0; i < sessions.Count; i++)
+			for (int i = 0; i < renderSessions.Length; i++)
 			{
-				SessionState state = sessions[i];
-				if (!ShouldRenderSession(state, fromIndex, toIndex))
-					continue;
-
-				DrawSessionVolumeProfile(chartControl, chartScale, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
+				SessionRenderSnapshot state = renderSessions[i];
+				if (ShouldRenderSession(state, fromIndex, toIndex))
+					DrawSessionVolumeProfile(chartControl, chartScale, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
 			}
 
-			for (int i = 0; i < sessions.Count; i++)
+			for (int i = 0; i < renderSessions.Length; i++)
 			{
-				SessionState state = sessions[i];
+				SessionRenderSnapshot state = renderSessions[i];
 				if (!ShouldRenderSession(state, fromIndex, toIndex))
 					continue;
 
 				DrawSessionLevels(chartControl, chartScale, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
 				DrawSessionEvents(chartControl, chartScale, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
+				DrawSessionHeader(chartControl, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
 			}
 
-			DrawCarryForwardLevels(chartControl, chartScale, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
-			DrawRangeProjections(chartControl, chartScale, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
+			DrawCarryForwardLevels(chartControl, chartScale, renderPriors, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
+			DrawRangeProjections(chartControl, chartScale, renderPriors, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
 			DrawPendingLabels(panelLeft, panelTop, panelRight, panelBottom);
 
 			if (ShowStatsPanel)
-				DrawStatsPanel(panelLeft, panelTop, panelRight, panelBottom);
+				DrawStatsPanel(current, panelLeft, panelTop, panelRight, panelBottom);
 		}
 
-		private bool ShouldRenderSession(SessionState state, int fromIndex, int toIndex)
+		private void ReportRenderError(Exception ex)
+		{
+			if (ex == null)
+				return;
+
+			DateTime nowUtc = DateTime.UtcNow;
+			string signature = ex.GetType().FullName + "|" + ex.Message;
+			if (signature == lastRenderErrorSignature && lastRenderErrorUtc != DateTime.MinValue
+				&& (nowUtc - lastRenderErrorUtc).TotalSeconds < 30)
+				return;
+
+			lastRenderErrorSignature = signature;
+			lastRenderErrorUtc = nowUtc;
+			Log(Name + " render skipped safely: " + (EnableDebugLogging ? ex.ToString() : ex.Message), LogLevel.Error);
+		}
+
+		private bool ShouldRenderSession(SessionRenderSnapshot state, int fromIndex, int toIndex)
 		{
 			if (state == null || state.FirstBarIndex < 0)
 				return false;
@@ -1624,7 +1883,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return endIndex >= fromIndex && state.FirstBarIndex <= toIndex;
 		}
 
-		private void DrawSessionShading(ChartControl chartControl, SessionState state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private void DrawSessionShading(ChartControl chartControl, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
 			if (!ShowSessionShading || !state.Definition.ShowShading)
 				return;
@@ -1645,9 +1904,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			brush.Opacity = oldOpacity;
 		}
 
-		private void DrawSessionVolumeProfile(ChartControl chartControl, ChartScale chartScale, SessionState state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private void DrawSessionVolumeProfile(ChartControl chartControl, ChartScale chartScale, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
-			if (!ShowSessionVolumeProfile || !state.Definition.ShowVolumeProfile || state.ProfileRows.Count == 0 || state.MaxProfileVolume <= 0)
+			if (!ShowSessionVolumeProfile || !state.Definition.ShowVolumeProfile || state.ProfileRows.Length == 0 || state.MaxProfileVolume <= 0)
 				return;
 
 			float sessionStartX;
@@ -1729,11 +1988,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void BuildRenderableProfileRows(SessionState state, ChartScale chartScale, float panelTop, float panelBottom)
+		private void BuildRenderableProfileRows(SessionRenderSnapshot state, ChartScale chartScale, float panelTop, float panelBottom)
 		{
 			renderRows.Clear();
 			renderRowMap.Clear();
-			if (state == null || state.ProfileRows.Count == 0)
+			if (state == null || state.ProfileRows.Length == 0)
 				return;
 
 			int compressionTicks = 1;
@@ -1745,11 +2004,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				compressionTicks = Math.Max(1, (int)Math.Ceiling(ticksPerPixel * Math.Max(1, MinProfileRowHeight)));
 			}
 
-			if (MaxProfileRows > 0 && state.ProfileRows.Count / compressionTicks > MaxProfileRows)
-				compressionTicks = Math.Max(compressionTicks, (int)Math.Ceiling(state.ProfileRows.Count / (double)MaxProfileRows));
+			if (MaxProfileRows > 0 && state.ProfileRows.Length / compressionTicks > MaxProfileRows)
+				compressionTicks = Math.Max(compressionTicks, (int)Math.Ceiling(state.ProfileRows.Length / (double)MaxProfileRows));
 
-			foreach (ProfileRow row in state.ProfileRows.Values)
+			for (int rowIndex = 0; rowIndex < state.ProfileRows.Length; rowIndex++)
 			{
+				ProfileRow row = state.ProfileRows[rowIndex];
 				int bucketTick = (int)Math.Floor(row.PriceTick / (double)compressionTicks) * compressionTicks;
 				RenderProfileRow renderRow;
 				if (!renderRowMap.TryGetValue(bucketTick, out renderRow))
@@ -1765,7 +2025,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			renderRows.Sort(delegate(RenderProfileRow a, RenderProfileRow b) { return a.PriceTick.CompareTo(b.PriceTick); });
 		}
 
-		private void DrawSessionLevels(ChartControl chartControl, ChartScale chartScale, SessionState state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private void DrawSessionLevels(ChartControl chartControl, ChartScale chartScale, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
 			float startX;
 			float endX;
@@ -1791,9 +2051,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DrawVwapPath(chartControl, chartScale, state, fromIndex, toIndex, panelLeft, panelRight, panelTop, panelBottom);
 		}
 
-		private void DrawVwapPath(ChartControl chartControl, ChartScale chartScale, SessionState state, int fromIndex, int toIndex, float panelLeft, float panelRight, float panelTop, float panelBottom)
+		private void DrawVwapPath(ChartControl chartControl, ChartScale chartScale, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelRight, float panelTop, float panelBottom)
 		{
-			if (state == null || state.VwapPoints.Count < 1)
+			if (state == null || state.VwapPoints.Length < 1)
 				return;
 
 			DxSolidBrush brush = GetBrush(BrushVwap);
@@ -1801,7 +2061,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 
 			Vector2? previous = null;
-			for (int i = 0; i < state.VwapPoints.Count; i++)
+			for (int i = 0; i < state.VwapPoints.Length; i++)
 			{
 				VwapPoint point = state.VwapPoints[i];
 				if (point.BarIndex < fromIndex - 1 || point.BarIndex > toIndex + 1 || double.IsNaN(point.Price))
@@ -1825,32 +2085,112 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void DrawSessionEvents(ChartControl chartControl, ChartScale chartScale, SessionState state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private void DrawSessionEvents(ChartControl chartControl, ChartScale chartScale, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
-			if (!ShowLabels || state == null || state.Events.Count == 0)
+			if (!ShowLabels || state == null || state.DisplayEvents.Length == 0)
 				return;
 
-			for (int i = 0; i < state.Events.Count; i++)
+			for (int i = 0; i < state.DisplayEvents.Length; i++)
 			{
-				SessionEvent ev = state.Events[i];
+				SessionEvent ev = state.DisplayEvents[i];
 				if (ev.BarIndex < fromIndex || ev.BarIndex > toIndex || double.IsNaN(ev.Price))
 					continue;
 
 				float x = ClampX(chartControl.GetXByBarIndex(ChartBars, ev.BarIndex), panelLeft, panelRight);
+				float anchorY = chartScale.GetYByValue(ev.Price);
 				float y = chartScale.GetYByValue(ev.Price + ev.Direction * LabelOffsetTicks * GetSafeTickSize());
-				int brushIndex = ev.Direction > 0 ? BrushEventBullish : ev.Direction < 0 ? BrushEventBearish : BrushEventNeutral;
-				AddPendingLabel(x, y, brushIndex, ev.LabelText);
+				int brushIndex = GetEventBrushIndex(ev);
+				AddPendingLabel(x, y, brushIndex, BuildChartEventText(ev), GetEventPriority(ev), true, x, anchorY);
 			}
 		}
 
-		private void DrawCarryForwardLevels(ChartControl chartControl, ChartScale chartScale, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private int GetEventBrushIndex(SessionEvent ev)
+		{
+			if (ev == null)
+				return BrushEventNeutral;
+			if (ev.EventType == "Reclaim")
+				return BrushEventBullish;
+			if (ev.EventType == "Acceptance")
+				return ev.Direction < 0 ? BrushEventBearish : BrushEventBullish;
+			return BrushEventNeutral;
+		}
+
+		private int GetEventPriority(SessionEvent ev)
+		{
+			if (ev == null)
+				return 1;
+			return ev.EventType == "Reclaim" || ev.EventType == "Acceptance" ? 4 : 3;
+		}
+
+		private string BuildChartEventText(SessionEvent ev)
+		{
+			if (ev == null)
+				return string.Empty;
+
+			string level = !string.IsNullOrEmpty(ev.RelatedLevel) ? ev.RelatedLevel : "Level";
+			if (ev.EventType == "Reclaim")
+				return level + " reclaimed";
+			if (ev.EventType == "Acceptance")
+				return level + (ev.Direction < 0 ? " accepted below" : " accepted above");
+			if (ev.EventType == "Sweep")
+				return level + " swept";
+			return ev.LabelText ?? string.Empty;
+		}
+
+		private void DrawSessionHeader(ChartControl chartControl, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		{
+			if (!ShowLabels || state == null || string.IsNullOrEmpty(state.OpenLocationText) || dxLabelFormat == null)
+				return;
+
+			float startX;
+			float endX;
+			if (!TryGetSessionXRange(chartControl, state, fromIndex, toIndex, panelLeft, panelRight, out startX, out endX))
+				return;
+
+			float availableWidth = Math.Max(1f, endX - startX - 10f);
+			float width = Math.Min(availableWidth, EstimateTextWidth(state.OpenLocationText, LabelFontSize) + 14f);
+			if (width < 50f)
+				return;
+
+			float height = Math.Max(16f, LabelFontSize + 8f);
+			float x = startX + 5f;
+			float y = panelTop + 5f;
+			RectangleF headerRect = new RectangleF(x, y, width, height);
+			if (ShowStatsPanel)
+			{
+				RectangleF statsRect = GetStatsPanelBounds(panelLeft, panelTop, panelRight, panelBottom);
+				if (RectanglesOverlap(headerRect, statsRect, 4f))
+				{
+					y = statsRect.Y + statsRect.Height + 5f;
+					headerRect = new RectangleF(x, y, width, height);
+				}
+			}
+			if (headerRect.Y + headerRect.Height > panelBottom)
+				return;
+
+			if (dxPanelBackgroundBrush != null)
+			{
+				float oldOpacity = dxPanelBackgroundBrush.Opacity;
+				dxPanelBackgroundBrush.Opacity = 0.68f;
+				RenderTarget.FillRectangle(headerRect, dxPanelBackgroundBrush);
+				dxPanelBackgroundBrush.Opacity = oldOpacity;
+			}
+
+			DxSolidBrush brush = GetBrush(GetSessionBrushIndex(state.Definition)) ?? GetBrush(BrushLabel);
+			if (brush != null)
+				RenderTarget.DrawText(state.OpenLocationText, dxLabelFormat, new RectangleF(x + 5f, y, width - 8f, height), brush);
+		}
+
+		private void DrawCarryForwardLevels(ChartControl chartControl, ChartScale chartScale, PriorSessionSnapshot[] renderPriors, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
 			if (!ShowCarryForwardLevels || CarryForwardMode == OrcaSessionCarryForwardMode.None)
 				return;
 
-			for (int i = 0; i < snapshots.Count; i++)
+			for (int i = 0; i < renderPriors.Length; i++)
 			{
-				PriorSessionSnapshot snapshot = snapshots[i];
+				PriorSessionSnapshot snapshot = renderPriors[i];
+				if (snapshot == null)
+					continue;
 				int startBar = Math.Max(0, snapshot.EndBarIndex);
 				int endBar = ResolveCarryForwardEndBar(snapshot, toIndex);
 				if (endBar < fromIndex || startBar > toIndex)
@@ -1899,14 +2239,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			brush.Opacity = oldOpacity;
 		}
 
-		private void DrawRangeProjections(ChartControl chartControl, ChartScale chartScale, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private void DrawRangeProjections(ChartControl chartControl, ChartScale chartScale, PriorSessionSnapshot[] renderPriors, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
 			if (!ShowRangeProjections)
 				return;
 
-			for (int i = 0; i < snapshots.Count; i++)
+			for (int i = 0; i < renderPriors.Length; i++)
 			{
-				PriorSessionSnapshot snapshot = snapshots[i];
+				PriorSessionSnapshot snapshot = renderPriors[i];
+				if (snapshot == null)
+					continue;
 				int startBar = Math.Max(0, snapshot.EndBarIndex);
 				int endBar = ProjectionCarryForwardMode == OrcaSessionProjectionCarryForwardMode.NextSessionOnly && snapshot.NextSessionEndBarIndex >= 0
 					? snapshot.NextSessionEndBarIndex
@@ -1971,38 +2313,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			pendingLabels.Sort(delegate(PendingLabel a, PendingLabel b)
 			{
+				int priorityCompare = b.Priority.CompareTo(a.Priority);
+				if (priorityCompare != 0)
+					return priorityCompare;
 				int yCompare = a.Y.CompareTo(b.Y);
 				return yCompare != 0 ? yCompare : a.X.CompareTo(b.X);
 			});
 
-			labelLaneCounts.Clear();
+			placedLabelRects.Clear();
 			float labelHeight = Math.Max(12f, LabelFontSize + 5f);
-			float bucketHeight = Math.Max(1f, labelHeight * 0.65f);
 			for (int i = 0; i < pendingLabels.Count; i++)
 			{
 				PendingLabel label = pendingLabels[i];
 				if (string.IsNullOrEmpty(label.Text))
 					continue;
 
-				int bucket = (int)Math.Round(label.Y / bucketHeight);
-				int lane;
-				if (!labelLaneCounts.TryGetValue(bucket, out lane))
-					lane = 0;
-				labelLaneCounts[bucket] = lane + 1;
-
-				float width = EstimateTextWidth(label.Text, LabelFontSize);
-				float x = label.X + 4f;
-				if (x + width > panelRight)
-					x = panelRight - width;
-				x -= lane * (width + 8f);
-				if (x < panelLeft)
-					x = panelLeft;
-
+				float width = Math.Min(Math.Max(1f, panelRight - panelLeft - 4f), EstimateTextWidth(label.Text, LabelFontSize));
 				float drawY = label.Y - labelHeight * 0.5f;
 				if (drawY + labelHeight > panelBottom)
 					drawY = panelBottom - labelHeight;
 				if (drawY < panelTop)
 					drawY = panelTop;
+
+				float preferredX = Math.Max(panelLeft, Math.Min(panelRight - width, label.X + 4f));
+				float x;
+				if (!TryFindLabelX(preferredX, label.X, width, drawY, labelHeight, panelLeft, panelRight, out x))
+					continue;
+
+				RectangleF labelRect = new RectangleF(x, drawY, width, labelHeight + 2f);
+				placedLabelRects.Add(labelRect);
 
 				DxSolidBrush brush = GetBrush(label.BrushIndex);
 				if (brush == null)
@@ -2010,11 +2349,86 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (brush == null)
 					continue;
 
-				RenderTarget.DrawText(label.Text, dxLabelFormat, new RectangleF(x, drawY, width, labelHeight + 2f), brush);
+				if (label.ShowAnchor && label.AnchorX >= panelLeft && label.AnchorX <= panelRight
+					&& label.AnchorY >= panelTop && label.AnchorY <= panelBottom)
+				{
+					float attachX = x >= label.AnchorX ? x : x + width;
+					float attachY = drawY + labelHeight * 0.5f;
+					RenderTarget.DrawLine(new Vector2(label.AnchorX, label.AnchorY), new Vector2(attachX, attachY), brush, 0.75f);
+					RenderTarget.DrawLine(new Vector2(label.AnchorX - 2f, label.AnchorY), new Vector2(label.AnchorX + 2f, label.AnchorY), brush, 1.25f);
+					RenderTarget.DrawLine(new Vector2(label.AnchorX, label.AnchorY - 2f), new Vector2(label.AnchorX, label.AnchorY + 2f), brush, 1.25f);
+				}
+
+				RenderTarget.DrawText(label.Text, dxLabelFormat, labelRect, brush);
 			}
 		}
 
+		private bool TryFindLabelX(float preferredX, float anchorX, float width, float y, float height, float panelLeft, float panelRight, out float resultX)
+		{
+			labelCandidateXs.Clear();
+			labelCandidateXs.Add(preferredX);
+			labelCandidateXs.Add(anchorX - width - 4f);
+
+			for (int i = 0; i < placedLabelRects.Count; i++)
+			{
+				RectangleF placed = placedLabelRects[i];
+				if (y + height + 3f <= placed.Y || y >= placed.Y + placed.Height + 3f)
+					continue;
+				labelCandidateXs.Add(placed.X + placed.Width + 6f);
+				labelCandidateXs.Add(placed.X - width - 6f);
+			}
+
+			bool found = false;
+			float bestDistance = float.MaxValue;
+			float bestX = preferredX;
+			for (int i = 0; i < labelCandidateXs.Count; i++)
+			{
+				float candidateX = labelCandidateXs[i];
+				if (candidateX < panelLeft || candidateX + width > panelRight)
+					continue;
+
+				RectangleF candidate = new RectangleF(candidateX, y, width, height + 2f);
+				if (!IsLabelRectFree(candidate))
+					continue;
+
+				float distance = Math.Abs(candidateX - preferredX);
+				if (!found || distance < bestDistance)
+				{
+					found = true;
+					bestDistance = distance;
+					bestX = candidateX;
+				}
+			}
+
+			resultX = bestX;
+			return found;
+		}
+
+		private bool IsLabelRectFree(RectangleF candidate)
+		{
+			for (int i = 0; i < placedLabelRects.Count; i++)
+				if (RectanglesOverlap(candidate, placedLabelRects[i], 3f))
+					return false;
+			return true;
+		}
+
+		private bool RectanglesOverlap(RectangleF a, RectangleF b, float padding)
+		{
+			return a.X < b.X + b.Width + padding
+				&& a.X + a.Width + padding > b.X
+				&& a.Y < b.Y + b.Height + padding
+				&& a.Y + a.Height + padding > b.Y;
+		}
+
 		private void AddPendingLabel(float x, float y, int brushIndex, string text)
+		{
+			int priority = brushIndex == BrushMidpoint ? 1
+				: brushIndex == BrushHigh || brushIndex == BrushLow || brushIndex == BrushOpeningRange || brushIndex == BrushVwap ? 2
+				: 1;
+			AddPendingLabel(x, y, brushIndex, text, priority, false, x, y);
+		}
+
+		private void AddPendingLabel(float x, float y, int brushIndex, string text, int priority, bool showAnchor, float anchorX, float anchorY)
 		{
 			if (!ShowLabels || string.IsNullOrEmpty(text))
 				return;
@@ -2023,17 +2437,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				X = x,
 				Y = y,
+				AnchorX = anchorX,
+				AnchorY = anchorY,
 				BrushIndex = brushIndex,
+				Priority = priority,
+				ShowAnchor = showAnchor,
 				Text = text
 			});
 		}
 
-		private void DrawStatsPanel(float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private void DrawStatsPanel(RenderStateSnapshot current, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
 			if (dxPanelFormat == null)
 				return;
 
-			string text = BuildStatsPanelText();
+			string text = BuildStatsPanelText(current);
 			if (string.IsNullOrEmpty(text))
 				return;
 
@@ -2062,10 +2480,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RenderTarget.DrawText(text, dxPanelFormat, new RectangleF(x + 8f, y + 7f, width - 14f, height - 10f), textBrush);
 		}
 
-		private string BuildStatsPanelText()
+		private RectangleF GetStatsPanelBounds(float panelLeft, float panelTop, float panelRight, float panelBottom)
+		{
+			float width = CompactStatsPanel ? 245f : 330f;
+			float height = CompactStatsPanel ? 112f : 168f;
+			float margin = 12f;
+			float x = StatsPanelPosition == OrcaSessionStatsPanelPosition.TopLeft || StatsPanelPosition == OrcaSessionStatsPanelPosition.BottomLeft
+				? panelLeft + margin
+				: panelRight - width - margin;
+			float y = StatsPanelPosition == OrcaSessionStatsPanelPosition.TopLeft || StatsPanelPosition == OrcaSessionStatsPanelPosition.TopRight
+				? panelTop + margin
+				: panelBottom - height - margin;
+			return new RectangleF(x, y, width, height);
+		}
+
+		private string BuildStatsPanelText(RenderStateSnapshot current)
 		{
 			StringBuilder sb = new StringBuilder();
 			sb.AppendLine("ORCA Session Context Map");
+			SessionRenderSnapshot[] latest = current != null && current.LatestByDefinition != null
+				? current.LatestByDefinition
+				: new SessionRenderSnapshot[0];
 
 			for (int i = 0; i < sessionDefinitions.Count; i++)
 			{
@@ -2073,7 +2508,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (definition == null || !definition.Enabled)
 					continue;
 
-				SessionState state = GetLatestSessionByDefinition(definition.Index);
+				SessionRenderSnapshot state = definition.Index >= 0 && definition.Index < latest.Length
+					? latest[definition.Index]
+					: null;
 				if (state == null)
 					continue;
 				if (ShowOnlyCurrentSessionStats && !state.IsActive)
@@ -2111,20 +2548,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return sb.ToString();
 		}
 
-		private SessionState GetLatestSessionByDefinition(int definitionIndex)
-		{
-			for (int i = sessions.Count - 1; i >= 0; i--)
-			{
-				SessionState state = sessions[i];
-				if (state != null && state.Definition != null && state.Definition.Index == definitionIndex)
-					return state;
-			}
-			return null;
-		}
 		#endregion
 
 		#region Rendering helpers and DX
-		private bool TryGetSessionXRange(ChartControl chartControl, SessionState state, int fromIndex, int toIndex, float panelLeft, float panelRight, out float startX, out float endX)
+		private bool TryGetSessionXRange(ChartControl chartControl, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelRight, out float startX, out float endX)
 		{
 			startX = panelLeft;
 			endX = panelRight;
@@ -2143,7 +2570,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return true;
 		}
 
-		private float GetSessionEndX(ChartControl chartControl, SessionState state, int fromIndex, int toIndex, float panelLeft, float panelRight)
+		private float GetSessionEndX(ChartControl chartControl, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelRight)
 		{
 			int endIndex = state.LastBarIndex >= 0 ? state.LastBarIndex : toIndex;
 			if (endIndex >= toIndex)
@@ -2235,7 +2662,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				dxLabelFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8f, (float)LabelFontSize))
 				{
 					TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading,
-					ParagraphAlignment = ParagraphAlignment.Center
+					ParagraphAlignment = ParagraphAlignment.Center,
+					WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap
 				};
 				dxPanelFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8f, (float)StatsPanelFontSize))
 				{
