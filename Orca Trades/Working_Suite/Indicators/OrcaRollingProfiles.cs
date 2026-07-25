@@ -71,6 +71,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DateTime currentMinuteToken;
 		private DateTime currentWindowStartTime = DateTime.MinValue;
 		private DateTime currentWindowEndTime = DateTime.MinValue;
+		private SessionIterator rollingSessionIterator;
+		private DateTime rollingWindowAnchorMinute = DateTime.MinValue;
+		private DateTime rollingWindowAnchorEndTime = DateTime.MinValue;
+		private DateTime rollingWindowAnchorStartTime = DateTime.MinValue;
 		private double lastBid = double.NaN;
 		private double lastAsk = double.NaN;
 		private double prevLast = double.NaN;
@@ -491,6 +495,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			else if (State == State.DataLoaded)
 			{
+				rollingSessionIterator = BarsArray != null && BarsArray.Length > 0 ? new SessionIterator(BarsArray[0]) : null;
 				ResetRollingProfiles();
 				textWidthCache.Clear();
 			}
@@ -522,6 +527,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				currentMinuteToken = DateTime.MinValue;
 				currentWindowStartTime = DateTime.MinValue;
 				currentWindowEndTime = DateTime.MinValue;
+				rollingWindowAnchorMinute = DateTime.MinValue;
+				rollingWindowAnchorEndTime = DateTime.MinValue;
+				rollingWindowAnchorStartTime = DateTime.MinValue;
 				prevLast = double.NaN;
 				sharedOrderFlowNextIndex = 0;
 				sharedOrderFlowRevision = int.MinValue;
@@ -811,6 +819,112 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return DateTime.MinValue;
 		}
 
+		private bool TryGetRollingSessionBounds(DateTime tradingDay, out DateTime sessionBegin, out DateTime sessionEnd)
+		{
+			sessionBegin = DateTime.MinValue;
+			sessionEnd = DateTime.MinValue;
+
+			if (Mode == ProfileOperatingMode.RthOnly)
+			{
+				sessionBegin = tradingDay.Date + RthStartTime;
+				sessionEnd = tradingDay.Date + RthEndTime;
+				if (sessionEnd <= sessionBegin)
+					sessionEnd = sessionEnd.AddDays(1);
+				return true;
+			}
+
+			if (rollingSessionIterator == null)
+				return false;
+
+			try
+			{
+				sessionBegin = rollingSessionIterator.GetTradingDayBeginLocal(tradingDay);
+				sessionEnd = rollingSessionIterator.GetTradingDayEndLocal(tradingDay);
+				return sessionEnd > sessionBegin;
+			}
+			catch
+			{
+				return false;
+			}
+		}
+
+		private bool TryGetPreviousTradingDay(ref DateTime tradingDay)
+		{
+			for (int daysBack = 0; daysBack < 14; daysBack++)
+			{
+				tradingDay = tradingDay.AddDays(-1);
+				if (rollingSessionIterator != null)
+				{
+					try
+					{
+						if (rollingSessionIterator.IsTradingDayDefined(tradingDay))
+							return true;
+					}
+					catch { }
+				}
+				else if (tradingDay.DayOfWeek != DayOfWeek.Saturday && tradingDay.DayOfWeek != DayOfWeek.Sunday)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		private DateTime CalculateRollingWindowStartTime(DateTime endTime)
+		{
+			if (rollingSessionIterator == null)
+				return endTime.AddMinutes(-Math.Max(1, GetPeriodMinutes()));
+
+			DateTime tradingDay;
+			try
+			{
+				tradingDay = rollingSessionIterator.GetTradingDay(endTime);
+			}
+			catch
+			{
+				return endTime.AddMinutes(-Math.Max(1, GetPeriodMinutes()));
+			}
+
+			long remainingTicks = TimeSpan.FromMinutes(Math.Max(1, GetPeriodMinutes())).Ticks;
+			DateTime segmentEnd = endTime;
+			for (int sessionCount = 0; sessionCount < 370; sessionCount++)
+			{
+				DateTime sessionBegin;
+				DateTime sessionEnd;
+				if (!TryGetRollingSessionBounds(tradingDay, out sessionBegin, out sessionEnd))
+					break;
+
+				DateTime effectiveEnd = segmentEnd < sessionEnd ? segmentEnd : sessionEnd;
+				if (effectiveEnd > sessionBegin)
+				{
+					long availableTicks = (effectiveEnd - sessionBegin).Ticks;
+					if (remainingTicks <= availableTicks)
+						return effectiveEnd.AddTicks(-remainingTicks);
+					remainingTicks -= availableTicks;
+				}
+
+				if (!TryGetPreviousTradingDay(ref tradingDay))
+					break;
+				segmentEnd = DateTime.MaxValue;
+			}
+
+			return endTime.AddMinutes(-Math.Max(1, GetPeriodMinutes()));
+		}
+
+		private DateTime GetRollingWindowStartTimeUnsafe(DateTime endTime)
+		{
+			DateTime minute = new DateTime(endTime.Year, endTime.Month, endTime.Day, endTime.Hour, endTime.Minute, 0, endTime.Kind);
+			if (minute == rollingWindowAnchorMinute && endTime >= rollingWindowAnchorEndTime)
+				return rollingWindowAnchorStartTime.Add(endTime - rollingWindowAnchorEndTime);
+
+			DateTime windowStartTime = CalculateRollingWindowStartTime(endTime);
+			rollingWindowAnchorMinute = minute;
+			rollingWindowAnchorEndTime = endTime;
+			rollingWindowAnchorStartTime = windowStartTime;
+			return windowStartTime;
+		}
+
 		private void AddTradeToRollingProfilesUnsafe(DateTime time, double price, long volume, long delta)
 		{
 			if (volume <= 0 || double.IsNaN(price) || double.IsInfinity(price))
@@ -822,13 +936,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DateTime minute = new DateTime(time.Year, time.Month, time.Day, time.Hour, time.Minute, 0);
 			if (minute > currentMinuteToken)
 				currentMinuteToken = minute;
+			DateTime rollingWindowStartTime = GetRollingWindowStartTimeUnsafe(time);
 
 			double vKey = NormalizeToBucketStart(price, VolumeTickCompression);
 			double rawKey = NormalizeToBucketStart(price, 1);
 			if (currentWindowEndTime == DateTime.MinValue || time > currentWindowEndTime)
 			{
 				currentWindowEndTime = time;
-				currentWindowStartTime = currentWindowEndTime.AddMinutes(-Math.Max(1, GetPeriodMinutes()));
+				currentWindowStartTime = rollingWindowStartTime;
 				lastPrunedActiveTicks = PruneActiveTicksUnsafe(currentWindowStartTime);
 			}
 			else

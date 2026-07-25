@@ -351,7 +351,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						rollingHistory.Enqueue(rollingDeveloping);
 						int maxBuckets = Math.Max(1, (int)Math.Ceiling(GetRollingWindowSeconds() / (double)bucketSeconds));
-						int missedBuckets = (int)Math.Floor((bucketToken - currentMinuteToken).TotalSeconds / bucketSeconds);
+						int missedBuckets = Bars != null && Bars.IsFirstBarOfSession
+							? 1
+							: (int)Math.Floor((bucketToken - currentMinuteToken).TotalSeconds / bucketSeconds);
 						if (missedBuckets > 1)
 						{
 							int emptyBuckets = Math.Min(missedBuckets - 1, maxBuckets);
