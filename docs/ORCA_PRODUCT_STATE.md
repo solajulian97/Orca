@@ -1,6 +1,6 @@
 # Orca Product State
 
-Last updated: 2026-06-25
+Last updated: 2026-07-25
 
 ## Current Status
 
@@ -291,3 +291,179 @@ Second priority:
 - `Orca Trades/Working_Suite/Indicators/OrcaMGIDaily.cs`
 - `Orca Trades/Working_Suite/DrawingTools/OrcaFixedRangeProfile.cs`
 - `Orca Trades/Working_Suite/DrawingTools/OrcaManualAnchoredVWAP.cs`
+## 2026-07-25 Discipline Guard, Rule Book, And Report Card Review
+
+### Product Role And Current Stage
+
+The intended product is one connected behavioral-development system:
+
+- **Rule Book:** defines what the trader has committed to before the session.
+- **Discipline Guard:** observes behavior during the session and delivers timely interventions.
+- **Report Card:** turns completed sessions into evidence, reflection, and one concrete improvement focus.
+
+The current `OrcaDisciplineGuardAddOn.cs` is a useful prototype of all three surfaces, but it is not yet a dependable always-on guard or a longitudinal trader-growth product. It can configure rules, detect several violations, score the open session, and export a report. The next work must make capture automatic, state durable, trade attribution trustworthy, and the review loop actionable.
+
+### Verified Current Capability
+
+The current Rule Book supports:
+
+- Three persisted templates: `Prop Firm Discipline`, `Manual Discipline`, and `Conservative Scalping`.
+- Add Rule, Delete Rule, Save Template, and Clone Template actions.
+- Ten automated rule types and manual checklist rules.
+- Account selection, instrument filtering, enabled state, severity, notes, and rule parameters.
+- Mini/micro position-size normalization for the configured symbols, including a default limit of 2 NQ or 20 MNQ contracts.
+
+The current Discipline Guard supports:
+
+- Manual session start, pause/resume, end, and reset.
+- Account `OrderUpdate`, `ExecutionUpdate`, `PositionUpdate`, and `AccountItemUpdate` subscriptions.
+- One-second timer evaluation.
+- Live score, grade, account realized P&L delta, completed trades, violations, current position, and loss streak.
+- Automated checks for cooldown, position size, trade loss, session loss, trade count, loss streak, trading window, violation count, adding to a losing trade, and immediate reversal after a loss.
+
+The current Report Card supports:
+
+- A single-session summary.
+- Rule and violation snapshots.
+- JSON session export and CSV violation export.
+- Copyable summary text.
+
+### Validation And Usage Evidence
+
+| Gate | Current evidence | Status |
+| --- | --- | --- |
+| Working source | `Orca Trades/Working_Suite/AddOns/OrcaDisciplineGuardAddOn.cs` reviewed on 2026-07-25. | Confirmed |
+| Source/deployed parity | Working_Suite, Full_Suite, and live NinjaTrader copies share SHA-256 `8A0DCA0376A35CA4023770E5E8F2FDFD4B6D3E7B8D411455C61CD1E77ACAA751`. | Confirmed parity only |
+| Add-on load | `Diagnostics.log` shows repeated successful Control Center menu injection through 2026-07-25. | Confirmed |
+| Window open/basic UI | Julian previously confirmed that the window opened and looked correct after the WPF binding fix. | User-confirmed |
+| Add/delete/template workflow | Present in source and deployed copy. | Manual validation not recorded |
+| 2 NQ / 20 MNQ sizing | Present in source and deployed copy. | Manual validation not recorded |
+| Completed session archive | No `Documents/NinjaTrader 8/OrcaDisciplineGuard/Sessions` directory existed during the 2026-07-25 review. | No usage evidence yet |
+| Current compile | No NinjaTrader `F5` compile was performed for this documentation review. | Pending for next code change |
+
+Identical file hashes do not promote or validate the component. `Full_Suite` must remain unchanged until Julian confirms the required live behavior.
+
+### Foundation Risks
+
+These are the highest-priority issues because they can make a report look authoritative while its capture is incomplete:
+
+1. **Monitoring lifetime is tied to the window.** The engine is created by the window view model and disposed when the window closes, which stops the timer and unsubscribes account events.
+2. **Arming is manual.** A trader can forget to open the window, select an account, and start a session. The current saved settings contain no selected account.
+3. **Active state is not durable.** There is no crash/restart recovery, periodic session checkpoint, or automatic finalization. Closing NinjaTrader can lose the active session.
+4. **Paused and ended sessions can still mutate.** Position and realized-P&L event handlers do not consistently gate rule evaluation on `Active`.
+5. **Default-rule deletion is not durable.** Template loading merges any missing built-in rule back into a built-in template, so a deleted default rule can reappear.
+6. **The session report has no trade ledger.** Violations expose a `TradeId` field, but the current violation path does not populate it and completed trades are not serialized into the report.
+7. **Trade P&L is gross fill-derived P&L.** Commissions and fees are excluded, seeded open positions have incomplete history, and late starts cannot reconstruct prior executions.
+8. **The score is penalty-only.** It subtracts fixed severity penalties from 100, can over-weight repeated event counts, and does not measure applicable opportunities, positive adherence, recovery, or data confidence.
+9. **Rule parameters are raw text.** `Key=Value` editing is not a durable product experience and has limited validation.
+10. **Micro normalization is a fixed list and 10x ratio.** This handles the requested NQ/MNQ case, but a general solution needs instrument-family or per-symbol risk-unit mappings.
+
+### Product Principles
+
+- **Automatic capture:** the normal workflow should require almost no administrative work during trading.
+- **Process before outcome:** a profitable rule-breaking trade should not receive a good discipline grade.
+- **Context before judgment:** every violation should identify the trade, rule opportunity, observed value, limit, and surrounding state.
+- **One improvement at a time:** the weekly review should recommend one measurable behavior, not produce a wall of criticism.
+- **Trust is visible:** monitoring state, event freshness, reconciliation status, and report confidence must be shown.
+- **Observation before enforcement:** coaching mode should be the default; blocking or flattening must be explicit, staged, and Sim-tested.
+- **Local-first privacy:** behavioral and account data should remain local unless the trader explicitly chooses otherwise.
+
+### Implementation Roadmap
+
+#### Phase 0: Trustworthy Capture
+
+Primary file: `Orca Trades/Working_Suite/AddOns/OrcaDisciplineGuardAddOn.cs`.
+
+Required work:
+
+1. Move monitoring ownership from `OrcaDisciplineGuardWindow`/view model to an add-on-lifetime service.
+2. Add explicit `NotStarted`, `Active`, `Paused`, and `Ended` event gates and idempotent event handling.
+3. Add account/template assignment, auto-arm options, session scheduling, periodic checkpoints, restart recovery, and automatic finalization.
+4. Persist a normalized trade ledger with execution IDs, fills, round trips, rule opportunities, violations, and manual review state.
+5. Reconcile session/trade totals against NinjaTrader account data and expose a data-confidence status.
+6. Fix default-rule deletion semantics and replace raw parameter strings with typed rule settings.
+7. Add focused tests for partial fills, scale-ins, partial exits, reversals, seeded positions, duplicate events, pause/resume, restart recovery, and mini/micro normalization.
+
+Acceptance gate: close the UI while a Sim session remains monitored, restart NinjaTrader during a checkpointed session, and finish with one non-duplicated report whose trade/P&L totals reconcile to NinjaTrader.
+
+#### Phase 1: Rule Book That Traders Will Maintain
+
+Primary file: `Orca Trades/Working_Suite/AddOns/OrcaDisciplineGuardAddOn.cs`, with extraction into focused add-on support files if NinjaTrader compilation permits.
+
+Required work:
+
+1. Create typed editors for each rule type with plain-language definitions and examples.
+2. Support template rename, delete, version, duplicate, and assignment by account/instrument family.
+3. Replace the universal 10x micro assumption with explicit instrument-family risk units.
+4. Add pre-session intentions: allowed setups, maximum risk, trading window, daily focus, and stop conditions.
+5. Distinguish automated, per-trade confirmation, post-trade reflection, and session-level review rules.
+
+Acceptance gate: a trader can build and assign a complete rule book without editing `Key=Value` text, and deleted/disabled rules remain deleted/disabled after restart.
+
+#### Phase 2: In-Session Coaching
+
+Primary integration points:
+
+- `Orca Trades/Working_Suite/AddOns/OrcaDisciplineGuardAddOn.cs`
+- `Orca Trades/Working_Suite/AddOns/OrcaRiskManagerAddOn.cs`
+- `Orca Trades/Working_Suite/AddOns/OrcaExecutionRouterAddOn.cs`
+
+Required work:
+
+1. Add a compact always-visible armed/healthy/paused indicator.
+2. Add an intervention ladder: record, notify, require acknowledgment, enforce cooldown, soft-block, and hard-block.
+3. Introduce one shared discipline-policy API so Orca order-entry paths can ask for a decision before submission.
+4. Keep observe-only mode as the default and validate enforcement on Sim accounts first.
+5. Define explicit behavior when monitoring data is stale or unavailable.
+
+Acceptance gate: all Orca-owned order-entry paths use the same policy result, while non-enforcement mode cannot interfere with order submission.
+
+#### Phase 3: Growth Report Card
+
+Persistence and integration candidates:
+
+- Discipline Guard's current JSON session store.
+- External Orca Journal source at `C:\Users\julia\projects\OrcaTrading\OrcaJournal\OrcaJournal`, which already has add-on-lifetime trade capture, SQLite repositories, sessions, attachments, tags, and KPI calculation.
+- `Orca Trades/Working_Suite/Indicators/OrcaExecutionLines.cs` annotations imported by Orca Journal.
+
+Required work:
+
+1. Choose one canonical trade/session identity and persistence boundary so Discipline Guard and Orca Journal do not create competing records.
+2. Link every applicable rule result and violation to a trade or session opportunity.
+3. Add daily, weekly, and rolling views for adherence rate, violation recurrence, recovery, and data confidence.
+4. Compare performance when a rule was followed versus broken, including expectancy, average loss, drawdown, and the P&L cost after the first violation.
+5. Add setup, screenshot, note, emotion, and post-session reflection context through Journal integration.
+6. Generate one evidence-backed weekly focus with a measurable target and show whether it improved.
+
+Acceptance gate: a trader can answer, from trusted records, which behavior is costing the most, whether it is improving, and what single behavior to practice next.
+
+### Report Card Metric Model
+
+The first durable report card should separate:
+
+- **Process score:** followed opportunities divided by applicable opportunities, weighted by rule importance.
+- **Risk discipline:** position sizing, stop/risk adherence, max loss, and stop-after-limit behavior.
+- **Execution discipline:** entry timing, cooldown, reversal, scale-in, and trading-window behavior.
+- **Plan discipline:** valid setup and pre-session-plan adherence.
+- **Recovery:** behavior after a loss or first violation.
+- **Outcome context:** P&L and expectancy shown beside, but not used to excuse, process violations.
+- **Data confidence:** complete, partial, reconciled, or needs review.
+
+### Product Success Measures
+
+- At least 95% of expected sessions are captured and finalized without manual export.
+- Session trade counts and realized P&L reconcile to the selected source within a documented tolerance.
+- At least 95% of automated violations are linked to a specific trade or session opportunity.
+- The weekly review can be completed in under five minutes.
+- The trader can identify one highest-cost behavior and track its four-week trend.
+- False-positive and duplicate-violation rates are measurable and remain below an agreed threshold.
+
+### Performance And Benchmark Status
+
+Discipline Guard is account-event driven. It adds no secondary series, does not use Tick Replay, does not use SharpDX rendering, and does not access shared profile caches. Current runtime work consists mainly of account-event processing and a one-second UI-dispatcher timer.
+
+No controlled Discipline Guard performance benchmark exists. Phase 0 should add bounded counters for received events, duplicate/rejected events, handler duration, checkpoint duration, reconciliation drift, and last-event age. Performance optimization should follow those measurements.
+
+### Immediate Priority
+
+Do not begin with charts or a more elaborate grade screen. The next code change should be **Phase 0 trustworthy capture**, starting with an add-on-lifetime monitoring service, correct state gates, and a durable trade/session schema. Once one complete Sim session survives window close/reopen and produces a reconciled report, the Rule Book and Report Card can safely become richer.
