@@ -555,15 +555,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			float averageLeft, averageWidth;
 			if (ShowAverageValues && averageSummary != null && TryGetAverageColumnLayout(chartControl, fromIdx, toIdx, lastVisibleIdx, out averageLeft, out averageWidth))
-			{
 				DrawAverageColumn(rows, averageSummary, averageLeft, averageWidth, panelY, rowH, tickSize);
-				DrawRowLabels(rows, averageLeft + averageWidth + 4f, ChartPanel.X + ChartPanel.W - averageLeft - averageWidth - 8f, panelY, rowH);
-			}
-			else
-			{
-				for (int r = 0; r < rows.Count; r++)
-					DrawRightLabel(rows[r].Key, ChartPanel.X + ChartPanel.W - 5f, panelY + r * rowH, rowH);
-			}
+
+			for (int r = 0; r < rows.Count; r++)
+				DrawRightLabel(rows[r].Key, ChartPanel.X + ChartPanel.W - 5f, panelY + r * rowH, rowH);
 
 			DrawRightScaleMask(chartControl);
 
@@ -1119,39 +1114,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				layout.TextAlignment = SharpDX.DirectWrite.TextAlignment.Trailing;
 				layout.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center;
 				RenderTarget.DrawTextLayout(new Vector2(x - labelWidth, y), layout, dxTextBrush);
-			}
-		}
-
-		private void DrawRowLabels(List<KeyValuePair<string, int>> rows, float left, float width, float panelY, float rowH)
-		{
-			if (rows == null || dxTextFormat == null || dxTextBrush == null || width < 22f)
-				return;
-
-			for (int r = 0; r < rows.Count; r++)
-			{
-				using (var layout = new SharpDX.DirectWrite.TextLayout(dwFactory, GetCompactRowLabel(rows[r].Value, rows[r].Key), dxTextFormat, width, rowH))
-				{
-					layout.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
-					layout.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center;
-					RenderTarget.DrawTextLayout(new Vector2(left, panelY + r * rowH), layout, dxTextBrush);
-				}
-			}
-		}
-
-		private string GetCompactRowLabel(int rowType, string fallback)
-		{
-			switch (rowType)
-			{
-				case 0: return "Vol";
-				case 1: return "\u0394";
-				case 2: return "F\u0394";
-				case 3: return "Rng";
-				case 4: return "Time";
-				case 5: return "Max\u0394";
-				case 6: return "Min\u0394";
-				case 7: return "C\u0394";
-				case 8: return "\u0394%";
-				default: return fallback ?? string.Empty;
 			}
 		}
 
