@@ -93,7 +93,7 @@ Render risk areas:
 
 - `OrcaVisibleRangeVolumeProfile` may recalculate profiles inside `OnRender` when cache keys are dirty.
 - `OrcaExecutionLines` snapshots under lock in `OnRender` and creates some DirectWrite/geometry objects during rendering.
-- `OrcaSessionContextMap` publishes immutable render snapshots from its calculation paths; `OnRender` consumes only copied session, profile, VWAP, event, and prior-session arrays.
+- `OrcaSessionContextMap` publishes immutable render snapshots from its calculation paths; `OnRender` consumes only copied session, profile, VWAP, event, and prior-session arrays. Its context panel uses persistent DirectWrite formats, session-color accents, classification colors, and dynamically sized section bounds.
 - Profile renderers generally use SharpDX resource caches but still need measured render timings and rebuild counters.
 
 ## Cross-Module Dependencies

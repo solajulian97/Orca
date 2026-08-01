@@ -371,6 +371,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private StrokeStyle[] dxStrokes;
 		private DxTextFormat dxLabelFormat;
 		private DxTextFormat dxPanelFormat;
+		private DxTextFormat dxPanelTitleFormat;
+		private DxTextFormat dxPanelSessionFormat;
+		private DxTextFormat dxPanelRightFormat;
+		private DxTextFormat dxPanelStatusFormat;
 		private bool dxValid;
 
 		private const int BrushAsia = 0;
@@ -1846,7 +1850,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				DrawSessionLevels(chartControl, chartScale, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
 				DrawSessionEvents(chartControl, chartScale, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
-				DrawSessionHeader(chartControl, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
+				DrawSessionHeader(chartControl, current, state, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
 			}
 
 			DrawCarryForwardLevels(chartControl, chartScale, renderPriors, fromIndex, toIndex, panelLeft, panelTop, panelRight, panelBottom);
@@ -2137,7 +2141,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return ev.LabelText ?? string.Empty;
 		}
 
-		private void DrawSessionHeader(ChartControl chartControl, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private void DrawSessionHeader(ChartControl chartControl, RenderStateSnapshot current, SessionRenderSnapshot state, int fromIndex, int toIndex, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
 			if (!ShowLabels || state == null || string.IsNullOrEmpty(state.OpenLocationText) || dxLabelFormat == null)
 				return;
@@ -2158,7 +2162,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RectangleF headerRect = new RectangleF(x, y, width, height);
 			if (ShowStatsPanel)
 			{
-				RectangleF statsRect = GetStatsPanelBounds(panelLeft, panelTop, panelRight, panelBottom);
+				RectangleF statsRect = GetStatsPanelBounds(current, panelLeft, panelTop, panelRight, panelBottom);
 				if (RectanglesOverlap(headerRect, statsRect, 4f))
 				{
 					y = statsRect.Y + statsRect.Height + 5f;
@@ -2448,43 +2452,118 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawStatsPanel(RenderStateSnapshot current, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
-			if (dxPanelFormat == null)
+			if (dxPanelFormat == null || dxPanelTitleFormat == null || dxPanelSessionFormat == null
+				|| dxPanelRightFormat == null || dxPanelStatusFormat == null)
 				return;
 
-			string text = BuildStatsPanelText(current);
-			if (string.IsNullOrEmpty(text))
+			RectangleF panelRect = GetStatsPanelBounds(current, panelLeft, panelTop, panelRight, panelBottom);
+			if (panelRect.Width < 40f || panelRect.Height < 20f)
 				return;
-
-			float width = CompactStatsPanel ? 245f : 330f;
-			float height = CompactStatsPanel ? 112f : 168f;
-			float margin = 12f;
-			float x = StatsPanelPosition == OrcaSessionStatsPanelPosition.TopLeft || StatsPanelPosition == OrcaSessionStatsPanelPosition.BottomLeft
-				? panelLeft + margin
-				: panelRight - width - margin;
-			float y = StatsPanelPosition == OrcaSessionStatsPanelPosition.TopLeft || StatsPanelPosition == OrcaSessionStatsPanelPosition.TopRight
-				? panelTop + margin
-				: panelBottom - height - margin;
 
 			if (dxPanelBackgroundBrush != null)
 			{
 				float old = dxPanelBackgroundBrush.Opacity;
 				dxPanelBackgroundBrush.Opacity = PercentToOpacity(StatsPanelOpacity);
-				RenderTarget.FillRectangle(new RectangleF(x, y, width, height), dxPanelBackgroundBrush);
+				RenderTarget.FillRectangle(panelRect, dxPanelBackgroundBrush);
 				dxPanelBackgroundBrush.Opacity = old;
 			}
 			if (dxPanelBorderBrush != null)
-				RenderTarget.DrawRectangle(new RectangleF(x, y, width, height), dxPanelBorderBrush, 1f);
+				RenderTarget.DrawRectangle(panelRect, dxPanelBorderBrush, 1f);
 
 			DxSolidBrush textBrush = GetBrush(BrushLabel);
-			if (textBrush != null)
-				RenderTarget.DrawText(text, dxPanelFormat, new RectangleF(x + 8f, y + 7f, width - 14f, height - 10f), textBrush);
+			if (textBrush == null)
+				return;
+
+			float baseSize = Math.Max(8f, (float)StatsPanelFontSize);
+			float titleHeight = baseSize + 7f;
+			float headingHeight = baseSize + 4f;
+			float detailHeight = baseSize + 3f;
+			float statusHeight = Math.Max(8f, baseSize - 1f) + 3f;
+			float contentLeft = panelRect.X + 11f;
+			float contentRight = panelRect.X + panelRect.Width - 11f;
+			float contentWidth = Math.Max(1f, contentRight - contentLeft);
+			float y = panelRect.Y + 7f;
+			float contentBottom = panelRect.Y + panelRect.Height - 7f;
+
+			DrawPanelText("ORCA SESSION CONTEXT", dxPanelTitleFormat,
+				new RectangleF(contentLeft, y, contentWidth, Math.Min(titleHeight, Math.Max(1f, contentBottom - y))), textBrush, 1f);
+			y += titleHeight;
+			if (y >= contentBottom)
+				return;
+			DrawPanelDivider(contentLeft, contentRight, y, 1f);
+			y += 5f;
+
+			int visibleSessionCount = CountStatsPanelSessions(current);
+			int drawnSessionCount = 0;
+			for (int i = 0; i < sessionDefinitions.Count; i++)
+			{
+				SessionDefinition definition = sessionDefinitions[i];
+				SessionRenderSnapshot state = GetStatsPanelSession(current, definition);
+				if (!ShouldDrawStatsPanelSession(definition, state))
+					continue;
+
+				float sectionTop = y;
+				float sectionHeight = headingHeight + detailHeight + statusHeight
+					+ (CompactStatsPanel ? 0f : detailHeight);
+				if (y + sectionHeight > contentBottom)
+					break;
+				DxSolidBrush sessionBrush = GetBrush(GetSessionBrushIndex(definition)) ?? textBrush;
+				RenderTarget.FillRectangle(new RectangleF(contentLeft, sectionTop + 1f, 3f, Math.Max(1f, sectionHeight - 2f)), sessionBrush);
+
+				float textLeft = contentLeft + 9f;
+				float textWidth = Math.Max(1f, contentRight - textLeft);
+				DrawPanelText(definition.Name, dxPanelSessionFormat,
+					new RectangleF(textLeft, y, textWidth * 0.52f, headingHeight), sessionBrush, 1f);
+
+				DxSolidBrush classificationBrush = GetBrush(GetClassificationBrushIndex(state.Classification)) ?? textBrush;
+				DrawPanelText(ClassificationToText(state.Classification), dxPanelRightFormat,
+					new RectangleF(textLeft + textWidth * 0.38f, y, textWidth * 0.62f, headingHeight), classificationBrush, 0.95f);
+				y += headingHeight;
+
+				string metrics = CompactStatsPanel
+					? "R " + FormatPriceDistance(state.Range) + "   V " + FormatVolume(state.CumulativeVolume) + "   D " + FormatSigned(state.CumulativeDelta)
+					: "Range " + FormatPriceDistance(state.Range) + "   Volume " + FormatVolume(state.CumulativeVolume) + "   Delta " + FormatSigned(state.CumulativeDelta);
+				DrawPanelText(metrics, dxPanelFormat, new RectangleF(textLeft, y, textWidth, detailHeight), textBrush, 0.92f);
+				y += detailHeight;
+
+				if (!CompactStatsPanel)
+				{
+					string relationship = "VWAP " + PriceVsLevelText(state.Close, state.SessionVWAP, "VWAP")
+						+ "   EQ " + PriceVsLevelText(state.Close, state.Midpoint, "EQ");
+					DrawPanelText(relationship, dxPanelFormat, new RectangleF(textLeft, y, textWidth, detailHeight), textBrush, 0.76f);
+					y += detailHeight;
+				}
+
+				string status = CompactStatsPanel ? CompactStatus(state.StatusText) : state.StatusText;
+				DrawPanelText(status, dxPanelStatusFormat, new RectangleF(textLeft, y, textWidth, statusHeight), sessionBrush, 0.84f);
+				y += statusHeight;
+
+				drawnSessionCount++;
+				if (drawnSessionCount < visibleSessionCount && y + 7f + sectionHeight <= contentBottom)
+				{
+					y += 3f;
+					DrawPanelDivider(textLeft, contentRight, y, 0.65f);
+					y += 4f;
+				}
+			}
 		}
 
-		private RectangleF GetStatsPanelBounds(float panelLeft, float panelTop, float panelRight, float panelBottom)
+		private RectangleF GetStatsPanelBounds(RenderStateSnapshot current, float panelLeft, float panelTop, float panelRight, float panelBottom)
 		{
-			float width = CompactStatsPanel ? 245f : 330f;
-			float height = CompactStatsPanel ? 112f : 168f;
 			float margin = 12f;
+			float baseSize = Math.Max(8f, (float)StatsPanelFontSize);
+			float titleHeight = baseSize + 7f;
+			float headingHeight = baseSize + 4f;
+			float detailHeight = baseSize + 3f;
+			float statusHeight = Math.Max(8f, baseSize - 1f) + 3f;
+			float sectionHeight = headingHeight + detailHeight + statusHeight + (CompactStatsPanel ? 0f : detailHeight);
+			int sessionCount = CountStatsPanelSessions(current);
+			float requestedWidth = CompactStatsPanel ? Math.Max(300f, baseSize * 25f) : Math.Max(360f, baseSize * 28f);
+			float availableWidth = Math.Max(1f, panelRight - panelLeft - margin * 2f);
+			float width = Math.Min(requestedWidth, availableWidth);
+			float height = 14f + titleHeight + 5f + sessionCount * sectionHeight + Math.Max(0, sessionCount - 1) * 7f;
+			float availableHeight = Math.Max(1f, panelBottom - panelTop - margin * 2f);
+			height = Math.Min(height, availableHeight);
 			float x = StatsPanelPosition == OrcaSessionStatsPanelPosition.TopLeft || StatsPanelPosition == OrcaSessionStatsPanelPosition.BottomLeft
 				? panelLeft + margin
 				: panelRight - width - margin;
@@ -2494,58 +2573,82 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return new RectangleF(x, y, width, height);
 		}
 
-		private string BuildStatsPanelText(RenderStateSnapshot current)
+		private int CountStatsPanelSessions(RenderStateSnapshot current)
 		{
-			StringBuilder sb = new StringBuilder();
-			sb.AppendLine("ORCA Session Context Map");
-			SessionRenderSnapshot[] latest = current != null && current.LatestByDefinition != null
-				? current.LatestByDefinition
-				: new SessionRenderSnapshot[0];
-
+			int count = 0;
 			for (int i = 0; i < sessionDefinitions.Count; i++)
 			{
 				SessionDefinition definition = sessionDefinitions[i];
-				if (definition == null || !definition.Enabled)
-					continue;
-
-				SessionRenderSnapshot state = definition.Index >= 0 && definition.Index < latest.Length
-					? latest[definition.Index]
-					: null;
-				if (state == null)
-					continue;
-				if (ShowOnlyCurrentSessionStats && !state.IsActive)
-					continue;
-
-				if (CompactStatsPanel)
-				{
-					sb.Append(definition.Name);
-					sb.Append(": R ");
-					sb.Append(FormatPriceDistance(state.Range));
-					sb.Append(" V ");
-					sb.Append(FormatVolume(state.CumulativeVolume));
-					sb.Append(" D ");
-					sb.Append(FormatSigned(state.CumulativeDelta));
-					sb.Append(" ");
-					sb.Append(ClassificationToText(state.Classification));
-					if (!string.IsNullOrEmpty(state.StatusText))
-					{
-						sb.Append(" | ");
-						sb.Append(CompactStatus(state.StatusText));
-					}
-					sb.AppendLine();
-				}
-				else
-				{
-					sb.AppendLine(definition.Name + ":");
-					sb.AppendLine("Range: " + FormatPriceDistance(state.Range) + "  Vol: " + FormatVolume(state.CumulativeVolume) + "  Delta: " + FormatSigned(state.CumulativeDelta));
-					sb.AppendLine("VWAP: " + PriceVsLevelText(state.Close, state.SessionVWAP, "VWAP") + "  EQ: " + PriceVsLevelText(state.Close, state.Midpoint, "EQ"));
-					sb.AppendLine("Type: " + ClassificationToText(state.Classification));
-					if (!string.IsNullOrEmpty(state.StatusText))
-						sb.AppendLine("Status: " + state.StatusText);
-				}
+				SessionRenderSnapshot state = GetStatsPanelSession(current, definition);
+				if (ShouldDrawStatsPanelSession(definition, state))
+					count++;
 			}
+			return count;
+		}
 
-			return sb.ToString();
+		private SessionRenderSnapshot GetStatsPanelSession(RenderStateSnapshot current, SessionDefinition definition)
+		{
+			if (current == null || current.LatestByDefinition == null || definition == null
+				|| definition.Index < 0 || definition.Index >= current.LatestByDefinition.Length)
+				return null;
+			return current.LatestByDefinition[definition.Index];
+		}
+
+		private bool ShouldDrawStatsPanelSession(SessionDefinition definition, SessionRenderSnapshot state)
+		{
+			return definition != null && definition.Enabled && state != null
+				&& (!ShowOnlyCurrentSessionStats || state.IsActive);
+		}
+
+		private int GetClassificationBrushIndex(OrcaSessionClassification classification)
+		{
+			switch (classification)
+			{
+				case OrcaSessionClassification.TrendUp:
+				case OrcaSessionClassification.TransitioningUp:
+					return BrushEventBullish;
+				case OrcaSessionClassification.TrendDown:
+				case OrcaSessionClassification.TransitioningDown:
+					return BrushEventBearish;
+				case OrcaSessionClassification.Balanced:
+					return BrushEventNeutral;
+				default:
+					return BrushLabel;
+			}
+		}
+
+		private void DrawPanelDivider(float left, float right, float y, float opacity)
+		{
+			if (dxPanelBorderBrush == null || right <= left)
+				return;
+
+			float oldOpacity = dxPanelBorderBrush.Opacity;
+			try
+			{
+				dxPanelBorderBrush.Opacity = opacity;
+				RenderTarget.DrawLine(new Vector2(left, y), new Vector2(right, y), dxPanelBorderBrush, 1f);
+			}
+			finally
+			{
+				dxPanelBorderBrush.Opacity = oldOpacity;
+			}
+		}
+
+		private void DrawPanelText(string text, DxTextFormat format, RectangleF bounds, DxSolidBrush brush, float opacity)
+		{
+			if (string.IsNullOrEmpty(text) || format == null || brush == null || bounds.Width <= 0 || bounds.Height <= 0)
+				return;
+
+			float oldOpacity = brush.Opacity;
+			try
+			{
+				brush.Opacity = opacity;
+				RenderTarget.DrawText(text, format, bounds, brush);
+			}
+			finally
+			{
+				brush.Opacity = oldOpacity;
+			}
 		}
 
 		#endregion
@@ -2665,10 +2768,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 					ParagraphAlignment = ParagraphAlignment.Center,
 					WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap
 				};
-				dxPanelFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8f, (float)StatsPanelFontSize))
+				float panelBaseSize = Math.Max(8f, (float)StatsPanelFontSize);
+				dxPanelFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, panelBaseSize)
 				{
 					TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading,
-					ParagraphAlignment = ParagraphAlignment.Near
+					ParagraphAlignment = ParagraphAlignment.Center,
+					WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap
+				};
+				dxPanelTitleFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, panelBaseSize + 2f)
+				{
+					TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading,
+					ParagraphAlignment = ParagraphAlignment.Center,
+					WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap
+				};
+				dxPanelSessionFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, panelBaseSize + 1f)
+				{
+					TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading,
+					ParagraphAlignment = ParagraphAlignment.Center,
+					WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap
+				};
+				dxPanelRightFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, panelBaseSize)
+				{
+					TextAlignment = SharpDX.DirectWrite.TextAlignment.Trailing,
+					ParagraphAlignment = ParagraphAlignment.Center,
+					WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap
+				};
+				dxPanelStatusFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8f, panelBaseSize - 1f))
+				{
+					TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading,
+					ParagraphAlignment = ParagraphAlignment.Center,
+					WordWrapping = SharpDX.DirectWrite.WordWrapping.NoWrap
 				};
 
 				dxResourceRenderTarget = currentTarget;
@@ -2705,6 +2834,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 					dxLabelFormat.Dispose();
 				if (dxPanelFormat != null)
 					dxPanelFormat.Dispose();
+				if (dxPanelTitleFormat != null)
+					dxPanelTitleFormat.Dispose();
+				if (dxPanelSessionFormat != null)
+					dxPanelSessionFormat.Dispose();
+				if (dxPanelRightFormat != null)
+					dxPanelRightFormat.Dispose();
+				if (dxPanelStatusFormat != null)
+					dxPanelStatusFormat.Dispose();
 			}
 			catch { }
 
@@ -2714,6 +2851,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			dxPanelBorderBrush = null;
 			dxLabelFormat = null;
 			dxPanelFormat = null;
+			dxPanelTitleFormat = null;
+			dxPanelSessionFormat = null;
+			dxPanelRightFormat = null;
+			dxPanelStatusFormat = null;
 			dxResourceRenderTarget = IntPtr.Zero;
 			dxValid = false;
 		}
