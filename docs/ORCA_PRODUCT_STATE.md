@@ -1,6 +1,6 @@
 # Orca Product State
 
-Last updated: 2026-07-25
+Last updated: 2026-08-01
 
 ## Current Status
 
@@ -8,7 +8,7 @@ Orca is a commercial NinjaTrader 8 suite for futures/order-flow visualization, p
 
 Active development source is `Orca Trades/Working_Suite`. `Orca Trades/Full_Suite` is the validated promotion target and should not be changed until Julian confirms NinjaTrader compile and manual behavior.
 
-This first pass was documentation and source audit only. No production indicator logic was changed.
+Current active development includes the live-tested first Phase 0 Discipline Guard monitoring slice. Other status entries remain evidence-specific snapshots and are not promoted to `Full_Suite` without Julian's validation.
 
 ## Current Suite Inventory
 
@@ -467,3 +467,47 @@ No controlled Discipline Guard performance benchmark exists. Phase 0 should add 
 ### Immediate Priority
 
 Do not begin with charts or a more elaborate grade screen. The next code change should be **Phase 0 trustworthy capture**, starting with an add-on-lifetime monitoring service, correct state gates, and a durable trade/session schema. Once one complete Sim session survives window close/reopen and produces a reconciled report, the Rule Book and Report Card can safely become richer.
+
+## 2026-08-01 Discipline Guard Background Monitoring And Runtime Health
+
+### Current Development State
+
+The first Phase 0 trustworthy-capture slice is implemented in `Orca Trades/Working_Suite/AddOns/OrcaDisciplineGuardAddOn.cs` and deployed to the live NinjaTrader AddOns folder. `Full_Suite` was not changed.
+
+Completed in this slice:
+
+- The AddOn owns one background `OrcaDisciplineGuardEngine` for its lifetime instead of creating and disposing monitoring with the window view model.
+- Closing and reopening the window reattaches the UI to the existing runtime and preserves its account, template, instrument, session, heartbeat, and event-count state.
+- Session mutation now requires `Active`; `NotStarted`, `Paused`, and `Ended` sessions are frozen. Duplicate position-rule evaluation after tracker synchronization was removed.
+- The UI exposes `READY`, `ARMED`, `PAUSED`, `ENDED`, and `OFFLINE` health states, heartbeat freshness, last account event time, and received event count.
+- The former WPF `TabControl` was replaced with a compact Session/Summary segmented switcher so NinjaTrader does not interpret the two internal views as multiple workspace tabs.
+- Session actions and Rule Book actions are visually grouped, the header is denser, and neutral status styling avoids implying healthy monitoring before the runtime proves it.
+- The existing mini/micro position normalization remains in place, including the 2 NQ / 20 MNQ default relationship.
+
+### Validation Evidence
+
+| Gate | Evidence | Status |
+| --- | --- | --- |
+| Source syntax | Roslyn parsed the complete source with no syntax diagnostics. | Passed |
+| Source hygiene | `git diff --check` passed for the source. | Passed |
+| Targeted deployment | Working_Suite was copied only to `Documents/NinjaTrader 8/bin/Custom/AddOns/OrcaDisciplineGuardAddOn.cs`. | Passed |
+| Source/live parity | Both files have SHA-256 `CD61E7789F9B8477BA1AE0054A486936B1D9F77CBC9E334364D94746B8A6500B`. | Passed |
+| NinjaTrader compile | F5 completed in the NinjaScript Editor with no error rows or error dialog. | Passed |
+| Live UI | The Guard opened with `READY`, a healthy heartbeat, last-event time, and live event count; Session/Summary switching worked. | Passed |
+| Window lifecycle | The repaired window closed with NinjaTrader's normal single-window confirmation, raised no error, and reopened with the same runtime; the event counter advanced from 64 to 760 while the UI was closed. | Passed for `NotStarted` state |
+| Active Sim session | No session was started and no order was submitted during this pass. | Pending Julian Sim validation |
+| NinjaTrader restart | No durable checkpoint/recovery exists yet. | Pending Phase 0 |
+
+### Runtime And Performance Impact
+
+This change adds no secondary series, Tick Replay dependency, SharpDX rendering, profile cache access, or historical chart processing. The runtime retains the existing one-second dispatcher timer and account-event subscriptions while the window is closed. Health tracking stores timestamps and counters only; it performs no per-event disk I/O. Lifecycle diagnostics are low frequency.
+
+### Next Phase 0 Priorities
+
+1. Add periodic session checkpoints, startup recovery, and automatic finalization.
+2. Add an idempotent execution/fill ledger and duplicate-event rejection.
+3. Persist completed trades and link violations to trade or session opportunity IDs.
+4. Reconcile trade count and realized P&L against NinjaTrader and expose confidence/drift.
+5. Prove an active Sim session survives close/reopen, then prove restart recovery before any enforcement or richer report-card grading.
+
+This slice is not eligible for `Full_Suite` promotion until Julian validates active-session behavior in Sim and the remaining Phase 0 recovery/reconciliation work is complete.

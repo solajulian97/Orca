@@ -25,6 +25,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 {
 	public sealed class OrcaDisciplineGuardAddOn : AddOnBase
 	{
+		private static readonly object RuntimeSync = new object();
+		private static OrcaDisciplineGuardEngine runtimeEngine;
 		private NTMenuItem guardMenuItem;
 		private NTMenuItem hostMenu;
 
@@ -33,6 +35,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (State == State.SetDefaults) {
 				Description = "Orca account-specific discipline grading and rule accountability panel";
 				Name = "Orca Discipline Guard";
+			} else if (State == State.Terminated) {
+				DisposeRuntime();
 			}
 		}
 
@@ -41,6 +45,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			ControlCenter controlCenter = window as ControlCenter;
 			if (controlCenter == null || guardMenuItem != null)
 				return;
+			GetOrCreateRuntime(controlCenter.Dispatcher);
 
 			hostMenu = controlCenter.FindFirst("ControlCenterMenuItemTools") as NTMenuItem
 				?? controlCenter.FindFirst("toolsMenuItem") as NTMenuItem
@@ -77,11 +82,41 @@ namespace NinjaTrader.NinjaScript.AddOns
 			try {
 				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu item clicked.");
 				Dispatcher dispatcher = Application.Current == null ? Dispatcher.CurrentDispatcher : Application.Current.Dispatcher;
-				dispatcher.InvokeAsync(() => OrcaDisciplineGuardWindow.ShowOrActivate());
+				OrcaDisciplineGuardEngine engine = GetOrCreateRuntime(dispatcher);
+				dispatcher.InvokeAsync(() => OrcaDisciplineGuardWindow.ShowOrActivate(engine));
 			} catch (Exception ex) {
 				string message = "Orca Discipline Guard click handler failed: " + ex.Message;
 				OrcaDisciplineDiagnostics.Write(message + Environment.NewLine + ex);
 				MessageBox.Show(message, "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Error);
+			}
+		}
+
+		private static OrcaDisciplineGuardEngine GetOrCreateRuntime(Dispatcher dispatcher)
+		{
+			OrcaDisciplineGuardEngine engine;
+			bool created = false;
+			lock (RuntimeSync) {
+				if (runtimeEngine == null) {
+					runtimeEngine = new OrcaDisciplineGuardEngine(dispatcher);
+					created = true;
+				}
+				engine = runtimeEngine;
+			}
+			if (created)
+				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard background runtime started.");
+			return engine;
+		}
+
+		private static void DisposeRuntime()
+		{
+			OrcaDisciplineGuardEngine engine;
+			lock (RuntimeSync) {
+				engine = runtimeEngine;
+				runtimeEngine = null;
+			}
+			if (engine != null) {
+				engine.Dispose();
+				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard background runtime stopped.");
 			}
 		}
 	}
@@ -90,8 +125,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 	{
 		private static OrcaDisciplineGuardWindow instance;
 		private readonly OrcaDisciplineGuardViewModel viewModel;
+		private ContentControl viewHost;
+		private ToggleButton sessionViewButton;
+		private ToggleButton summaryViewButton;
+		private FrameworkElement sessionView;
+		private FrameworkElement summaryView;
+		private bool isClosing;
 
-		private OrcaDisciplineGuardWindow()
+		private OrcaDisciplineGuardWindow(OrcaDisciplineGuardEngine engine)
 		{
 			Caption = "Orca Discipline Guard";
 			Title = "Orca Discipline Guard";
@@ -103,7 +144,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Background = Brush("#FF0F141B");
 			Foreground = Brush("#FFEAF0F6");
 
-			viewModel = new OrcaDisciplineGuardViewModel(Dispatcher);
+			viewModel = new OrcaDisciplineGuardViewModel(Dispatcher, engine);
 			DataContext = viewModel;
 
 			Grid root = new Grid { Background = Brush("#FF0F141B") };
@@ -119,15 +160,20 @@ namespace NinjaTrader.NinjaScript.AddOns
 			root.Children.Add(tabs);
 
 			Content = root;
+			Closing += OnClosing;
 			Closed += OnClosed;
 		}
 
-		public static void ShowOrActivate()
+		public static void ShowOrActivate(OrcaDisciplineGuardEngine engine)
 		{
 			try {
 				OrcaDisciplineDiagnostics.Write("ShowOrActivate requested.");
+				if (instance != null && instance.isClosing) {
+					OrcaDisciplineDiagnostics.Write("ShowOrActivate ignored while the current window is closing.");
+					return;
+				}
 				if (instance == null)
-					instance = new OrcaDisciplineGuardWindow();
+					instance = new OrcaDisciplineGuardWindow(engine);
 
 				if (!instance.IsVisible)
 					instance.Show();
@@ -152,7 +198,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			StackPanel titleStack = new StackPanel { Orientation = Orientation.Vertical };
 			titleStack.Children.Add(new TextBlock {
 				Text = "Orca Discipline Guard",
-				FontSize = 24,
+				FontSize = 20,
 				FontWeight = FontWeights.SemiBold,
 				Foreground = Brush("#FFF5F8FB")
 			});
@@ -169,7 +215,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				MinWidth = 220,
 				TextAlignment = TextAlignment.Right,
 				VerticalAlignment = VerticalAlignment.Center,
-				Foreground = Brush("#FF6EE7A8"),
+				Foreground = Brush("#FFC3CEDA"),
 				FontSize = 13,
 				FontWeight = FontWeights.SemiBold
 			};
@@ -203,30 +249,80 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private FrameworkElement BuildTabs()
 		{
-			TabControl tabs = new TabControl {
+			Grid views = new Grid {
 				Margin = new Thickness(14, 0, 14, 14),
-				Background = Brush("#FF0F141B"),
-				BorderBrush = Brush("#FF273343"),
-				Foreground = Brush("#FFEAF0F6")
+				Background = Brush("#FF0F141B")
 			};
-			tabs.Items.Add(new TabItem {
-				Header = "Session",
-				Foreground = Brush("#FFEAF0F6"),
-				Background = Brush("#FF141D27"),
-				Content = BuildSessionTab()
-			});
-			tabs.Items.Add(new TabItem {
-				Header = "Summary",
-				Foreground = Brush("#FFEAF0F6"),
-				Background = Brush("#FF141D27"),
-				Content = BuildSummaryTab()
-			});
-			return tabs;
+			views.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+			views.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+			sessionView = BuildSessionTab();
+			summaryView = BuildSummaryTab();
+			viewHost = new ContentControl { Content = sessionView };
+			Grid.SetRow(viewHost, 0);
+			views.Children.Add(viewHost);
+
+			Border selectorShell = new Border {
+				Margin = new Thickness(0, 8, 0, 0),
+				Padding = new Thickness(3),
+				HorizontalAlignment = HorizontalAlignment.Left,
+				Background = Brush("#FF121A23"),
+				BorderBrush = Brush("#FF334255"),
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(4)
+			};
+			StackPanel selector = new StackPanel { Orientation = Orientation.Horizontal };
+			sessionViewButton = ViewButton("Session", true);
+			summaryViewButton = ViewButton("Summary", false);
+			sessionViewButton.Click += (sender, args) => SelectView(true);
+			summaryViewButton.Click += (sender, args) => SelectView(false);
+			selector.Children.Add(sessionViewButton);
+			selector.Children.Add(summaryViewButton);
+			selectorShell.Child = selector;
+			Grid.SetRow(selectorShell, 1);
+			views.Children.Add(selectorShell);
+			return views;
+		}
+
+		private ToggleButton ViewButton(string label, bool selected)
+		{
+			return new ToggleButton {
+				Content = label,
+				IsChecked = selected,
+				MinWidth = 76,
+				Height = 27,
+				Margin = new Thickness(0),
+				Padding = new Thickness(10, 3, 10, 3),
+				Foreground = Brush(selected ? "#FFFFFFFF" : "#FFB8C4D1"),
+				Background = Brush(selected ? "#FF274B73" : "#FF121A23"),
+				BorderBrush = Brush(selected ? "#FF4B78A6" : "#FF121A23"),
+				BorderThickness = new Thickness(1)
+			};
+		}
+
+		private void SelectView(bool showSession)
+		{
+			if (viewHost == null)
+				return;
+			viewHost.Content = showSession ? sessionView : summaryView;
+			UpdateViewButton(sessionViewButton, showSession);
+			UpdateViewButton(summaryViewButton, !showSession);
+		}
+
+		private void UpdateViewButton(ToggleButton button, bool selected)
+		{
+			if (button == null)
+				return;
+			button.IsChecked = selected;
+			button.Foreground = Brush(selected ? "#FFFFFFFF" : "#FFB8C4D1");
+			button.Background = Brush(selected ? "#FF274B73" : "#FF121A23");
+			button.BorderBrush = Brush(selected ? "#FF4B78A6" : "#FF121A23");
 		}
 
 		private FrameworkElement BuildSessionTab()
 		{
 			Grid tab = new Grid { Background = Brush("#FF0F141B") };
+			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -236,8 +332,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Grid.SetRow(controls, 0);
 			tab.Children.Add(controls);
 
+			FrameworkElement monitoring = BuildMonitoringBand();
+			Grid.SetRow(monitoring, 1);
+			tab.Children.Add(monitoring);
+
 			FrameworkElement dashboard = BuildDashboard();
-			Grid.SetRow(dashboard, 1);
+			Grid.SetRow(dashboard, 2);
 			tab.Children.Add(dashboard);
 
 			Border rulesShell = new Border {
@@ -248,7 +348,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				CornerRadius = new CornerRadius(6),
 				Child = BuildRulesGrid()
 			};
-			Grid.SetRow(rulesShell, 2);
+			Grid.SetRow(rulesShell, 3);
 			tab.Children.Add(rulesShell);
 
 			Border violationsShell = new Border {
@@ -258,7 +358,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				CornerRadius = new CornerRadius(6),
 				Child = BuildViolationsGrid()
 			};
-			Grid.SetRow(violationsShell, 3);
+			Grid.SetRow(violationsShell, 4);
 			tab.Children.Add(violationsShell);
 			return tab;
 		}
@@ -285,23 +385,30 @@ namespace NinjaTrader.NinjaScript.AddOns
 			template.Margin = new Thickness(10, 0, 10, 0);
 			controls.Children.Add(template);
 
-			StackPanel buttons = new StackPanel {
-				Orientation = Orientation.Horizontal,
-				HorizontalAlignment = HorizontalAlignment.Right,
-				Margin = new Thickness(0, 8, 0, 0)
-			};
-			AddToolbarButton(buttons, "Refresh", "RefreshAccountsCommand", "#FF2B3340");
-			AddToolbarButton(buttons, "Start Session", "StartCommand", "#FF146C43");
-			AddToolbarButton(buttons, "Pause / Resume", "PauseCommand", "#FF274B73");
-			AddToolbarButton(buttons, "End Session", "EndCommand", "#FF5A1721");
-			AddToolbarButton(buttons, "Reset", "ResetCommand", "#FF3B4655");
-			AddToolbarButton(buttons, "Add Rule", "AddRuleCommand", "#FF274B73");
-			AddToolbarButton(buttons, "Delete Rule", "DeleteRuleCommand", "#FF5A1721");
-			AddToolbarButton(buttons, "Save Template", "SaveTemplateCommand", "#FF2B3340");
-			AddToolbarButton(buttons, "Clone Template", "CloneTemplateCommand", "#FF274B73");
-			Grid.SetRow(buttons, 1);
-			Grid.SetColumnSpan(buttons, 3);
-			controls.Children.Add(buttons);
+			Grid actions = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+			actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			actions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+			WrapPanel sessionActions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
+			AddToolbarButton(sessionActions, "Refresh", "RefreshAccountsCommand", "#FF2B3340");
+			AddToolbarButton(sessionActions, "Start Session", "StartCommand", "#FF146C43");
+			AddToolbarButton(sessionActions, "Pause / Resume", "PauseCommand", "#FF274B73");
+			AddToolbarButton(sessionActions, "End Session", "EndCommand", "#FF5A1721");
+			AddToolbarButton(sessionActions, "Reset", "ResetCommand", "#FF3B4655");
+			Grid.SetColumn(sessionActions, 0);
+			actions.Children.Add(sessionActions);
+
+			WrapPanel ruleActions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
+			AddToolbarButton(ruleActions, "Add Rule", "AddRuleCommand", "#FF274B73");
+			AddToolbarButton(ruleActions, "Delete Rule", "DeleteRuleCommand", "#FF5A1721");
+			AddToolbarButton(ruleActions, "Save Template", "SaveTemplateCommand", "#FF2B3340");
+			AddToolbarButton(ruleActions, "Clone Template", "CloneTemplateCommand", "#FF274B73");
+			Grid.SetColumn(ruleActions, 1);
+			actions.Children.Add(ruleActions);
+
+			Grid.SetRow(actions, 1);
+			Grid.SetColumnSpan(actions, 3);
+			controls.Children.Add(actions);
 
 			return controls;
 		}
@@ -328,6 +435,66 @@ namespace NinjaTrader.NinjaScript.AddOns
 			combo.SetBinding(Selector.SelectedItemProperty, new Binding(selectedPath) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
 			stack.Children.Add(combo);
 			return stack;
+		}
+
+		private FrameworkElement BuildMonitoringBand()
+		{
+			Border band = new Border {
+				Margin = new Thickness(0, 0, 0, 12),
+				Padding = new Thickness(10, 8, 10, 8),
+				CornerRadius = new CornerRadius(5),
+				Background = Brush("#FF111A20"),
+				BorderBrush = Brush("#FF2A3747"),
+				BorderThickness = new Thickness(1)
+			};
+			Grid grid = new Grid();
+			grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+			grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+			Border stateBadge = new Border {
+				MinWidth = 76,
+				Padding = new Thickness(9, 4, 9, 4),
+				CornerRadius = new CornerRadius(4),
+				Background = Brush("#FF0D1318"),
+				BorderThickness = new Thickness(1)
+			};
+			Binding stateBrushBinding = new Binding("MonitoringStateText") { Converter = new OrcaDisciplineMonitoringBrushConverter() };
+			stateBadge.SetBinding(Border.BorderBrushProperty, stateBrushBinding);
+			TextBlock stateText = new TextBlock {
+				TextAlignment = TextAlignment.Center,
+				FontSize = 11,
+				FontWeight = FontWeights.Bold
+			};
+			stateText.SetBinding(TextBlock.TextProperty, new Binding("MonitoringStateText"));
+			stateText.SetBinding(TextBlock.ForegroundProperty, new Binding("MonitoringStateText") { Converter = new OrcaDisciplineMonitoringBrushConverter() });
+			stateBadge.Child = stateText;
+			Grid.SetColumn(stateBadge, 0);
+			grid.Children.Add(stateBadge);
+
+			TextBlock detail = new TextBlock {
+				Margin = new Thickness(12, 0, 12, 0),
+				VerticalAlignment = VerticalAlignment.Center,
+				Foreground = Brush("#FFC3CEDA"),
+				FontSize = 12,
+				TextTrimming = TextTrimming.CharacterEllipsis
+			};
+			detail.SetBinding(TextBlock.TextProperty, new Binding("MonitoringDetailText"));
+			Grid.SetColumn(detail, 1);
+			grid.Children.Add(detail);
+
+			TextBlock eventCount = new TextBlock {
+				VerticalAlignment = VerticalAlignment.Center,
+				Foreground = Brush("#FF8EA0B5"),
+				FontFamily = new FontFamily("Consolas"),
+				FontSize = 11
+			};
+			eventCount.SetBinding(TextBlock.TextProperty, new Binding("MonitoringEventCountText"));
+			Grid.SetColumn(eventCount, 2);
+			grid.Children.Add(eventCount);
+
+			band.Child = grid;
+			return band;
 		}
 
 		private FrameworkElement BuildDashboard()
@@ -565,10 +732,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 			return button;
 		}
 
+		private void OnClosing(object sender, CancelEventArgs e)
+		{
+			isClosing = !e.Cancel;
+		}
+
 		private void OnClosed(object sender, EventArgs e)
 		{
 			viewModel.Dispose();
 			instance = null;
+			OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window closed; background runtime remains active.");
 		}
 
 		private static Brush Brush(string color)
@@ -805,9 +978,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private string alertText;
 		private OrcaDisciplineRule selectedRule;
 
-		public OrcaDisciplineGuardViewModel(Dispatcher dispatcher)
+		public OrcaDisciplineGuardViewModel(Dispatcher dispatcher, OrcaDisciplineGuardEngine engine)
 		{
+			if (engine == null)
+				throw new ArgumentNullException("engine");
 			this.dispatcher = dispatcher ?? Dispatcher.CurrentDispatcher;
+			this.engine = engine;
 			Templates = new ObservableCollection<OrcaDisciplineRuleTemplate>(OrcaDisciplineStore.LoadTemplates());
 			settings = OrcaDisciplineStore.LoadSettings();
 			AccountNames = new ObservableCollection<string>();
@@ -820,7 +996,6 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (!InstrumentOptions.Contains(selectedInstrumentFilter))
 				InstrumentOptions.Add(selectedInstrumentFilter);
 
-			engine = new OrcaDisciplineGuardEngine(this.dispatcher);
 			engine.SessionChanged += OnEngineSessionChanged;
 			engine.AlertRaised += OnEngineAlertRaised;
 
@@ -837,15 +1012,32 @@ namespace NinjaTrader.NinjaScript.AddOns
 			AddRuleCommand = new OrcaDisciplineCommand(AddRule, CanEditRules);
 			DeleteRuleCommand = new OrcaDisciplineCommand(DeleteSelectedRule, CanDeleteSelectedRule);
 
-			RefreshAccounts();
-			SelectedTemplateName = ResolveInitialTemplate(settings.LastTemplateName);
-			if (!string.IsNullOrWhiteSpace(settings.LastAccountName) && AccountNames.Contains(settings.LastAccountName))
-				SelectedAccountName = settings.LastAccountName;
-			else
-				SelectedAccountName = AccountNames.FirstOrDefault();
-			if (string.IsNullOrWhiteSpace(SelectedTemplateName))
-				SelectedTemplateName = TemplateNames.FirstOrDefault();
-			RebuildSessionForSelection();
+			RefreshAccountsCore(false);
+			if (engine.Session != null) {
+				selectedAccountName = engine.Session.AccountName;
+				selectedTemplateName = engine.Session.TemplateName;
+				selectedInstrumentFilter = engine.Session.InstrumentFilter;
+				if (!string.IsNullOrWhiteSpace(selectedAccountName) && !AccountNames.Contains(selectedAccountName))
+					AccountNames.Add(selectedAccountName);
+				if (!string.IsNullOrWhiteSpace(selectedTemplateName) && !TemplateNames.Contains(selectedTemplateName)) {
+					OrcaDisciplineRuleTemplate runtimeTemplate = engine.Session.CreateTemplateSnapshot(selectedTemplateName);
+					Templates.Add(runtimeTemplate);
+					TemplateNames.Add(runtimeTemplate.Name);
+				}
+				if (!string.IsNullOrWhiteSpace(selectedInstrumentFilter) && !InstrumentOptions.Contains(selectedInstrumentFilter))
+					InstrumentOptions.Add(selectedInstrumentFilter);
+			} else {
+				selectedTemplateName = ResolveInitialTemplate(settings.LastTemplateName);
+				selectedAccountName = !string.IsNullOrWhiteSpace(settings.LastAccountName) && AccountNames.Contains(settings.LastAccountName)
+					? settings.LastAccountName
+					: AccountNames.FirstOrDefault();
+				if (string.IsNullOrWhiteSpace(selectedTemplateName))
+					selectedTemplateName = TemplateNames.FirstOrDefault();
+				RebuildSessionForSelection();
+			}
+			Raise("SelectedAccountName");
+			Raise("SelectedTemplateName");
+			Raise("SelectedInstrumentFilter");
 		}
 
 		public ObservableCollection<string> AccountNames { get; private set; }
@@ -928,6 +1120,50 @@ namespace NinjaTrader.NinjaScript.AddOns
 			}
 		}
 
+		public string MonitoringStateText
+		{
+			get {
+				if (engine.Session == null || string.IsNullOrWhiteSpace(engine.Session.AccountName))
+					return "OFFLINE";
+				if (!engine.IsSubscribed || !engine.IsAccountConnected)
+					return "OFFLINE";
+				switch (engine.Session.Status) {
+					case OrcaDisciplineSessionStatus.Active: return "ARMED";
+					case OrcaDisciplineSessionStatus.Paused: return "PAUSED";
+					case OrcaDisciplineSessionStatus.Ended: return "ENDED";
+					default: return "READY";
+				}
+			}
+		}
+
+		public string MonitoringDetailText
+		{
+			get {
+				if (engine.Session == null)
+					return "Runtime available | No session loaded";
+				if (string.IsNullOrWhiteSpace(engine.Session.AccountName))
+					return "No account selected";
+				if (!engine.IsSubscribed)
+					return "Account feed is not attached";
+				if (!engine.IsAccountConnected)
+					return "Selected account is disconnected";
+				string heartbeat = engine.LastHeartbeatTime == DateTime.MinValue
+					? "Runtime starting"
+					: (DateTime.Now - engine.LastHeartbeatTime).TotalSeconds <= 3
+						? "Runtime heartbeat healthy"
+						: "Runtime heartbeat delayed";
+				string activity = engine.LastAccountEventTime == DateTime.MinValue
+					? "Waiting for account activity"
+					: "Last account event " + engine.LastAccountEventTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+				return heartbeat + " | " + activity;
+			}
+		}
+
+		public string MonitoringEventCountText
+		{
+			get { return engine.AccountEventCount.ToString("N0", CultureInfo.InvariantCulture) + " events"; }
+		}
+
 		public string AlertText
 		{
 			get { return alertText; }
@@ -959,22 +1195,35 @@ namespace NinjaTrader.NinjaScript.AddOns
 			SaveSettings();
 			engine.SessionChanged -= OnEngineSessionChanged;
 			engine.AlertRaised -= OnEngineAlertRaised;
-			engine.Dispose();
 		}
 
 		private void RefreshAccounts()
 		{
+			RefreshAccountsCore(true);
+		}
+
+		private void RefreshAccountsCore(bool rebuildSession)
+		{
 			try {
-				string previous = SelectedAccountName;
+				string previous = selectedAccountName;
+				string runtimeAccount = engine.Session == null ? string.Empty : engine.Session.AccountName;
 				AccountNames.Clear();
 				foreach (Account account in Account.All.Where(IsCurrentTradingAccount).OrderBy(a => a.Name))
 					AccountNames.Add(account.Name);
 				if (!string.IsNullOrWhiteSpace(previous) && AccountNames.Contains(previous))
 					selectedAccountName = previous;
-				else
+				else if (!string.IsNullOrWhiteSpace(runtimeAccount)) {
+					selectedAccountName = runtimeAccount;
+					if (!AccountNames.Contains(runtimeAccount))
+						AccountNames.Add(runtimeAccount);
+				} else
 					selectedAccountName = AccountNames.FirstOrDefault();
 				Raise("SelectedAccountName");
-				RebuildSessionForSelection();
+				bool selectionChanged = !string.Equals(previous, selectedAccountName, StringComparison.OrdinalIgnoreCase);
+				if (rebuildSession && (engine.Session == null || selectionChanged))
+					RebuildSessionForSelection();
+				else
+					RaiseDashboard();
 			} catch (Exception ex) {
 				AlertText = "Account refresh failed: " + ex.Message;
 			}
@@ -996,7 +1245,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			return engine.Session != null
 				&& !string.IsNullOrWhiteSpace(SelectedAccountName)
-				&& engine.Session.Status != OrcaDisciplineSessionStatus.Active;
+				&& (engine.Session.Status == OrcaDisciplineSessionStatus.NotStarted
+					|| engine.Session.Status == OrcaDisciplineSessionStatus.Ended);
 		}
 
 		private void PauseSession()
@@ -1229,6 +1479,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private void RaiseDashboard()
 		{
 			Raise("HeaderStatus");
+			Raise("MonitoringStateText");
+			Raise("MonitoringDetailText");
+			Raise("MonitoringEventCountText");
 			Raise("Grade");
 			Raise("ScoreText");
 			Raise("SessionPnlText");
@@ -1313,6 +1566,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private readonly DispatcherTimer timer;
 		private Account account;
 		private bool subscribed;
+		private bool disposed;
+		private DateTime lastAccountEventTime;
+		private DateTime lastHeartbeatTime;
+		private long accountEventCount;
 
 		public OrcaDisciplineGuardEngine(Dispatcher dispatcher)
 		{
@@ -1327,11 +1584,30 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public event EventHandler<string> AlertRaised;
 
 		public OrcaDisciplineSession Session { get; private set; }
+		public bool IsSubscribed { get { return subscribed; } }
+		public DateTime LastAccountEventTime { get { return lastAccountEventTime; } }
+		public DateTime LastHeartbeatTime { get { return lastHeartbeatTime; } }
+		public long AccountEventCount { get { return accountEventCount; } }
+
+		public bool IsAccountConnected
+		{
+			get {
+				try {
+					return account != null
+						&& (account.ConnectionStatus == ConnectionStatus.Connected
+							|| (account.Connection != null && account.Connection.Status == ConnectionStatus.Connected));
+				} catch {
+					return false;
+				}
+			}
+		}
 
 		public void SelectAccount(Account selectedAccount, OrcaDisciplineRuleTemplate template, string instrumentFilter)
 		{
 			Unsubscribe();
 			account = selectedAccount;
+			lastAccountEventTime = DateTime.MinValue;
+			accountEventCount = 0;
 			Session = new OrcaDisciplineSession(account == null ? string.Empty : account.Name, template, instrumentFilter);
 			Session.PropertyChanged += OnSessionPropertyChanged;
 			if (account != null)
@@ -1370,6 +1646,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void Dispose()
 		{
+			if (disposed)
+				return;
+			if (!dispatcher.CheckAccess()) {
+				try {
+					dispatcher.Invoke(new Action(Dispose));
+					return;
+				} catch { }
+			}
+			disposed = true;
 			timer.Stop();
 			timer.Tick -= OnTimerTick;
 			Unsubscribe();
@@ -1406,8 +1691,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private void OnOrderUpdate(object sender, OrderEventArgs e)
 		{
 			RunOnUi(() => {
-				if (!IsSelectedAccount(e == null ? null : e.Order == null ? null : e.Order.Account))
+				if (Session == null || !IsSelectedAccount(e == null ? null : e.Order == null ? null : e.Order.Account))
 					return;
+				MarkAccountEvent();
 				Session.OnOrderUpdate(e);
 				RaiseSessionChanged();
 			});
@@ -1418,6 +1704,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			RunOnUi(() => {
 				if (Session == null || e == null || e.Execution == null || !IsSelectedAccount(e.Execution.Account))
 					return;
+				MarkAccountEvent();
 				Session.OnExecution(e);
 				RaiseSessionChanged();
 			});
@@ -1429,6 +1716,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Account eventAccount = e == null || e.Position == null ? null : e.Position.Account;
 				if (Session == null || !IsSelectedAccount(eventAccount))
 					return;
+				MarkAccountEvent();
 				Session.OnPositionUpdate(e);
 				RaiseSessionChanged();
 			});
@@ -1439,6 +1727,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			RunOnUi(() => {
 				if (Session == null || e == null || !IsSelectedAccount(e.Account))
 					return;
+				MarkAccountEvent();
 				Session.OnAccountItemUpdate(e);
 				RaiseSessionChanged();
 			});
@@ -1446,10 +1735,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private void OnTimerTick(object sender, EventArgs e)
 		{
-			if (Session == null)
-				return;
-			Session.OnTimerTick(account);
+			lastHeartbeatTime = DateTime.Now;
+			if (Session != null)
+				Session.OnTimerTick(account);
 			RaiseSessionChanged();
+		}
+
+		private void MarkAccountEvent()
+		{
+			lastAccountEventTime = DateTime.Now;
+			accountEventCount++;
 		}
 
 		private void OnSessionPropertyChanged(object sender, PropertyChangedEventArgs e)
@@ -1690,7 +1985,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void OnOrderUpdate(OrderEventArgs e)
 		{
-			if (e == null || e.Order == null || e.Order.Instrument == null)
+			if (Status != OrcaDisciplineSessionStatus.Active || e == null || e.Order == null || e.Order.Instrument == null)
 				return;
 			ObserveInstrument(e.Order.Instrument);
 		}
@@ -1720,7 +2015,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void OnPositionUpdate(PositionEventArgs e)
 		{
-			if (e == null || e.Position == null || e.Position.Instrument == null)
+			if (Status != OrcaDisciplineSessionStatus.Active || e == null || e.Position == null || e.Position.Instrument == null)
 				return;
 			ObserveInstrument(e.Position.Instrument);
 			if (!MatchesInstrumentFilter(e.Position.Instrument))
@@ -1729,15 +2024,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (e.MarketPosition == MarketPosition.Flat || e.Quantity == 0)
 				signed = 0;
 			SyncPositionFromTracker(InstrumentName(e.Position.Instrument), signed);
-			foreach (OrcaDisciplineRule rule in Rules)
-				rule.OnPositionSnapshot(this, currentPositionsByInstrument);
 			RefreshRulesCurrentValues();
 			RaiseAll();
 		}
 
 		public void OnAccountItemUpdate(AccountItemEventArgs e)
 		{
-			if (e == null || e.AccountItem != AccountItem.RealizedProfitLoss || e.Currency != Currency.UsDollar)
+			if (Status != OrcaDisciplineSessionStatus.Active || e == null || e.AccountItem != AccountItem.RealizedProfitLoss || e.Currency != Currency.UsDollar)
 				return;
 			SessionRealizedPnl = e.Value - baselineRealizedPnl;
 			foreach (OrcaDisciplineRule rule in Rules)
@@ -1748,17 +2041,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void OnTimerTick(Account account)
 		{
-			if (Status == OrcaDisciplineSessionStatus.NotStarted || Status == OrcaDisciplineSessionStatus.Ended)
+			if (Status != OrcaDisciplineSessionStatus.Active)
 				return;
-			SyncOpenPositions(account, Status == OrcaDisciplineSessionStatus.Active);
+			SyncOpenPositions(account, true);
 			if (account != null)
 				SessionRealizedPnl = SafeAccountGet(account, AccountItem.RealizedProfitLoss) - baselineRealizedPnl;
-			if (Status != OrcaDisciplineSessionStatus.Active) {
-				RefreshRulesCurrentValues();
-				RecalculateScore();
-				RaiseAll();
-				return;
-			}
 			foreach (OrcaDisciplineRule rule in Rules)
 				rule.OnTimerTick(this, DateTime.Now);
 			RefreshRulesCurrentValues();
@@ -1768,7 +2055,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void AddViolation(OrcaDisciplineRule rule, string message, string instrument, string observed, string limit)
 		{
-			if (rule == null || !rule.Enabled)
+			if (Status != OrcaDisciplineSessionStatus.Active || rule == null || !rule.Enabled)
 				return;
 			OrcaDisciplineViolation violation = new OrcaDisciplineViolation {
 				Timestamp = DateTime.Now,
@@ -1903,7 +2190,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private void ApplyManualRule(OrcaDisciplineRule rule)
 		{
-			if (rule == null || !rule.Enabled)
+			if (Status != OrcaDisciplineSessionStatus.Active || rule == null || !rule.Enabled)
 				return;
 			if (string.Equals(rule.ManualAction, OrcaManualActionValues.Followed, StringComparison.OrdinalIgnoreCase)) {
 				rule.RegisterFollow();
@@ -3621,6 +3908,26 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (handler != null)
 					handler(typed, EventArgs.Empty);
 			}
+		}
+	}
+
+	public sealed class OrcaDisciplineMonitoringBrushConverter : IValueConverter
+	{
+		public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+		{
+			string state = value as string ?? string.Empty;
+			switch (state) {
+				case "ARMED": return Brushes.MediumSeaGreen;
+				case "PAUSED": return Brushes.Goldenrod;
+				case "ENDED": return Brushes.CornflowerBlue;
+				case "READY": return Brushes.LightSlateGray;
+				default: return Brushes.IndianRed;
+			}
+		}
+
+		public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+		{
+			return Binding.DoNothing;
 		}
 	}
 
