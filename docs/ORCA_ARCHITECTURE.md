@@ -12,6 +12,7 @@ This document maps the current `Orca Trades/Working_Suite` source for startup, h
 - `Orca Trades/Working_Suite/AddOns`: active add-on source.
 - `Orca Trades/Working_Suite/DrawingTools`: active drawing-tool source.
 - `Orca Trades/Working_Suite/BarsTypes`: active custom BarsType source.
+- `Orca Trades/Working_Suite/ChartStyles`: active custom ChartStyle source.
 - `Orca Trades/Full_Suite`: validated promotion target after Julian's manual NinjaTrader validation.
 - `Orca Trades/NinjaTrader`, `Stable_Release`, and `decompiled`: references only unless Julian explicitly approves copying.
 
@@ -26,6 +27,8 @@ VWAP/session context: `OrcaAnchoredVWAPs`, `OrcaManualAnchoredVWAP`, `OrcaTimeVW
 Add-ons: `OrcaCopyAddOn`, `OrcaCopyEngine`, `OrcaCopyNetwork`, `OrcaTradeCopierAddOn`, `OrcaTradeCopierEngine`, `OrcaTradeCopierNetwork`, `OrcaRiskManagerAddOn`, `OrcaExecutionRouterAddOn`, `OrcaDisciplineGuardAddOn`.
 
 BarsType: `OrcaAtrAdaptiveRangeBarsType`.
+
+ChartStyle: `OrcaVolumeCandles`, a render-only OHLCV style whose centered candle body width is normalized by the existing primary bar volume. It adds no series, has no Tick Replay dependency, and keeps bar aggregation/time-axis ownership with the selected BarsType.
 
 ## Shared Services And Cache Layers
 

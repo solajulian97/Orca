@@ -18,6 +18,7 @@ Working_Suite currently contains:
 - OrcaPrints partials: `OrcaPrints.Engine`, `OrcaPrints.Models`, `OrcaPrints.Rendering`, `OrcaPrints.Scoring`.
 - Drawing tools: `OrcaFixedRangeProfile`, `OrcaManualAnchoredVWAP`.
 - Bars types: `OrcaAtrAdaptiveRangeBarsType`.
+- Chart styles: `OrcaVolumeCandles` (`Orca Volume Candles`) in active `Working_Suite` development; NinjaTrader compile and live-chart validation are tracked separately in its dated handoff.
 - Add-ons/support: `OrcaCopyAddOn`, `OrcaCopyEngine`, `OrcaCopyNetwork`, `OrcaDisciplineGuardAddOn`, `OrcaExecutionRouterAddOn`, `OrcaRiskManagerAddOn`, `OrcaTradeCopierAddOn`, `OrcaTradeCopierEngine`, `OrcaTradeCopierNetwork`.
 
 ## Development Versus Validated Status
