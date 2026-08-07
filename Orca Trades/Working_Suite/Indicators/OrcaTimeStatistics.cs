@@ -102,6 +102,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			public double VolumeSum;
 			public int VolumeCount;
+			public double VolumePerSecondSum;
+			public int VolumePerSecondCount;
 			public double DeltaAbsSum;
 			public int DeltaCount;
 			public double CumulativeDeltaAbsSum;
@@ -191,6 +193,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				AverageLookbackBars  = 14;
 
 				ShowVolume           = true;
+				ShowVolumePerSecond  = false;
 				ShowDelta            = true;
 				ShowCumulativeDelta  = false;
 				CumulativeDeltaStartMode = OrcaTimeStatisticsCumulativeDeltaStartMode.OneDaySixPmEastern;
@@ -397,7 +400,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedHistoricalInternalRealtime && State == State.Realtime && !providerDataActive && ShouldAttemptRealtimeSharedBackfill())
 				TryRefreshFromSharedProvider(false, true, false);
 
-			int rowCount = (ShowVolume ? 1 : 0) + (ShowDelta ? 1 : 0) + (ShowCumulativeDelta ? 1 : 0) + (ShowDeltaPercent ? 1 : 0)
+			int rowCount = (ShowVolume ? 1 : 0) + (ShowVolumePerSecond ? 1 : 0) + (ShowDelta ? 1 : 0) + (ShowCumulativeDelta ? 1 : 0) + (ShowDeltaPercent ? 1 : 0)
 						+ (ShowMaxDelta ? 1 : 0) + (ShowMinDelta ? 1 : 0) + (ShowFinishDelta ? 1 : 0)
 						+ (ShowRange ? 1 : 0) + (ShowTime ? 1 : 0);
 			if (rowCount == 0) return;
@@ -415,6 +418,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			var rows = new List<KeyValuePair<string, int>>();
 			if (ShowVolume)      rows.Add(new KeyValuePair<string, int>("Volume",       0));
+			if (ShowVolumePerSecond) rows.Add(new KeyValuePair<string, int>("Volume / Sec", 9));
 			if (ShowDelta)       rows.Add(new KeyValuePair<string, int>("Delta",        1));
 			if (ShowCumulativeDelta) rows.Add(new KeyValuePair<string, int>("Cumulative \u0394", 7));
 			if (ShowDeltaPercent) rows.Add(new KeyValuePair<string, int>("\u0394 %",        8));
@@ -424,7 +428,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ShowRange)       rows.Add(new KeyValuePair<string, int>("Range",        3));
 			if (ShowTime)        rows.Add(new KeyValuePair<string, int>("Time",         4));
 
-			double maxVol = 1, maxDel = 1, maxCumDel = 1, maxDeltaPercent = 1, maxRange = 1;
+			double maxVol = 1, maxVolumePerSecond = 1, maxDel = 1, maxCumDel = 1, maxDeltaPercent = 1, maxRange = 1;
 			double tickSize = Math.Max(0.00000001, Instrument.MasterInstrument.TickSize);
 			double[] cumulativeDeltaValues = ShowCumulativeDelta ? BuildCumulativeDeltaValues(toIdx) : null;
 
@@ -433,6 +437,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double vol, range;
 				if (!TryGetBarStats(i, out vol, out range)) continue;
 				if (ShowVolume) maxVol = Math.Max(maxVol, vol);
+				double volumePerSecond;
+				if (ShowVolumePerSecond && TryCalculateVolumePerSecond(i, vol, out volumePerSecond))
+					maxVolumePerSecond = Math.Max(maxVolumePerSecond, volumePerSecond);
 				if (ShowRange)  maxRange = Math.Max(maxRange, range);
 				if (ShowCumulativeDelta && cumulativeDeltaValues != null && i < cumulativeDeltaValues.Length)
 					maxCumDel = Math.Max(maxCumDel, Math.Abs(cumulativeDeltaValues[i]));
@@ -478,6 +485,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 							dxVolumeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (vol / maxVol));
 							RenderTarget.FillRectangle(rect, dxVolumeBrush);
 							if (boxW >= 20) DrawCenteredText(FormatVolume(vol), rect);
+							break;
+						case 9: // Volume per second
+							double volumePerSecond;
+							if (!TryCalculateVolumePerSecond(i, vol, out volumePerSecond)) break;
+							dxVolumeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (volumePerSecond / maxVolumePerSecond));
+							RenderTarget.FillRectangle(rect, dxVolumeBrush);
+							if (boxW >= 20) DrawCenteredText(FormatVolume(volumePerSecond), rect);
 							break;
 						case 1: // Delta
 							if (!hasDelta) break;
@@ -777,6 +791,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					summary.VolumeCount++;
 				}
 
+				double volumePerSecond;
+				if (ShowVolumePerSecond && TryCalculateVolumePerSecond(index, volume, out volumePerSecond))
+				{
+					summary.VolumePerSecondSum += volumePerSecond;
+					summary.VolumePerSecondCount++;
+				}
+
 				if (!double.IsNaN(range) && !double.IsInfinity(range))
 				{
 					summary.RangeSum += Math.Max(0, range);
@@ -892,6 +913,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				case 6: return dxMinDeltaBrush;
 				case 7: return dxPositiveBrush;
 				case 8: return dxPositiveBrush;
+				case 9: return dxVolumeBrush;
 				default: return dxTextBrush;
 			}
 		}
@@ -905,6 +927,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				case 0:
 					return summary.VolumeCount > 0 ? FormatVolume(summary.VolumeSum / summary.VolumeCount) : "--";
+				case 9:
+					return summary.VolumePerSecondCount > 0 ? FormatVolume(summary.VolumePerSecondSum / summary.VolumePerSecondCount) : "--";
 				case 1:
 					return summary.DeltaCount > 0 ? FormatDelta(summary.DeltaAbsSum / summary.DeltaCount) : "--";
 				case 7:
@@ -943,6 +967,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return 0;
 
 			return (delta / volume) * 100.0;
+		}
+		private bool TryCalculateVolumePerSecond(int barIndex, double volume, out double volumePerSecond)
+		{
+			volumePerSecond = 0;
+			if (volume < 0 || double.IsNaN(volume) || double.IsInfinity(volume))
+				return false;
+
+			int durationSeconds = GetBarDurationSeconds(barIndex);
+			if (durationSeconds <= 0)
+				return false;
+
+			volumePerSecond = volume / durationSeconds;
+			return !double.IsNaN(volumePerSecond) && !double.IsInfinity(volumePerSecond);
 		}
 		private double[] BuildCumulativeDeltaValues(int lastIndex)
 		{
@@ -1217,35 +1254,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Show Volume",           Order = 1, GroupName = "Rows")]
 		public bool ShowVolume { get; set; }
 
-		[Display(Name = "Show Delta",            Order = 2, GroupName = "Rows")]
+		[Display(Name = "Show Volume Per Second", Order = 2, GroupName = "Rows",
+			Description = "Shows bar volume divided by the bar's elapsed seconds.")]
+		public bool ShowVolumePerSecond { get; set; }
+
+		[Display(Name = "Show Delta",            Order = 3, GroupName = "Rows")]
 		public bool ShowDelta { get; set; }
 
-		[Display(Name = "Show Cumulative Delta", Order = 3, GroupName = "Rows",
+		[Display(Name = "Show Cumulative Delta", Order = 4, GroupName = "Rows",
 			Description = "Shows running cumulative delta across the loaded chart bars.")]
 		public bool ShowCumulativeDelta { get; set; }
 
 		[TypeConverter(typeof(OrcaTimeStatisticsCumulativeDeltaStartModeConverter))]
-		[Display(Name = "Cumulative Delta Start", Order = 4, GroupName = "Rows",
+		[Display(Name = "Cumulative Delta Start", Order = 5, GroupName = "Rows",
 			Description = "Controls where the cumulative delta row resets.")]
 		public OrcaTimeStatisticsCumulativeDeltaStartMode CumulativeDeltaStartMode { get; set; }
 
-		[Display(Name = "Show Delta Percent", Order = 5, GroupName = "Rows",
+		[Display(Name = "Show Delta Percent", Order = 6, GroupName = "Rows",
 			Description = "Shows bar delta divided by bar volume as a signed percent.")]
 		public bool ShowDeltaPercent { get; set; }
 
-		[Display(Name = "Show Max Delta", Order = 6, GroupName = "Rows")]
+		[Display(Name = "Show Max Delta", Order = 7, GroupName = "Rows")]
 		public bool ShowMaxDelta { get; set; }
 
-		[Display(Name = "Show Min Delta", Order = 7, GroupName = "Rows")]
+		[Display(Name = "Show Min Delta", Order = 8, GroupName = "Rows")]
 		public bool ShowMinDelta { get; set; }
 
-		[Display(Name = "Show Finish Delta", Order = 8, GroupName = "Rows")]
+		[Display(Name = "Show Finish Delta", Order = 9, GroupName = "Rows")]
 		public bool ShowFinishDelta { get; set; }
 
-		[Display(Name = "Show Range",            Order = 9, GroupName = "Rows")]
+		[Display(Name = "Show Range",            Order = 10, GroupName = "Rows")]
 		public bool ShowRange { get; set; }
 
-		[Display(Name = "Show Time",             Order = 10, GroupName = "Rows")]
+		[Display(Name = "Show Time",             Order = 11, GroupName = "Rows")]
 		public bool ShowTime { get; set; }
 
 		[Display(Name = "Show Averages", Order = 1, GroupName = "Averages",
