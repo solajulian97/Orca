@@ -542,6 +542,18 @@ Current live protection is still panel-owned through one pending entry/stop/targ
 3. Add one-, two-, and three-target templates. Every target leg gets its own OCO-linked stop; one shared OCO group across all targets is prohibited because the first fill could cancel protection for the remaining position.
 4. Add one-way auto break-even based on the frozen initial R distance. Monitor Last price only while an eligible plan is live, move only remaining Orca-owned stops, never move backward, and persist/reconcile active state before enabling live-account recovery.
 
+### Confirmed Product Decisions
+
+- ATR updates on completed primary chart bars, not the forming bar.
+- The panel uses shared Risk $, Stop, and Quantity rows. ATR length/value/multiplier appear only in ATR mode.
+- Direct quantity edits in ATR mode switch to `Qty`; stop dragging changes the effective ATR multiplier and recalculates quantity.
+- The existing Flatten placement remains unchanged. `Auto Trade Management` appears immediately below it and summarizes bracket template, auto break-even, and protection state.
+- The default bracket is two editable targets, initially 50% at 1R and 50% at 2R.
+- Armed protection applies to every new Risk Manager entry path.
+- Auto break-even triggers once at 1R, targets the weighted average fill with a zero-tick offset, applies to remaining Orca stops, and never moves a stop backward.
+- Scale-ins are allowed. An active account/instrument is one protected position campaign: adding from 10 to 12 contracts reconciles total stop and target quantities to 12 while preserving the campaign's existing price levels. Completed target legs are not recreated, and a triggered break-even stop is not moved backward.
+- ATR mode has a configurable maximum-quantity cap; the working proposed default is 20.
+
 The detailed file-aware plan, settings layout, formulas, safety rules, implementation phases, and acceptance matrix are recorded in `docs/handoffs/2026-08-15_orca-risk-manager_atr-sizing-bracket-automation-plan.md`.
 
 ### Validation And Promotion Status

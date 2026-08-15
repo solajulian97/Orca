@@ -21,6 +21,19 @@ Sizing and order protection should be implemented as two layers:
 1. A small calculation layer owns ATR, stop-distance, risk-per-contract, and quantity math.
 2. An AddOn-lifetime protection engine owns entry plans, account subscriptions, OCO legs, partial fills, break-even state, and recovery. The WPF panel remains a view/coordinator and must not remain the sole owner of live protection.
 
+## Confirmed Design Decisions
+
+Julian confirmed the following on 2026-08-15:
+
+- ATR updates only after the active primary chart bar completes.
+- ATR mode keeps manual overrides. Dragging the stop changes the effective ATR multiplier and recalculates quantity; directly editing quantity switches the sizing mode to `Qty` so the panel does not mislabel a manual size as ATR risk sizing.
+- Every new Risk Manager entry path receives protection when Auto Trade Management is armed.
+- The default bracket is `2 Targets`; percentages and target R values are editable in settings. The initial proposed template is 50% at 1R and 50% at 2R.
+- Auto break-even uses the proposed one-way 1R trigger, average-fill break-even price, zero-tick offset, and remaining-Orca-stop scope.
+- Scale-ins remain supported. Adding contracts to an existing account/instrument position must increase the total protective stop and target quantities to the actual account position rather than blocking the entry.
+- ATR sizing requires a maximum-quantity cap. The working proposed default remains 20 unless Julian selects another value.
+- The panel keeps the existing Close Position/Flatten placement. A new `Auto Trade Management` section appears immediately below the Flatten area, before Manage Position/PnL.
+
 ## Current Risk Manager Behavior Reviewed
 
 Primary source reviewed:
@@ -130,7 +143,6 @@ Risk $       [ 200 ]
 ATR          [ 14 ] x [ 2.00 ]
 Stop         20.00 pts | $40/contract
 Quantity     5 | planned risk $200
-Bracket      2 Targets | BE at 1.0R
 ```
 
 Interaction rules:
@@ -143,6 +155,17 @@ Interaction rules:
 - Moving the entry should preserve the stop/target distances until submission.
 - Changing chart tab, chart instrument, bars period, or routing should invalidate and rebuild the preview.
 - `Open` must be disabled if ATR is unavailable, there are insufficient bars, quantity is zero, the execution instrument cannot be resolved, or automatic protection cannot be armed.
+
+The existing Close Position section and Flatten button remain in their current position. Immediately below Flatten, add a separate section:
+
+```text
+AUTO TRADE MANAGEMENT
+Bracket      [ 2 Targets v ]
+Auto BE      [ On ] at [ 1.0R ]
+Protection   ARMED | 50% @ 1R / 50% @ 2R
+```
+
+This location keeps Julian's primary Flatten exit accessible while separating emergency/manual exit actions from the automation configuration. The current manual `Move To Breakeven` action should move into Manage Position; the Auto Trade Management row configures the automatic rule for new and active Orca plans.
 
 ## Proposed Settings Experience
 
@@ -159,7 +182,7 @@ Add three concise sections to the existing `Tools > Orca Risk Manager` settings 
 ### Bracket Protection
 
 - Attach stop and targets to Orca entries
-- Bracket template: `Single`, `2 Targets`, or `3 Targets`
+- Bracket template: `Single`, `2 Targets`, or `3 Targets`; default `2 Targets`
 - Target rows appear only for the selected template and contain allocation percentage and target R
 - Recommended starting templates:
   - Single: 100% at 2R
@@ -204,6 +227,24 @@ Order ownership rules:
 - Do not change or cancel unrelated manual, ATM, strategy, or other Orca orders on the instrument.
 - Track submitted, accepted, working, part-filled, filled, cancelled, and rejected states through account events.
 - Make execution handling idempotent by execution ID so duplicate/amended callbacks cannot create duplicate protection.
+
+## Scale-In And Position Reconciliation Model
+
+An active account plus execution instrument is treated as one Orca position campaign. A second Risk Manager entry on the same campaign is allowed and joins the existing protected position.
+
+Required behavior:
+
+- Reconcile protection to the actual absolute account position after every relevant execution or position update.
+- Example: a 10-contract position with a 50/50 template has desired target quantities 5 and 5. Adding 2 contracts produces a 12-contract position and desired quantities 6 and 6. Total working stop quantity must also equal 12.
+- Preserve the existing campaign stop and target price levels when scaling in. Scale-in changes quantities; it does not automatically move the original stop farther away or re-anchor targets to the newest fill.
+- Continue to calculate and display the account's weighted average fill price for PnL and break-even purposes.
+- Apply deterministic whole-contract allocation to the new total position, adjusting only the quantity delta required to reach the desired leg totals.
+- If a target leg has already completed, do not recreate it during a later scale-in. Allocate new contracts only across the remaining active target legs.
+- If auto break-even has already triggered, later scale-in quantity inherits the current protective stop. The engine must never move that stop backward or reset the break-even latch.
+- Manual partial exits reduce the desired remaining protection quantities. Flatten cancels the campaign's remaining Orca protection after the position reaches flat.
+- Only Risk Manager-owned plan/leg orders participate. The reconciliation engine must not absorb, resize, or cancel unrelated manual, ATM, strategy, or other Orca orders.
+
+This preserves the current user expectation that adding 2 contracts to a protected 10-contract position adjusts protection to 12 while giving multi-target plans deterministic allocation and order ownership.
 
 ## Auto Break-Even Model
 
@@ -255,9 +296,9 @@ Acceptance: ATR matches NinjaTrader's built-in ATR for the same chart/period wit
 - Introduce the immutable trade plan and AddOn-lifetime protection engine.
 - Route existing single-stop/single-target submissions through it.
 - Subscribe once per relevant account and use plan-specific order ownership.
-- Handle partial fills, cancellations, rejects, panel hide, tab changes, and multiple plans.
+- Handle partial fills, cancellations, rejects, panel hide, tab changes, scale-ins, manual partial exits, and multiple instruments/accounts.
 
-Acceptance: one protected Sim trade remains managed when the panel is hidden or its chart tab changes; unrelated instrument orders are untouched; each fill is protected once.
+Acceptance: one protected Sim trade remains managed when the panel is hidden or its chart tab changes; a 10-contract position scaled to 12 has exactly 12 protected contracts; manual reductions shrink protection; unrelated orders are untouched; each fill is protected once.
 
 ### Phase 3 - Multi-Bracket Templates
 
@@ -266,7 +307,7 @@ Acceptance: one protected Sim trade remains managed when the panel is hidden or 
 - Create one OCO stop/target pair per active leg.
 - Display actual leg allocation and state.
 
-Acceptance: single, two-leg, and three-leg Sim trades handle full fills, partial fills, target fills, stop fills, cancellations, and quantity changes without an uncovered remainder.
+Acceptance: single, two-leg, and three-leg Sim trades handle full fills, partial fills, scale-ins before and after a target fill, stop fills, cancellations, and quantity changes without an uncovered remainder or resurrected completed target.
 
 ### Phase 4 - Automatic Break-Even And Recovery
 
@@ -338,6 +379,7 @@ Planning only. Every implementation phase requires separate deployment, NinjaTra
 - Planned stop risk cannot guarantee realized maximum loss because stop slippage, gaps, commissions, and fees remain outside the sizing formula.
 - Broker/connection behavior for changing OCO-linked stops must be tested. Rejections cannot be silently ignored.
 - Partial fills, simultaneous plans, routing, chart-tab changes, panel closure, and restart recovery are the critical correctness cases.
+- Scale-ins make campaign ownership, price preservation, completed-leg handling, and exact protection-quantity reconciliation additional critical correctness cases.
 - The supplied YouTube page did not expose a transcript during this review. The linked Jack Gleason page confirms the reference product's ATR Expansion Bar, live risk calculator, and NinjaTrader-ready positioning, but not its internal order-management rules.
 
 ## Eligibility For Promotion To Full_Suite
