@@ -1,6 +1,6 @@
 # Orca Product State
 
-Last updated: 2026-08-01
+Last updated: 2026-08-15
 
 ## Current Status
 
@@ -512,3 +512,45 @@ This change adds no secondary series, Tick Replay dependency, SharpDX rendering,
 5. Prove an active Sim session survives close/reopen, then prove restart recovery before any enforcement or richer report-card grading.
 
 This slice is not eligible for `Full_Suite` promotion until Julian validates active-session behavior in Sim and the remaining Phase 0 recovery/reconciliation work is complete.
+
+## 2026-08-15 Risk Manager ATR Sizing And Bracket Automation Review
+
+### Decision
+
+Chart-timeframe ATR sizing should be integrated into Orca Risk Manager as a fourth sizing mode beside fixed-dollar risk, fixed quantity, and fixed points. The first implementation should keep ATR calculation separate from order protection and should not add a hidden series, `BarsRequest`, Tick Replay dependency, or shared-cache dependency.
+
+The proposed sizing rule is:
+
+```text
+stop points = ceil-to-tick(ATR * stop multiplier)
+risk per contract = stop points * resolved execution-instrument point value
+quantity = floor(risk budget / risk per contract)
+```
+
+ATR comes from the active primary chart bars. Tick size and point value come from the execution instrument returned by `OrcaExecutionRouter`, so an NQ chart routed to MNQ uses the NQ/MNQ-equivalent price distance and MNQ dollar value. A calculated quantity below one must produce a disabled `No trade` state rather than forcing one contract above the configured risk budget.
+
+### Current Source Boundary
+
+`Orca Trades/Working_Suite/AddOns/OrcaRiskManagerAddOn.cs` already contains a chart calculator, three sizing modes, Spacebar staged brackets, fast/drag entries, routed order overlays, one stop/target OCO pair per entry execution, manual break-even, partial close/flatten actions, and PnL/R display.
+
+Current live protection is still panel-owned through one pending entry/stop/target state and one `Account.ExecutionUpdate` subscription. Protection synchronization uses instrument plus generic `Stop`/`Target` names. This is not an adequate ownership model for simultaneous plans, multi-target legs, robust auto break-even, or restart recovery.
+
+### Planned Architecture
+
+1. Add a pure sizing layer and compact fourth `ATR` mode. Use completed-bar Wilder ATR by default, round the stop outward to an execution tick, apply a configurable quantity cap, and freeze an immutable plan when the user submits.
+2. Move protection into an AddOn-lifetime, plan-aware engine before adding multi-brackets. Give every plan/leg unique order ownership, protect partial fills immediately, and subscribe to account events once per relevant account.
+3. Add one-, two-, and three-target templates. Every target leg gets its own OCO-linked stop; one shared OCO group across all targets is prohibited because the first fill could cancel protection for the remaining position.
+4. Add one-way auto break-even based on the frozen initial R distance. Monitor Last price only while an eligible plan is live, move only remaining Orca-owned stops, never move backward, and persist/reconcile active state before enabling live-account recovery.
+
+The detailed file-aware plan, settings layout, formulas, safety rules, implementation phases, and acceptance matrix are recorded in `docs/handoffs/2026-08-15_orca-risk-manager_atr-sizing-bracket-automation-plan.md`.
+
+### Validation And Promotion Status
+
+- Source review and plan: complete.
+- Risk Manager source edit: not started.
+- Working_Suite deployment: not performed.
+- NinjaTrader F5 compile: not performed.
+- Sim/manual validation: not performed.
+- Full_Suite promotion: not eligible.
+
+The Risk Manager source already has unrelated uncommitted work and recent pending validation gates. Future implementation must preserve that diff and should proceed phase by phase, beginning with ATR preview/math only.
