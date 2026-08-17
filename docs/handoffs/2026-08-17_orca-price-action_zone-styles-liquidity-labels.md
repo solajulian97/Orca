@@ -111,6 +111,16 @@ No post-change NinjaTrader chart test has been performed yet.
   of liquidity-event publication, no secondary series, and no `OnMarketData`.
 - NinjaTrader `F5`: pending after targeted deployment.
 
+## Deployment status
+
+- `deploy_orca.ps1 -Target OrcaPriceAction -DryRun`: passed and resolved one
+  live indicator target.
+- `deploy_orca.ps1 -Target OrcaPriceAction`: completed successfully.
+- Working_Suite versus live NinjaTrader authored-source parity: passed. The
+  live file retains NinjaTrader's generated wrapper after the matching authored
+  region.
+- No other target was deployed.
+
 ## Manual-validation status
 
 Pending. After F5, reload MNQ 1-minute and confirm no `Liquidity` labels, the
