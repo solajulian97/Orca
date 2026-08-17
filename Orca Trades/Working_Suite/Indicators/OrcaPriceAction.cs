@@ -1083,7 +1083,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				Id = NextId("VI"),
 				Direction = direction,
-				OriginBar = barIndex,
+				OriginBar = previous,
 				LastUpdateBar = barIndex,
 				Lower = Math.Min(previousClose, currentOpen),
 				Upper = Math.Max(previousClose, currentOpen),
@@ -1694,11 +1694,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (terminal && !ShowCompletedZones && !timedKeepCompleted)
 					continue;
 
-				int requestedEndBar = terminal ? Math.Max(model.ConfirmationBar, model.TerminalBar) : CurrentBar;
+				int visualStartBar = model.IsIfvg ? model.ConfirmationBar : model.OriginBar;
+				int requestedEndBar = terminal ? Math.Max(visualStartBar, model.TerminalBar) : CurrentBar;
 				bool timedUntilFilled = model.FirstPeriod && ShowTimedFirstFvg
 					&& TimedFvgExtension == OrcaPriceActionTimedExtension.UntilFilled;
 				int endBar = timedUntilFilled ? requestedEndBar
-					: CapFvgEndBar(model.ConfirmationBar, requestedEndBar, FvgExtensionBars);
+					: CapFvgEndBar(visualStartBar, requestedEndBar, FvgExtensionBars);
 				if (timedKeepCompleted)
 					endBar = model.PeriodEndBar >= 0 ? model.PeriodEndBar : CurrentBar;
 				bool highlight = periodActive || rthVisible || timedKeepCompleted;
@@ -1711,7 +1712,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (periodHistorical && !terminal)
 				{
 					ZoneVisualType historyType = model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg;
-					ZoneRenderItem history = CreateZone(model.ConfirmationBar, model.PeriodEndBar,
+					ZoneRenderItem history = CreateZone(visualStartBar, model.PeriodEndBar,
 						model.RemainingLower, model.RemainingUpper,
 						historyType,
 						model.Direction, model.State, BlockQuality.Standard, true,
@@ -1724,7 +1725,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (terminal)
 				{
 					ZoneVisualType terminalType = model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg;
-					result.Add(CreateZone(model.ConfirmationBar, endBar, model.OriginalLower, model.OriginalUpper,
+					result.Add(CreateZone(visualStartBar, endBar, model.OriginalLower, model.OriginalUpper,
 						terminalType,
 						model.Direction, model.State, BlockQuality.Standard, highlight,
 						GetZoneOpacity(terminalType, model.State, false), label));
@@ -1738,7 +1739,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (filledUpper > filledLower)
 					{
 						ZoneVisualType filledType = model.IsIfvg ? ZoneVisualType.IfvgFilled : ZoneVisualType.FvgFilled;
-						result.Add(CreateZone(model.ConfirmationBar, endBar, filledLower, filledUpper,
+						result.Add(CreateZone(visualStartBar, endBar, filledLower, filledUpper,
 							filledType, model.Direction, model.State, BlockQuality.Standard,
 							highlight, GetZoneOpacity(filledType, model.State, true), string.Empty));
 					}
@@ -1747,7 +1748,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (model.RemainingUpper > model.RemainingLower)
 				{
 					ZoneVisualType activeType = model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg;
-					result.Add(CreateZone(model.ConfirmationBar, endBar, model.RemainingLower, model.RemainingUpper,
+					result.Add(CreateZone(visualStartBar, endBar, model.RemainingLower, model.RemainingUpper,
 						activeType,
 						model.Direction, model.State, BlockQuality.Standard, highlight,
 						GetZoneOpacity(activeType, model.State, false), label));

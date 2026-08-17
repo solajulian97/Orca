@@ -66,11 +66,18 @@ displayed zone. `TwoTone` renders the traded portion with lower opacity and the
 remaining portion with active opacity. A strict close through the original far
 edge can create an opposite iFVG over the original range.
 
+After the third candle confirms the pattern, a standard FVG rectangle is
+back-placed to the first candle so it begins at that candle's wick and spans the
+entire three-candle formation. Detection remains third-candle-close causal.
+iFVG rendering begins at the later close-through conversion bar rather than
+being back-placed before inversion.
+
 `Extension Bars` limits standard FVG, iFVG, and first-RTH zone geometry to 30
 bars by default. This is a visual endpoint only: the model continues tracking
 fills and close-through invalidation after the rectangle stops. A first-period
 FVG using `Until Filled` or `Until Period End` follows that explicit timed
-extension instead of the standard bar cap.
+extension instead of the standard bar cap. For standard FVGs the bar count is
+measured from the first pattern candle.
 
 Timed FVGs use a DST-aware New York clock. The first qualifying FVG of either
 direction claims a 15-minute, 30-minute, 1-hour, or 4-hour bucket. Four-hour
@@ -78,6 +85,14 @@ buckets begin at 00:00, 04:00, 08:00, 12:00, 16:00, and 20:00. The separate RTH
 feature accepts timestamps strictly after the configured 09:30 open and before
 the configured 16:00 close. Period-end rendering never extrapolates a synthetic
 future bar on non-time charts.
+
+## Volume imbalances
+
+The zone price bounds remain the prior candle's close and the current candle's
+open. Detection still waits for the second candle to close and pass Classic or
+Advanced qualification. Once confirmed, the rectangle is back-placed to the
+prior candle so its horizontal origin aligns with the close that formed the
+first side of the imbalance.
 
 ## Structure and rejection blocks
 
