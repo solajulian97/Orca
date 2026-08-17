@@ -57,7 +57,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private enum ZoneState { Candidate, Confirmed, Fresh, Touched, Mitigated, Completed, Failed, Expired, Invalidated }
 		private enum BlockType { Rejection, StructuralOrderBlock, ContinuationOrderBlock, PropulsionBlock }
 		private enum BlockQuality { Weak, Internal, Standard, Strong }
-		private enum StructureEventType { Pivot, Bos, Choch, Sweep, RoleChange }
+		private enum StructureEventType { Pivot, Bos, Choch, Liquidity, Sweep, RoleChange }
 		private enum ZoneVisualType { Fvg, Ifvg, FvgFilled, VolumeImbalance, Rejection, StructuralOb, ContinuationOb, Propulsion }
 		private enum LabelVisualType { Structure, Bullish, Bearish, Neutral }
 
@@ -70,6 +70,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public DateTime ConfirmationTime;
 			public double Price;
 			public bool IsHigh;
+			public bool BosEligible = true;
 			public string Relation = string.Empty;
 			public double ReversalAtr;
 			public PivotScope InitialScope;
@@ -305,6 +306,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				FvgDisplacementAtr = 1.0;
 				FvgFillMode = OrcaPriceActionFvgFillMode.RemainingOnly;
 				EnableIfvgConversion = true;
+				FvgExtensionBars = 30;
 				TimedFvgPeriod = OrcaPriceActionTimedPeriod.Hour1;
 				TimedFvgExtension = OrcaPriceActionTimedExtension.UntilPeriodEnd;
 				RthOpen = new TimeSpan(9, 30, 0);
@@ -668,22 +670,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (crossed.Count == 0)
 				return result;
 
-			// One impulse may break many stale pivots. Retire every crossed level,
-			// but publish only the nearest current pivot at each supported scope:
-			// one internal leg and one external/protected parent leg.
-			List<PivotModel> publishedPivots = new List<PivotModel>(2);
-			PivotModel internalPivot = crossed.Where(p => p.Scope == PivotScope.Internal)
-				.OrderByDescending(p => p.Protection == PivotProtection.Protected)
-				.ThenByDescending(p => p.PivotBar).FirstOrDefault();
-			PivotModel externalPivot = crossed.Where(p => p.Scope == PivotScope.External)
-				.OrderByDescending(p => p.Protection == PivotProtection.Protected)
-				.ThenByDescending(p => p.PivotBar).FirstOrDefault();
-			if (internalPivot != null)
-				publishedPivots.Add(internalPivot);
-			if (externalPivot != null && (internalPivot == null || externalPivot.Id != internalPivot.Id))
-				publishedPivots.Add(externalPivot);
+			// The newest crossed pivot is the immediate structure level. A distinct
+			// protected boundary can still publish CHoCH for the parent trend. Every
+			// older crossed level is retired and summarized as one liquidity event.
+			PivotModel immediatePivot = crossed.Where(p => p.BosEligible)
+				.OrderByDescending(p => p.PivotBar).FirstOrDefault();
+			PivotModel protectedBreak = crossed
+				.Where(p => p.Protection == PivotProtection.Protected
+					&& ((breakDirection == Direction.Bullish && trendDirection == Direction.Bearish)
+						|| (breakDirection == Direction.Bearish && trendDirection == Direction.Bullish)))
+				.OrderByDescending(p => p.PivotBar).FirstOrDefault();
+			HashSet<string> publishedIds = new HashSet<string>();
+			if (immediatePivot != null)
+				publishedIds.Add(immediatePivot.Id);
+			if (protectedBreak != null)
+				publishedIds.Add(protectedBreak.Id);
+			PivotModel liquidityPivot = crossed
+				.Where(p => !publishedIds.Contains(p.Id))
+				.OrderByDescending(p => p.PivotBar).FirstOrDefault();
+			PivotModel structuralBoundary = immediatePivot ?? protectedBreak;
+			if (structuralBoundary != null)
+			{
+				for (int i = 0; i < pivots.Count; i++)
+				{
+					PivotModel older = pivots[i];
+					if (older.IsHigh == structuralBoundary.IsHigh && !older.Broken
+						&& older.PivotBar < structuralBoundary.PivotBar)
+						older.BosEligible = false;
+				}
+			}
 
-			HashSet<string> publishedIds = new HashSet<string>(publishedPivots.Select(p => p.Id));
 			for (int i = 0; i < crossed.Count; i++)
 			{
 				PivotModel pivot = crossed[i];
@@ -695,9 +711,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (!publishedIds.Contains(pivot.Id))
 					continue;
 
-				bool choch = pivot.Protection == PivotProtection.Protected
-					&& ((breakDirection == Direction.Bullish && trendDirection == Direction.Bearish)
-						|| (breakDirection == Direction.Bearish && trendDirection == Direction.Bullish));
+				bool choch = protectedBreak != null && pivot.Id == protectedBreak.Id;
 				if (choch)
 				{
 					pivot.Protection = PivotProtection.Unprotected;
@@ -722,11 +736,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 				result.Add(model);
 			}
 
+			if (liquidityPivot != null)
+			{
+				structureEvents.Add(new StructureEventModel
+				{
+					Id = NextId("LIQ"),
+					Type = StructureEventType.Liquidity,
+					BarIndex = barIndex,
+					OriginBar = liquidityPivot.PivotBar,
+					Time = GetTimeAtBar(barIndex),
+					Price = liquidityPivot.Price,
+					Direction = breakDirection,
+					Scope = liquidityPivot.Scope,
+					PivotId = liquidityPivot.Id,
+					Text = "Liquidity"
+				});
+			}
+
 			if (result.Count == 0)
 				return result;
 
 			StructureEventModel primary = result
-				.OrderByDescending(e => e.Type == StructureEventType.Choch ? 2 : e.Scope == PivotScope.External ? 1 : 0)
+				.OrderByDescending(e => e.Type == StructureEventType.Choch ? 1 : 0)
 				.ThenByDescending(e => e.OriginBar).First();
 			Direction previousTrend = trendDirection;
 			trendDirection = primary.Direction;
@@ -1623,7 +1654,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (terminal && !ShowCompletedZones && !timedKeepCompleted)
 					continue;
 
-				int endBar = terminal ? Math.Max(model.ConfirmationBar, model.TerminalBar) : CurrentBar;
+				int requestedEndBar = terminal ? Math.Max(model.ConfirmationBar, model.TerminalBar) : CurrentBar;
+				bool timedUntilFilled = model.FirstPeriod && ShowTimedFirstFvg
+					&& TimedFvgExtension == OrcaPriceActionTimedExtension.UntilFilled;
+				int endBar = timedUntilFilled ? requestedEndBar
+					: CapFvgEndBar(model.ConfirmationBar, requestedEndBar, FvgExtensionBars);
 				if (timedKeepCompleted)
 					endBar = model.PeriodEndBar >= 0 ? model.PeriodEndBar : CurrentBar;
 				bool highlight = periodActive || rthVisible || timedKeepCompleted;
@@ -1803,6 +1838,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 							? OrcaPriceActionDashStyle.Solid : OrcaPriceActionDashStyle.Dash,
 						Width = model.Type == StructureEventType.Choch ? 2f : 1f,
 						Label = model.Text
+					});
+				}
+				else if (model.Type == StructureEventType.Liquidity && ShowBos)
+				{
+					labels.Add(new LabelRenderItem
+					{
+						BarIndex = model.BarIndex, Price = model.Price, Text = model.Text,
+						Type = LabelVisualType.Neutral,
+						Above = model.Direction == Direction.Bullish
 					});
 				}
 				else if (model.Type == StructureEventType.Sweep && ShowLiquiditySweeps)
@@ -2126,6 +2170,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return 0;
 		}
 
+		internal static int CapFvgEndBar(int confirmationBar, int requestedEndBar, int extensionBars)
+		{
+			int safeConfirmation = Math.Max(0, confirmationBar);
+			int safeRequested = Math.Max(safeConfirmation, requestedEndBar);
+			long maximumEnd = (long)safeConfirmation + Math.Max(1, extensionBars);
+			return (int)Math.Min(safeRequested, Math.Min(int.MaxValue, maximumEnd));
+		}
+
 		internal static int ClassifyVolumeImbalance(
 			double previousOpen, double previousClose, double previousHigh, double previousLow,
 			double currentOpen, double currentClose, double currentHigh, double currentLow, bool advanced)
@@ -2345,6 +2397,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty]
 		[Display(Name = "Enable iFVG Conversion", Order = 7, GroupName = "03. Fair Value Gaps")]
 		public bool EnableIfvgConversion { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 10000)]
+		[Display(Name = "Extension Bars", Order = 8, GroupName = "03. Fair Value Gaps")]
+		public int FvgExtensionBars { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Show First Period FVG", Order = 1, GroupName = "04. Timed FVG")]

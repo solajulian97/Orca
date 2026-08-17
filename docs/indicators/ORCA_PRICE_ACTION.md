@@ -65,6 +65,12 @@ displayed zone. `TwoTone` renders the traded portion with lower opacity and the
 remaining portion with active opacity. A strict close through the original far
 edge can create an opposite iFVG over the original range.
 
+`Extension Bars` limits standard FVG, iFVG, and first-RTH zone geometry to 30
+bars by default. This is a visual endpoint only: the model continues tracking
+fills and close-through invalidation after the rectangle stops. A first-period
+FVG using `Until Filled` or `Until Period End` follows that explicit timed
+extension instead of the standard bar cap.
+
 Timed FVGs use a DST-aware New York clock. The first qualifying FVG of either
 direction claims a 15-minute, 30-minute, 1-hour, or 4-hour bucket. Four-hour
 buckets begin at 00:00, 04:00, 08:00, 12:00, 16:00, and 20:00. The separate RTH
@@ -80,11 +86,13 @@ eligible confirmed low to Sponsor, Protected, External, and Major; bearish
 behavior mirrors this. Only a close through the protected boundary creates
 CHoCH/MSS.
 
-One close can cross several older pivot levels, but Orca publishes at most two
-structure events for that impulse: the most recent eligible Internal pivot and
-the most recent External or Protected pivot. Protected liquidity takes priority
-within its scope. Other crossed pivots are retired silently, preventing stale
-BOS lines from reaching far back into prior legs or printing on later bars.
+The newest BOS-eligible pivot on the crossed side is the immediate structure
+level and is the only level that can publish BOS. A distinct protected boundary
+may also publish CHoCH for the parent trend. Older same-side pivots lose future
+BOS eligibility when immediate structure breaks; if price later closes through
+them, they are retired as liquidity rather than relabeled as new structure. One
+close that crosses one or several of those older levels publishes at most one
+compact `Liquidity` label and no historical structure line.
 
 Visible sweep labels are clustered independently by direction. Sweeps within
 `Pivot Strength` bars (minimum two) and within the greater of four ticks or 5%
