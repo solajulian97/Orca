@@ -46,9 +46,10 @@ state changes:
 3. Developing-bar highs and lows may shrink only an existing FVG's remaining
    geometry. Completion and inversion state are committed on the closed bar.
 4. Strength-N pivots are unavailable until N right-side bars have closed.
-5. Pivot labels are placed at the confirmation event. Later Sponsor, Protected,
-   Major, and Unprotected changes receive their own effective event bar rather
-   than rewriting the original confirmation state.
+5. Pivot state is created only at the confirmation event. Once confirmed, its
+   HH/LH/HL/LL label is rendered over the original pivot candle for visual
+   alignment. Later Sponsor, Protected, Major, and Unprotected changes receive
+   their own effective event bar rather than rewriting the original state.
 
 This gives identical structural decisions for the same completed OHLC sequence
 regardless of how many price-change callbacks occur inside a bar.
@@ -97,6 +98,11 @@ Pivot labels combine the price relation with scope. `HH`, `LH`, `HL`, and `LL`
 mean higher high, lower high, higher low, and lower low. The suffix `I` means
 Internal and `E` means External, so `LH I` is an Internal lower high and `HL E`
 is an External higher low.
+
+The label is horizontally centered on the pivot candle. High labels sit just
+above the wick and low labels sit just below it. This is a render-anchor choice:
+the label does not exist until the configured right-side confirmation bars have
+closed.
 
 Visible sweep labels are clustered independently by direction. Sweeps within
 `Pivot Strength` bars (minimum two) and within the greater of four ticks or 5%
@@ -162,6 +168,9 @@ direction. Render snapshots retain only immutable geometry, type, direction,
 and opacity; `OnRender` routes those items to the precreated resources without
 accessing mutable detector collections.
 
+Pivot labels use a separate centered DirectWrite format that follows the same
+render-target recreation and disposal lifecycle as the other text resources.
+
 The default historical discovery window is 3,000 bars. Active records are not
 age-evicted. Terminal records are capped per type, while completed original
 FVGs that can still invert are retained until inversion or feature disablement.
@@ -188,6 +197,8 @@ and order-block detector presets remain independent.
 1. Press NinjaTrader `F5` and record compiler output.
 2. Add Orca Price Action to a clean MNQ 1-minute chart with defaults.
 3. Verify close-confirmed pivot, BOS, CHoCH, protected-level, and sweep timing.
+   Confirm HH/LH labels are centered above their pivot wick and HL/LL labels are
+   centered below their pivot wick without appearing before confirmation.
 4. Exercise FVG partial fill, Two-Tone, completion, iFVG conversion, first-hour,
    and first-RTH behavior.
 5. Exercise VI Classic/Advanced and true-gap exclusion.

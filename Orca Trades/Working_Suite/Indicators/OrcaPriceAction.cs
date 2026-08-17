@@ -201,6 +201,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public string Text = string.Empty;
 			public LabelVisualType Type;
 			public bool Above;
+			public bool Centered;
 		}
 
 		private sealed class RenderSnapshot
@@ -251,6 +252,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private StrokeStyle[] dxStrokes;
 		private DxTextFormat dxTextFormat;
 		private DxTextFormat dxSmallFormat;
+		private DxTextFormat dxCenteredSmallFormat;
 		private bool dxValid;
 
 		private bool applyingDisplayPreset;
@@ -1903,8 +1905,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 						text += " " + InitialPivotRoleBadge(pivot);
 					labels.Add(new LabelRenderItem
 					{
-						BarIndex = model.BarIndex, Price = model.Price, Text = text,
-						Type = LabelVisualType.Structure, Above = pivot.IsHigh
+						BarIndex = pivot.PivotBar, Price = model.Price, Text = text,
+						Type = LabelVisualType.Structure, Above = pivot.IsHigh, Centered = true
 					});
 				}
 				else if (model.Type == StructureEventType.Bos && ShowBos
@@ -2096,8 +2098,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DxSolidBrush brush = item.Type == LabelVisualType.Bullish ? dxBrushes[BrushBull]
 				: item.Type == LabelVisualType.Bearish ? dxBrushes[BrushBear]
 				: item.Type == LabelVisualType.Structure ? dxBrushes[BrushStructure] : dxBrushes[BrushNeutral];
-			float top = item.Above ? y - TextSize - 8 : y + 3;
-			RenderTarget.DrawText(item.Text, dxSmallFormat, new RectangleF(x + 3, top, 150, TextSize + 6), brush);
+			float top = item.Above ? y - TextSize - 4 : y + 2;
+			DxTextFormat format = item.Centered && dxCenteredSmallFormat != null ? dxCenteredSmallFormat : dxSmallFormat;
+			float width = item.Centered ? 180f : 150f;
+			float left = item.Centered ? x - width * 0.5f : x + 3f;
+			RenderTarget.DrawText(item.Text, format, new RectangleF(left, top, width, TextSize + 6), brush);
 		}
 
 		private void RenderDiagnostics(string text)
@@ -2200,6 +2205,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					ParagraphAlignment = ParagraphAlignment.Near,
 					TextAlignment = TextAlignment.Leading
 				};
+				dxCenteredSmallFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, TextFontName,
+					FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8, TextSize - 1))
+				{
+					WordWrapping = WordWrapping.NoWrap,
+					ParagraphAlignment = ParagraphAlignment.Near,
+					TextAlignment = TextAlignment.Center
+				};
 				dxRenderTarget = RenderTarget.NativePointer;
 				dxValid = true;
 			}
@@ -2232,10 +2244,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				for (int i = 0; i < dxStrokes.Length; i++) if (dxStrokes[i] != null) dxStrokes[i].Dispose();
 			if (dxTextFormat != null) dxTextFormat.Dispose();
 			if (dxSmallFormat != null) dxSmallFormat.Dispose();
+			if (dxCenteredSmallFormat != null) dxCenteredSmallFormat.Dispose();
 			dxBrushes = null;
 			dxStrokes = null;
 			dxTextFormat = null;
 			dxSmallFormat = null;
+			dxCenteredSmallFormat = null;
 		}
 		#endregion
 
