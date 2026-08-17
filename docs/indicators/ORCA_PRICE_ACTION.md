@@ -179,8 +179,19 @@ confluence requirement, and weak break-only allowance.
 
 Block display geometry does not change lifecycle logic. The source body is the
 canonical touch area, a close through the source open is mitigation, and the
-full-candle distal extreme controls invalidation. Display can use body, full
-range, or open/body-midpoint lines.
+full-candle distal extreme controls invalidation.
+
+S-OB, C-OB, and PB geometry is capped by `Order Blocks > Extension Bars`, with
+a default of 30 bars measured from the source candle. The cap is visual only:
+touch, mitigation, invalidation, parent linkage, and active-record retention
+continue after the rectangle stops. Rejection Blocks retain their independent
+wick-to-body geometry and are not changed by the Order Block extension setting.
+
+Order Block display modes are Body, Full Range, Open And Midpoint, and Full
+Range With Quadrants. Full Range With Quadrants uses the complete source-candle
+high-to-low range and draws thin dashed lines at 25%, 50%, and 75% of that
+range. The optional Open and Body Midpoint overlays remain independent; when
+enabled in quadrant mode, Body Midpoint may differ from the full-range 50% line.
 
 ## Zone style controls
 
@@ -212,6 +223,11 @@ Fill and border brushes are separate SharpDX resources for each zone type and
 direction. Render snapshots retain only immutable geometry, type, direction,
 and opacity; `OnRender` routes those items to the precreated resources without
 accessing mutable detector collections.
+
+Order Block snapshots also carry the capped endpoint and an immutable quadrant
+flag. `OnRender` calculates the three Y coordinates from the snapshot's full
+range and draws them with the existing dashed stroke resource; it does not read
+the mutable block model.
 
 Pivot labels use a separate centered DirectWrite format that follows the same
 render-target recreation and disposal lifecycle as the other text resources.
@@ -259,7 +275,11 @@ and order-block detector presets remain independent.
 5. Exercise VI Classic/Advanced and true-gap exclusion.
 6. Exercise rejection Strict/Balanced/Aggressive confirmation and failure.
 7. Exercise S-OB, C-OB, PB parent linkage, display modes, mitigation, and
-   invalidation.
+   invalidation. Confirm active and terminal Order Block rectangles stop at the
+   configured 30-bar visual cap while lifecycle changes still occur afterward.
+   In Full Range With Quadrants, confirm dashed lines appear at exactly 25%,
+   50%, and 75% of the source candle's full range for S-OB, C-OB, and PB, but
+   not for Rejection Blocks.
 8. Reload the same history and compare event bars and zone bounds.
 9. Pan and zoom through dense history and inspect labels and zone endpoints.
 10. Change every per-type fill, border, and opacity setting; save an indicator

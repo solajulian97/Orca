@@ -39,7 +39,13 @@ namespace NinjaTrader.NinjaScript
 	public enum OrcaPriceActionPivotImportance { Weak, Standard, Major }
 	public enum OrcaPriceActionRejectionConfirmation { FollowThroughRequired, ImmediateRejection }
 	public enum OrcaPriceActionOrderBlockPreset { Standard, Strict, Broad, Custom }
-	public enum OrcaPriceActionOrderBlockDisplay { Body, FullRange, OpenAndMidpoint }
+	public enum OrcaPriceActionOrderBlockDisplay
+	{
+		Body = 0,
+		FullRange = 1,
+		OpenAndMidpoint = 2,
+		FullRangeWithQuadrants = 3
+	}
 	public enum OrcaPriceActionBlockInvalidation { CloseBeyondDistal, WickBeyondDistal }
 	public enum OrcaPriceActionFvgConfluence { Off, Supporting, Required }
 	public enum OrcaPriceActionDashStyle { Solid, Dash, Dot, DashDot }
@@ -183,6 +189,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public double Open = double.NaN;
 			public double Midpoint = double.NaN;
 			public bool LinesOnly;
+			public bool DrawQuadrants;
 		}
 
 		private sealed class LineRenderItem
@@ -368,6 +375,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				OrderBlockPreset = OrcaPriceActionOrderBlockPreset.Standard;
 				OrderBlockDisplay = OrcaPriceActionOrderBlockDisplay.Body;
+				OrderBlockExtensionBars = 30;
 				OrderBlockInvalidation = OrcaPriceActionBlockInvalidation.CloseBeyondDistal;
 				StructuralObDisplacementAtr = 1.0;
 				ContinuationObDisplacementAtr = 0.75;
@@ -1823,15 +1831,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double lower = block.BodyLower;
 				double upper = block.BodyUpper;
 				bool linesOnly = false;
-				if (block.Type != BlockType.Rejection && OrderBlockDisplay == OrcaPriceActionOrderBlockDisplay.FullRange)
+				bool drawQuadrants = false;
+				bool fullRange = block.Type != BlockType.Rejection
+					&& (OrderBlockDisplay == OrcaPriceActionOrderBlockDisplay.FullRange
+						|| OrderBlockDisplay == OrcaPriceActionOrderBlockDisplay.FullRangeWithQuadrants);
+				if (fullRange)
 				{
 					lower = block.FullLower;
 					upper = block.FullUpper;
+					drawQuadrants = OrderBlockDisplay == OrcaPriceActionOrderBlockDisplay.FullRangeWithQuadrants;
 				}
 				else if (block.Type != BlockType.Rejection && OrderBlockDisplay == OrcaPriceActionOrderBlockDisplay.OpenAndMidpoint)
 					linesOnly = true;
 
-				int end = IsTerminal(block.State) ? Math.Max(block.OriginBar, block.TerminalBar) : CurrentBar;
+				int requestedEnd = IsTerminal(block.State) ? Math.Max(block.OriginBar, block.TerminalBar) : CurrentBar;
+				int end = block.Type == BlockType.Rejection ? requestedEnd
+					: CapOrderBlockEndBar(block.OriginBar, requestedEnd, OrderBlockExtensionBars);
 				string label = block.Type == BlockType.Rejection ? "RB"
 					: block.Type == BlockType.StructuralOrderBlock ? "S-OB"
 					: block.Type == BlockType.ContinuationOrderBlock ? "C-OB" : "PB";
@@ -1845,6 +1860,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				item.Open = block.Open;
 				item.Midpoint = (block.BodyLower + block.BodyUpper) * 0.5;
 				item.LinesOnly = linesOnly;
+				item.DrawQuadrants = drawQuadrants;
 				item.DashStyle = block.Type == BlockType.ContinuationOrderBlock
 					? OrcaPriceActionDashStyle.Dash : OrcaPriceActionDashStyle.Solid;
 				item.LineWidth = block.Type == BlockType.PropulsionBlock ? 2.5f
@@ -2126,6 +2142,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			bool isOrderBlock = item.Type == ZoneVisualType.StructuralOb
 				|| item.Type == ZoneVisualType.ContinuationOb || item.Type == ZoneVisualType.Propulsion;
+			if (isOrderBlock && item.DrawQuadrants)
+			{
+				for (int quadrant = 1; quadrant <= 3; quadrant++)
+				{
+					double price = GetOrderBlockQuadrantPrice(item.Lower, item.Upper, quadrant);
+					float y = chartScale.GetYByValue(price);
+					RenderTarget.DrawLine(new Vector2(startX, y), new Vector2(endX, y), borderBrush,
+						1f, GetStroke(OrcaPriceActionDashStyle.Dash));
+				}
+			}
 			bool drawOpen = isOrderBlock && (item.LinesOnly || ShowOrderBlockOpen);
 			bool drawMidpoint = isOrderBlock && (item.LinesOnly || ShowOrderBlockMidpoint);
 			if (drawOpen && IsFinite(item.Open))
@@ -2389,6 +2415,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int safeRequested = Math.Max(safeConfirmation, requestedEndBar);
 			long maximumEnd = (long)safeConfirmation + Math.Max(1, extensionBars);
 			return (int)Math.Min(safeRequested, Math.Min(int.MaxValue, maximumEnd));
+		}
+
+		internal static int CapOrderBlockEndBar(int originBar, int requestedEndBar, int extensionBars)
+		{
+			return CapFvgEndBar(originBar, requestedEndBar, extensionBars);
+		}
+
+		internal static double GetOrderBlockQuadrantPrice(double lower, double upper, int quadrant)
+		{
+			int safeQuadrant = Math.Max(1, Math.Min(3, quadrant));
+			return lower + (upper - lower) * safeQuadrant * 0.25;
 		}
 
 		internal static int ClassifyVolumeImbalance(
@@ -2783,65 +2820,70 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public OrcaPriceActionOrderBlockDisplay OrderBlockDisplay { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Invalidation", Order = 3, GroupName = "08. Order Blocks")]
+		[Range(1, 10000)]
+		[Display(Name = "Extension Bars", Order = 3, GroupName = "08. Order Blocks")]
+		public int OrderBlockExtensionBars { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Invalidation", Order = 4, GroupName = "08. Order Blocks")]
 		public OrcaPriceActionBlockInvalidation OrderBlockInvalidation { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.0, 20.0)]
-		[Display(Name = "S-OB Displacement ATR", Order = 4, GroupName = "08. Order Blocks")]
+		[Display(Name = "S-OB Displacement ATR", Order = 5, GroupName = "08. Order Blocks")]
 		public double StructuralObDisplacementAtr { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.0, 20.0)]
-		[Display(Name = "C-OB Displacement ATR", Order = 5, GroupName = "08. Order Blocks")]
+		[Display(Name = "C-OB Displacement ATR", Order = 6, GroupName = "08. Order Blocks")]
 		public double ContinuationObDisplacementAtr { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.0, 20.0)]
-		[Display(Name = "PB Displacement ATR", Order = 6, GroupName = "08. Order Blocks")]
+		[Display(Name = "PB Displacement ATR", Order = 7, GroupName = "08. Order Blocks")]
 		public double PropulsionDisplacementAtr { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 100)]
-		[Display(Name = "S-OB Window", Order = 7, GroupName = "08. Order Blocks")]
+		[Display(Name = "S-OB Window", Order = 8, GroupName = "08. Order Blocks")]
 		public int StructuralObWindow { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 100)]
-		[Display(Name = "C-OB Window", Order = 8, GroupName = "08. Order Blocks")]
+		[Display(Name = "C-OB Window", Order = 9, GroupName = "08. Order Blocks")]
 		public int ContinuationObWindow { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 100)]
-		[Display(Name = "PB Window", Order = 9, GroupName = "08. Order Blocks")]
+		[Display(Name = "PB Window", Order = 10, GroupName = "08. Order Blocks")]
 		public int PropulsionWindow { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "S-OB FVG Mode", Order = 10, GroupName = "08. Order Blocks")]
+		[Display(Name = "S-OB FVG Mode", Order = 11, GroupName = "08. Order Blocks")]
 		public OrcaPriceActionFvgConfluence StructuralObFvgMode { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "C-OB FVG Mode", Order = 11, GroupName = "08. Order Blocks")]
+		[Display(Name = "C-OB FVG Mode", Order = 12, GroupName = "08. Order Blocks")]
 		public OrcaPriceActionFvgConfluence ContinuationObFvgMode { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "PB FVG Mode", Order = 12, GroupName = "08. Order Blocks")]
+		[Display(Name = "PB FVG Mode", Order = 13, GroupName = "08. Order Blocks")]
 		public OrcaPriceActionFvgConfluence PropulsionFvgMode { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Break-Only Weak Blocks", Order = 13, GroupName = "08. Order Blocks")]
+		[Display(Name = "Enable Break-Only Weak Blocks", Order = 14, GroupName = "08. Order Blocks")]
 		public bool EnableBreakOnlyBlocks { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Require PB Parent Mean Hold", Order = 14, GroupName = "08. Order Blocks")]
+		[Display(Name = "Require PB Parent Mean Hold", Order = 15, GroupName = "08. Order Blocks")]
 		public bool RequirePropulsionMeanHold { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Open", Order = 15, GroupName = "08. Order Blocks")]
+		[Display(Name = "Show Open", Order = 16, GroupName = "08. Order Blocks")]
 		public bool ShowOrderBlockOpen { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Body Midpoint", Order = 16, GroupName = "08. Order Blocks")]
+		[Display(Name = "Show Body Midpoint", Order = 17, GroupName = "08. Order Blocks")]
 		public bool ShowOrderBlockMidpoint { get; set; }
 		#endregion
 
