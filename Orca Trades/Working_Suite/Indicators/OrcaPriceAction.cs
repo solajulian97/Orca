@@ -33,6 +33,7 @@ namespace NinjaTrader.NinjaScript
 	public enum OrcaPriceActionTimedPeriod { Minutes15, Minutes30, Hour1, Hours4 }
 	public enum OrcaPriceActionTimedExtension { UntilPeriodEnd, UntilFilled }
 	public enum OrcaPriceActionVolumeImbalanceMode { Classic, Advanced }
+	public enum OrcaPriceActionSweepQuality { QualifiedLiquidity, MajorOnly, AllConfirmedPivots }
 	public enum OrcaPriceActionRejectionPreset { Strict, Balanced, Aggressive, Custom }
 	public enum OrcaPriceActionLiquidityScope { ProtectedExternalOnly, ExternalAndInternal, AnyConfirmed }
 	public enum OrcaPriceActionPivotImportance { Weak, Standard, Major }
@@ -82,7 +83,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public OrcaPriceActionPivotImportance Importance;
 			public bool Broken;
 			public int BreakBar = -1;
-			public int LastSweepBar = -1;
+			public int LastVisibleSweepBar = -1;
 		}
 
 		private sealed class StructureEventModel
@@ -97,6 +98,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public PivotScope Scope;
 			public string PivotId = string.Empty;
 			public string Text = string.Empty;
+			public bool DisplayLabel = true;
 		}
 
 		private sealed class FvgModel
@@ -348,6 +350,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowBos = true;
 				ShowChoch = true;
 				ShowLiquiditySweeps = true;
+				SweepQuality = OrcaPriceActionSweepQuality.QualifiedLiquidity;
+				MinimumSweepPenetrationTicks = 1;
+				MinimumSweepRestingBars = 3;
 				SweepLabelWindowBars = 5;
 				ShowProtectedLevels = true;
 				ShowDetailedRoleBadges = false;
@@ -675,27 +680,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double high = GetHighAtBar(barIndex);
 			double low = GetLowAtBar(barIndex);
 			double close = GetCloseAtBar(barIndex);
-			double breakBuffer = Math.Max(0, StructureBreakBufferTicks) * TickSize;
+			double minimumPenetration = Math.Max(0, MinimumSweepPenetrationTicks) * TickSize;
 
 			PivotModel sweptHigh = pivots
-				.Where(p => p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex && p.LastSweepBar != barIndex
-					&& high > p.Price && close <= p.Price + breakBuffer)
+				.Where(p => p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex
+					&& IsVisibleSweepPivotEligible(p)
+					&& IsSweepTimingEligible(p.ConfirmationBar, p.LastVisibleSweepBar, barIndex,
+						MinimumSweepRestingBars, SweepLabelWindowBars)
+					&& IsSweepPriceAction(high, close, p.Price, minimumPenetration, -1))
 				.OrderBy(p => Math.Abs(high - p.Price)).ThenByDescending(p => p.PivotBar).FirstOrDefault();
 			PivotModel sweptLow = pivots
-				.Where(p => !p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex && p.LastSweepBar != barIndex
-					&& low < p.Price && close >= p.Price - breakBuffer)
+				.Where(p => !p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex
+					&& IsVisibleSweepPivotEligible(p)
+					&& IsSweepTimingEligible(p.ConfirmationBar, p.LastVisibleSweepBar, barIndex,
+						MinimumSweepRestingBars, SweepLabelWindowBars)
+					&& IsSweepPriceAction(low, close, p.Price, minimumPenetration, 1))
 				.OrderBy(p => Math.Abs(low - p.Price)).ThenByDescending(p => p.PivotBar).FirstOrDefault();
 
 			if (sweptHigh != null)
-				result.Add(RecordSweep(sweptHigh, barIndex, Direction.Bearish));
+				result.Add(RecordSweep(sweptHigh, barIndex, Direction.Bearish, true));
 			if (sweptLow != null)
-				result.Add(RecordSweep(sweptLow, barIndex, Direction.Bullish));
+				result.Add(RecordSweep(sweptLow, barIndex, Direction.Bullish, true));
 			return result;
 		}
 
-		private StructureEventModel RecordSweep(PivotModel pivot, int barIndex, Direction direction)
+		private bool IsVisibleSweepPivotEligible(PivotModel pivot)
 		{
-			pivot.LastSweepBar = barIndex;
+			return pivot != null && IsSweepPivotEligible(SweepQuality, pivot.Importance,
+				pivot.Scope == PivotScope.External, pivot.Protection == PivotProtection.Protected,
+				pivot.Function == PivotFunction.Sponsor, pivot.Target == PivotTarget.ActiveTrendTarget);
+		}
+
+		private StructureEventModel RecordSweep(PivotModel pivot, int barIndex, Direction direction,
+			bool displayLabel)
+		{
+			if (displayLabel)
+				pivot.LastVisibleSweepBar = barIndex;
 			StructureEventModel model = new StructureEventModel
 			{
 				Id = NextId("SWP"),
@@ -707,7 +727,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Direction = direction,
 				Scope = pivot.Scope,
 				PivotId = pivot.Id,
-				Text = "Sweep"
+				Text = "Sweep",
+				DisplayLabel = displayLabel
 			};
 			structureEvents.Add(model);
 			return model;
@@ -1141,7 +1162,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (eligible != null)
 				{
 					StructureEventModel extra = RecordSweep(eligible, barIndex,
-						highSide ? Direction.Bearish : Direction.Bullish);
+						highSide ? Direction.Bearish : Direction.Bullish, false);
 					rejectionSweeps.Add(extra);
 					sweptPivotIds.Add(eligible.Id);
 				}
@@ -1938,7 +1959,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						pendingBullishSweep = null;
 					}
 				}
-				else if (model.Type == StructureEventType.Sweep && ShowLiquiditySweeps)
+				else if (model.Type == StructureEventType.Sweep && model.DisplayLabel && ShowLiquiditySweeps)
 				{
 					if (model.Direction == Direction.Bullish)
 					{
@@ -2404,6 +2425,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 				&& currentBar - previousBar <= Math.Max(1, windowBars);
 		}
 
+		internal static bool IsSweepPivotEligible(OrcaPriceActionSweepQuality quality,
+			OrcaPriceActionPivotImportance importance, bool isExternal, bool isProtected,
+			bool isSponsor, bool isActiveTarget)
+		{
+			if (quality == OrcaPriceActionSweepQuality.AllConfirmedPivots)
+				return true;
+			if (quality == OrcaPriceActionSweepQuality.MajorOnly)
+				return isProtected || isSponsor
+					|| (isExternal && importance == OrcaPriceActionPivotImportance.Major);
+			return importance >= OrcaPriceActionPivotImportance.Standard
+				&& (isExternal || isProtected || isSponsor || isActiveTarget);
+		}
+
+		internal static bool IsSweepTimingEligible(int confirmationBar, int lastVisibleSweepBar,
+			int currentBar, int minimumRestingBars, int episodeWindowBars)
+		{
+			if (currentBar <= confirmationBar
+				|| currentBar - confirmationBar < Math.Max(0, minimumRestingBars))
+				return false;
+			return lastVisibleSweepBar < 0
+				|| (currentBar > lastVisibleSweepBar
+					&& currentBar - lastVisibleSweepBar <= Math.Max(1, episodeWindowBars));
+		}
+
+		internal static bool IsSweepPriceAction(double extreme, double close, double level,
+			double minimumPenetration, int direction)
+		{
+			double penetration = Math.Max(0, minimumPenetration);
+			if (direction < 0)
+				return extreme > level && extreme + 1e-10 >= level + penetration && close <= level;
+			return direction > 0 && extreme < level
+				&& extreme - 1e-10 <= level - penetration && close >= level;
+		}
+
 		private Direction CandleDirection(int barIndex)
 		{
 			double open = GetOpenAtBar(barIndex);
@@ -2654,16 +2709,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool ShowLiquiditySweeps { get; set; }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Sweep Quality", Order = 6, GroupName = "06. Market Structure")]
+		public OrcaPriceActionSweepQuality SweepQuality { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Minimum Sweep Penetration (Ticks)", Order = 7, GroupName = "06. Market Structure")]
+		public int MinimumSweepPenetrationTicks { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Minimum Resting Bars", Order = 8, GroupName = "06. Market Structure")]
+		public int MinimumSweepRestingBars { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(1, 100)]
-		[Display(Name = "Sweep Label Window Bars", Order = 6, GroupName = "06. Market Structure")]
+		[Display(Name = "Sweep Label Window Bars", Order = 9, GroupName = "06. Market Structure")]
 		public int SweepLabelWindowBars { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Protected Levels", Order = 7, GroupName = "06. Market Structure")]
+		[Display(Name = "Show Protected Levels", Order = 10, GroupName = "06. Market Structure")]
 		public bool ShowProtectedLevels { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Detailed Role Badges", Order = 8, GroupName = "06. Market Structure")]
+		[Display(Name = "Show Detailed Role Badges", Order = 11, GroupName = "06. Market Structure")]
 		public bool ShowDetailedRoleBadges { get; set; }
 		#endregion
 

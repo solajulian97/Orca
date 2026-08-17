@@ -127,13 +127,32 @@ over the actual protected high candle and `Protected Low` under the actual
 protected low candle. The text is offset by one row away from the wick so the
 existing HH/LH/HL/LL relation label remains readable at the same pivot.
 
-Visible sweep labels use independent rolling episodes for high-side and
-low-side sweeps. A same-side resweep within `Sweep Label Window Bars` replaces
-the pending label, so the episode displays only its latest sweep. The default
-window is five bars. The label is centered at the latest sweep candle's actual
-wick extreme. A gap beyond the window or a close-confirmed break through that
-side ends the episode. The underlying sweep events remain available to
-rejection-block logic.
+Visible sweeps use a separate quality filter so reducing sweep noise does not
+change pivot, BOS, or CHoCH sensitivity. `Sweep Quality` provides:
+
+- `Qualified Liquidity` (default): the pivot must be Standard or Major and must
+  also be External, Protected, Sponsor, or the active trend-side target;
+- `Major Only`: only Protected pivots, Sponsors, or External Major pivots; and
+- `All Confirmed Pivots`: every confirmed, unbroken pivot, subject to the
+  independent penetration and resting controls.
+
+The default visible sweep must penetrate the pivot by at least one tick, close
+back inside the actual level, and occur at least three bars after pivot
+confirmation. `Minimum Sweep Penetration (Ticks)` and `Minimum Resting Bars`
+can be set to zero, but an actual wick violation and completed close back inside
+are still required. Structure break-buffer tolerance does not loosen the sweep
+close-back-inside rule.
+
+Each liquidity level receives one visible rolling episode. Resweeps inside
+`Sweep Label Window Bars` move that level's event to the latest sweep; once the
+window expires, that already-swept level is display-consumed. High-side and
+low-side labels are still coalesced independently, so distinct same-side levels
+swept close together publish only the latest label. The default window is five
+bars, and each label is centered at the displayed sweep candle's wick extreme.
+
+Rejection Blocks retain their own preset-driven liquidity checks. Additional
+sweep events discovered only for rejection-block qualification remain internal
+and do not automatically publish visible `Sweep` text.
 
 Each pivot stores independent Scope, Function, Protection, Target, and
 Importance dimensions plus its ATR-normalized confirmation reversal. Equal
@@ -229,6 +248,10 @@ and order-block detector presets remain independent.
    centered below their pivot wick without appearing before confirmation.
    Confirm repeated same-side sweeps inside the configured window show only one
    label on the latest resweep wick.
+   Exercise all three Sweep Quality modes. Confirm the default rejects Weak and
+   ordinary Internal pivots, respects one-tick penetration and three resting
+   bars, consumes a level after its episode, and does not print rejection-only
+   sweep events.
    Confirm protected labels are centered on the actual protected pivot, not the
    current endpoint, and that wick/equal-close tests do not create CHoCH.
 4. Exercise FVG partial fill, Two-Tone, completion, iFVG conversion, first-hour,
