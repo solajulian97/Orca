@@ -104,10 +104,13 @@ above the wick and low labels sit just below it. This is a render-anchor choice:
 the label does not exist until the configured right-side confirmation bars have
 closed.
 
-Visible sweep labels are clustered independently by direction. Sweeps within
-`Pivot Strength` bars (minimum two) and within the greater of four ticks or 5%
-of ATR are represented by one label until the cluster separates in time or
-price. The underlying sweep events remain available to rejection-block logic.
+Visible sweep labels use independent rolling episodes for high-side and
+low-side sweeps. A same-side resweep within `Sweep Label Window Bars` replaces
+the pending label, so the episode displays only its latest sweep. The default
+window is five bars. The label is centered at the latest sweep candle's actual
+wick extreme. A gap beyond the window or a close-confirmed break through that
+side ends the episode. The underlying sweep events remain available to
+rejection-block logic.
 
 Each pivot stores independent Scope, Function, Protection, Target, and
 Importance dimensions plus its ATR-normalized confirmation reversal. Equal
@@ -199,6 +202,8 @@ and order-block detector presets remain independent.
 3. Verify close-confirmed pivot, BOS, CHoCH, protected-level, and sweep timing.
    Confirm HH/LH labels are centered above their pivot wick and HL/LL labels are
    centered below their pivot wick without appearing before confirmation.
+   Confirm repeated same-side sweeps inside the configured window show only one
+   label on the latest resweep wick.
 4. Exercise FVG partial fill, Two-Tone, completion, iFVG conversion, first-hour,
    and first-RTH behavior.
 5. Exercise VI Classic/Advanced and true-gap exclusion.

@@ -347,6 +347,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowBos = true;
 				ShowChoch = true;
 				ShowLiquiditySweeps = true;
+				SweepLabelWindowBars = 5;
 				ShowProtectedLevels = true;
 				ShowDetailedRoleBadges = false;
 
@@ -1888,8 +1889,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (!ShowStructure)
 				return;
-			StructureEventModel lastBullishSweepLabel = null;
-			StructureEventModel lastBearishSweepLabel = null;
+			StructureEventModel pendingBullishSweep = null;
+			StructureEventModel pendingBearishSweep = null;
 			for (int i = 0; i < structureEvents.Count; i++)
 			{
 				StructureEventModel model = structureEvents[i];
@@ -1909,39 +1910,48 @@ namespace NinjaTrader.NinjaScript.Indicators
 						Type = LabelVisualType.Structure, Above = pivot.IsHigh, Centered = true
 					});
 				}
-				else if (model.Type == StructureEventType.Bos && ShowBos
-					|| model.Type == StructureEventType.Choch && ShowChoch)
+				else if (model.Type == StructureEventType.Bos || model.Type == StructureEventType.Choch)
 				{
-					lines.Add(new LineRenderItem
+					bool showBreak = model.Type == StructureEventType.Bos ? ShowBos : ShowChoch;
+					if (showBreak)
 					{
-						StartBar = model.OriginBar, EndBar = model.BarIndex, Price = model.Price,
-						Direction = model.Direction,
-						DashStyle = model.Type == StructureEventType.Choch
-							? OrcaPriceActionDashStyle.Solid : OrcaPriceActionDashStyle.Dash,
-						Width = model.Type == StructureEventType.Choch ? 2f : 1f,
-						Label = model.Text
-					});
+						lines.Add(new LineRenderItem
+						{
+							StartBar = model.OriginBar, EndBar = model.BarIndex, Price = model.Price,
+							Direction = model.Direction,
+							DashStyle = model.Type == StructureEventType.Choch
+								? OrcaPriceActionDashStyle.Solid : OrcaPriceActionDashStyle.Dash,
+							Width = model.Type == StructureEventType.Choch ? 2f : 1f,
+							Label = model.Text
+						});
+					}
+					if (model.Direction == Direction.Bullish && pendingBearishSweep != null)
+					{
+						AddSweepRenderLabel(labels, pendingBearishSweep);
+						pendingBearishSweep = null;
+					}
+					else if (model.Direction == Direction.Bearish && pendingBullishSweep != null)
+					{
+						AddSweepRenderLabel(labels, pendingBullishSweep);
+						pendingBullishSweep = null;
+					}
 				}
 				else if (model.Type == StructureEventType.Sweep && ShowLiquiditySweeps)
 				{
-					StructureEventModel previous = model.Direction == Direction.Bullish
-						? lastBullishSweepLabel : lastBearishSweepLabel;
-					int clusterBars = Math.Max(2, PivotStrength);
-					double clusterPrice = Math.Max(TickSize * 4.0, GetAtrAtBar(model.BarIndex) * 0.05);
-					bool sameCluster = previous != null && model.BarIndex - previous.BarIndex <= clusterBars
-						&& Math.Abs(model.Price - previous.Price) <= clusterPrice;
 					if (model.Direction == Direction.Bullish)
-						lastBullishSweepLabel = model;
-					else
-						lastBearishSweepLabel = model;
-					if (sameCluster)
-						continue;
-					labels.Add(new LabelRenderItem
 					{
-						BarIndex = model.BarIndex, Price = model.Price, Text = model.Text,
-						Type = model.Direction == Direction.Bullish ? LabelVisualType.Bullish : LabelVisualType.Bearish,
-						Above = model.Direction == Direction.Bearish
-					});
+						if (pendingBullishSweep != null
+							&& !IsSameSweepEpisode(pendingBullishSweep.BarIndex, model.BarIndex, SweepLabelWindowBars))
+							AddSweepRenderLabel(labels, pendingBullishSweep);
+						pendingBullishSweep = model;
+					}
+					else
+					{
+						if (pendingBearishSweep != null
+							&& !IsSameSweepEpisode(pendingBearishSweep.BarIndex, model.BarIndex, SweepLabelWindowBars))
+							AddSweepRenderLabel(labels, pendingBearishSweep);
+						pendingBearishSweep = model;
+					}
 				}
 				else if (model.Type == StructureEventType.RoleChange && ShowDetailedRoleBadges)
 				{
@@ -1953,12 +1963,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 					});
 				}
 			}
+			if (pendingBullishSweep != null)
+				AddSweepRenderLabel(labels, pendingBullishSweep);
+			if (pendingBearishSweep != null)
+				AddSweepRenderLabel(labels, pendingBearishSweep);
 
 			if (ShowProtectedLevels)
 			{
 				AddProtectedLine(lines, FindPivot(protectedLowId), Direction.Bullish);
 				AddProtectedLine(lines, FindPivot(protectedHighId), Direction.Bearish);
 			}
+		}
+
+		private void AddSweepRenderLabel(List<LabelRenderItem> labels, StructureEventModel model)
+		{
+			if (model == null)
+				return;
+			bool sweptHigh = model.Direction == Direction.Bearish;
+			labels.Add(new LabelRenderItem
+			{
+				BarIndex = model.BarIndex,
+				Price = sweptHigh ? GetHighAtBar(model.BarIndex) : GetLowAtBar(model.BarIndex),
+				Text = model.Text,
+				Type = model.Direction == Direction.Bullish ? LabelVisualType.Bullish : LabelVisualType.Bearish,
+				Above = sweptHigh,
+				Centered = true
+			});
 		}
 
 		private string InitialPivotRoleBadge(PivotModel pivot)
@@ -2345,6 +2375,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				: direction < 0 && close < level - Math.Max(0, buffer);
 		}
 
+		internal static bool IsSameSweepEpisode(int previousBar, int currentBar, int windowBars)
+		{
+			return previousBar >= 0 && currentBar >= previousBar
+				&& currentBar - previousBar <= Math.Max(1, windowBars);
+		}
+
 		private Direction CandleDirection(int barIndex)
 		{
 			double open = GetOpenAtBar(barIndex);
@@ -2595,11 +2631,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool ShowLiquiditySweeps { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Protected Levels", Order = 6, GroupName = "06. Market Structure")]
+		[Range(1, 100)]
+		[Display(Name = "Sweep Label Window Bars", Order = 6, GroupName = "06. Market Structure")]
+		public int SweepLabelWindowBars { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Protected Levels", Order = 7, GroupName = "06. Market Structure")]
 		public bool ShowProtectedLevels { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Detailed Role Badges", Order = 7, GroupName = "06. Market Structure")]
+		[Display(Name = "Show Detailed Role Badges", Order = 8, GroupName = "06. Market Structure")]
 		public bool ShowDetailedRoleBadges { get; set; }
 		#endregion
 
