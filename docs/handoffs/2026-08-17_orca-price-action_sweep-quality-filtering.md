@@ -111,7 +111,13 @@ No post-change NinjaTrader chart test has been performed yet.
 
 ## Deployment status
 
-Pending targeted `OrcaPriceAction` deployment.
+- `deploy_orca.ps1 -Target OrcaPriceAction -DryRun`: passed and resolved one
+  live indicator target.
+- `deploy_orca.ps1 -Target OrcaPriceAction`: completed successfully.
+- Working_Suite versus live NinjaTrader authored-source parity: passed. The
+  deployed copy contains the quality enum/default, one-tick and three-bar
+  defaults, and visible-event flagging.
+- No other target was deployed.
 
 ## Manual-validation status
 
