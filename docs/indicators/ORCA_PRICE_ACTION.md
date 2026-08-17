@@ -80,6 +80,17 @@ eligible confirmed low to Sponsor, Protected, External, and Major; bearish
 behavior mirrors this. Only a close through the protected boundary creates
 CHoCH/MSS.
 
+One close can cross several older pivot levels, but Orca publishes at most two
+structure events for that impulse: the most recent eligible Internal pivot and
+the most recent External or Protected pivot. Protected liquidity takes priority
+within its scope. Other crossed pivots are retired silently, preventing stale
+BOS lines from reaching far back into prior legs or printing on later bars.
+
+Visible sweep labels are clustered independently by direction. Sweeps within
+`Pivot Strength` bars (minimum two) and within the greater of four ticks or 5%
+of ATR are represented by one label until the cluster separates in time or
+price. The underlying sweep events remain available to rejection-block logic.
+
 Each pivot stores independent Scope, Function, Protection, Target, and
 Importance dimensions plus its ATR-normalized confirmation reversal. Equal
 price clusters keep the earliest pivot as the canonical level.

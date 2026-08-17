@@ -656,26 +656,48 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double close = GetCloseAtBar(barIndex);
 			double buffer = Math.Max(0, StructureBreakBufferTicks) * TickSize;
 			List<PivotModel> bullishBreaks = pivots
-				.Where(p => p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex && IsStrictBreak(close, p.Price, buffer, 1))
-				.OrderBy(p => p.Price).ToList();
+				.Where(p => p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex
+					&& IsStrictBreak(close, p.Price, buffer, 1)).ToList();
 			List<PivotModel> bearishBreaks = pivots
-				.Where(p => !p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex && IsStrictBreak(close, p.Price, buffer, -1))
-				.OrderByDescending(p => p.Price).ToList();
+				.Where(p => !p.IsHigh && !p.Broken && p.ConfirmationBar < barIndex
+					&& IsStrictBreak(close, p.Price, buffer, -1)).ToList();
 
 			Direction breakDirection = bullishBreaks.Count > 0 ? Direction.Bullish
 				: bearishBreaks.Count > 0 ? Direction.Bearish : Direction.None;
-			List<PivotModel> broken = breakDirection == Direction.Bullish ? bullishBreaks : bearishBreaks;
-			for (int i = 0; i < broken.Count; i++)
+			List<PivotModel> crossed = breakDirection == Direction.Bullish ? bullishBreaks : bearishBreaks;
+			if (crossed.Count == 0)
+				return result;
+
+			// One impulse may break many stale pivots. Retire every crossed level,
+			// but publish only the nearest current pivot at each supported scope:
+			// one internal leg and one external/protected parent leg.
+			List<PivotModel> publishedPivots = new List<PivotModel>(2);
+			PivotModel internalPivot = crossed.Where(p => p.Scope == PivotScope.Internal)
+				.OrderByDescending(p => p.Protection == PivotProtection.Protected)
+				.ThenByDescending(p => p.PivotBar).FirstOrDefault();
+			PivotModel externalPivot = crossed.Where(p => p.Scope == PivotScope.External)
+				.OrderByDescending(p => p.Protection == PivotProtection.Protected)
+				.ThenByDescending(p => p.PivotBar).FirstOrDefault();
+			if (internalPivot != null)
+				publishedPivots.Add(internalPivot);
+			if (externalPivot != null && (internalPivot == null || externalPivot.Id != internalPivot.Id))
+				publishedPivots.Add(externalPivot);
+
+			HashSet<string> publishedIds = new HashSet<string>(publishedPivots.Select(p => p.Id));
+			for (int i = 0; i < crossed.Count; i++)
 			{
-				PivotModel pivot = broken[i];
-				bool choch = pivot.Protection == PivotProtection.Protected
-					&& ((breakDirection == Direction.Bullish && trendDirection == Direction.Bearish)
-						|| (breakDirection == Direction.Bearish && trendDirection == Direction.Bullish));
+				PivotModel pivot = crossed[i];
 				pivot.Broken = true;
 				pivot.BreakBar = barIndex;
 				pivot.Target = PivotTarget.Inactive;
 				if (pivot.Id == activeTargetId)
 					activeTargetId = string.Empty;
+				if (!publishedIds.Contains(pivot.Id))
+					continue;
+
+				bool choch = pivot.Protection == PivotProtection.Protected
+					&& ((breakDirection == Direction.Bullish && trendDirection == Direction.Bearish)
+						|| (breakDirection == Direction.Bearish && trendDirection == Direction.Bullish));
 				if (choch)
 				{
 					pivot.Protection = PivotProtection.Unprotected;
@@ -1749,6 +1771,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (!ShowStructure)
 				return;
+			StructureEventModel lastBullishSweepLabel = null;
+			StructureEventModel lastBearishSweepLabel = null;
 			for (int i = 0; i < structureEvents.Count; i++)
 			{
 				StructureEventModel model = structureEvents[i];
@@ -1783,6 +1807,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				else if (model.Type == StructureEventType.Sweep && ShowLiquiditySweeps)
 				{
+					StructureEventModel previous = model.Direction == Direction.Bullish
+						? lastBullishSweepLabel : lastBearishSweepLabel;
+					int clusterBars = Math.Max(2, PivotStrength);
+					double clusterPrice = Math.Max(TickSize * 4.0, GetAtrAtBar(model.BarIndex) * 0.05);
+					bool sameCluster = previous != null && model.BarIndex - previous.BarIndex <= clusterBars
+						&& Math.Abs(model.Price - previous.Price) <= clusterPrice;
+					if (model.Direction == Direction.Bullish)
+						lastBullishSweepLabel = model;
+					else
+						lastBearishSweepLabel = model;
+					if (sameCluster)
+						continue;
 					labels.Add(new LabelRenderItem
 					{
 						BarIndex = model.BarIndex, Price = model.Price, Text = model.Text,
