@@ -202,6 +202,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public LabelVisualType Type;
 			public bool Above;
 			public bool Centered;
+			public float PixelOffsetY;
 		}
 
 		private sealed class RenderSnapshot
@@ -1971,8 +1972,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (ShowProtectedLevels)
 			{
-				AddProtectedLine(lines, FindPivot(protectedLowId), Direction.Bullish);
-				AddProtectedLine(lines, FindPivot(protectedHighId), Direction.Bearish);
+				PivotModel protectedLow = FindPivot(protectedLowId);
+				PivotModel protectedHigh = FindPivot(protectedHighId);
+				AddProtectedLine(lines, protectedLow, Direction.Bullish);
+				AddProtectedLabel(labels, protectedLow, Direction.Bullish);
+				AddProtectedLine(lines, protectedHigh, Direction.Bearish);
+				AddProtectedLabel(labels, protectedHigh, Direction.Bearish);
 			}
 		}
 
@@ -2010,7 +2015,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				StartBar = start, EndBar = CurrentBar, Price = pivot.Price, Direction = direction,
 				DashStyle = OrcaPriceActionDashStyle.Dot, Width = 1f,
-				Label = direction == Direction.Bullish ? "Protected Low" : "Protected High"
+				Label = string.Empty
+			});
+		}
+
+		private void AddProtectedLabel(List<LabelRenderItem> labels, PivotModel pivot, Direction direction)
+		{
+			if (pivot == null || pivot.Protection != PivotProtection.Protected)
+				return;
+			bool isHigh = direction == Direction.Bearish;
+			labels.Add(new LabelRenderItem
+			{
+				BarIndex = pivot.PivotBar,
+				Price = pivot.Price,
+				Text = isHigh ? "Protected High" : "Protected Low",
+				Type = isHigh ? LabelVisualType.Bearish : LabelVisualType.Bullish,
+				Above = isHigh,
+				Centered = true,
+				PixelOffsetY = isHigh ? -(TextSize + 4f) : TextSize + 4f
 			});
 		}
 		#endregion
@@ -2129,7 +2151,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DxSolidBrush brush = item.Type == LabelVisualType.Bullish ? dxBrushes[BrushBull]
 				: item.Type == LabelVisualType.Bearish ? dxBrushes[BrushBear]
 				: item.Type == LabelVisualType.Structure ? dxBrushes[BrushStructure] : dxBrushes[BrushNeutral];
-			float top = item.Above ? y - TextSize - 4 : y + 2;
+			float top = (item.Above ? y - TextSize - 4 : y + 2) + item.PixelOffsetY;
 			DxTextFormat format = item.Centered && dxCenteredSmallFormat != null ? dxCenteredSmallFormat : dxSmallFormat;
 			float width = item.Centered ? 180f : 150f;
 			float left = item.Centered ? x - width * 0.5f : x + 3f;

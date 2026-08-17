@@ -100,7 +100,9 @@ Structure breaks require a strict close beyond the pivot plus the configured
 tick buffer. Wick-only violations are sweeps. Bullish BOS promotes the latest
 eligible confirmed low to Sponsor, Protected, External, and Major; bearish
 behavior mirrors this. Only a close through the protected boundary creates
-CHoCH/MSS.
+CHoCH/MSS. In a bearish trend, a strict completed close above the active
+protected high is bullish CHoCH; in a bullish trend, a strict completed close
+below the active protected low is bearish CHoCH. Equal closes are not breaks.
 
 The newest BOS-eligible pivot on the crossed side is the immediate structure
 level and is the only level that can publish BOS. A distinct protected boundary
@@ -118,6 +120,12 @@ The label is horizontally centered on the pivot candle. High labels sit just
 above the wick and low labels sit just below it. This is a render-anchor choice:
 the label does not exist until the configured right-side confirmation bars have
 closed.
+
+Protected-level dotted lines retain their effective promotion-to-current span,
+but their text is not placed at the line endpoint. `Protected High` is centered
+over the actual protected high candle and `Protected Low` under the actual
+protected low candle. The text is offset by one row away from the wick so the
+existing HH/LH/HL/LL relation label remains readable at the same pivot.
 
 Visible sweep labels use independent rolling episodes for high-side and
 low-side sweeps. A same-side resweep within `Sweep Label Window Bars` replaces
@@ -188,6 +196,8 @@ accessing mutable detector collections.
 
 Pivot labels use a separate centered DirectWrite format that follows the same
 render-target recreation and disposal lifecycle as the other text resources.
+Protected labels use the same centered format and carry only a small immutable
+vertical pixel offset to avoid relation-label overlap.
 
 The default historical discovery window is 3,000 bars. Active records are not
 age-evicted. Terminal records are capped per type, while completed original
@@ -219,6 +229,8 @@ and order-block detector presets remain independent.
    centered below their pivot wick without appearing before confirmation.
    Confirm repeated same-side sweeps inside the configured window show only one
    label on the latest resweep wick.
+   Confirm protected labels are centered on the actual protected pivot, not the
+   current endpoint, and that wick/equal-close tests do not create CHoCH.
 4. Exercise FVG partial fill, Two-Tone, completion, iFVG conversion, first-hour,
    and first-RTH behavior.
 5. Exercise VI Classic/Advanced and true-gap exclusion.
