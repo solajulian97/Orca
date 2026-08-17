@@ -1,6 +1,6 @@
 # Orca Price Action
 
-Last updated: 2026-08-15
+Last updated: 2026-08-17
 
 ## Status
 
@@ -11,6 +11,12 @@ The source passes a local .NET Framework semantic compile against the installed
 NinjaTrader assemblies and the current Working_Suite diagnostics source.
 NinjaTrader `F5` compilation and live chart behavior are not yet confirmed.
 The indicator is not eligible for `Full_Suite`.
+
+The 2026-08-17 historical-load fast path defers immutable snapshot publication
+until the historical boundary, skips developing-bar FVG work during historical
+processing, and republishes realtime snapshots only for a completed-bar model
+change or an actual intrabar FVG geometry change. Terminal collections are
+sorted only when their removable record count exceeds the configured cap.
 
 ## Product intent
 
@@ -115,6 +121,13 @@ age-evicted. Terminal records are capped per type, while completed original
 FVGs that can still invert are retained until inversion or feature disablement.
 Diagnostics declare one primary series and report bar-update, model, active
 state, and render timing through the existing Orca diagnostics core.
+
+Historical callbacks before the discovery cutoff do not build render arrays.
+During the discovery window, completed bars update the causal model without
+publishing a full snapshot after every bar. The chart-ready immutable snapshot
+is published at the last historical callback and again on the realtime state
+transition. This preserves the completed-bar model while avoiding historical
+`OnPriceChange` or Tick Replay amplification of render-snapshot allocation.
 
 ## Default presentation
 

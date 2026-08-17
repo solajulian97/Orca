@@ -377,6 +377,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else if (State == State.Historical || State == State.Realtime)
 			{
 				ReportDiagnosticsState();
+				if (State == State.Realtime)
+					PublishRenderSnapshot();
 			}
 			else if (State == State.Terminated)
 			{
@@ -421,6 +423,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			try
 			{
 				bool isNewBar = CurrentBar != lastSeenBar;
+				bool modelChanged = false;
 				if (isNewBar)
 				{
 					lastSeenBar = CurrentBar;
@@ -430,11 +433,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 						? Math.Max(0, Bars.Count - MaximumHistoricalBars - 2)
 						: 0;
 					if (closedBar >= minimum && closedBar >= historicalCutoff)
+					{
 						ProcessClosedBar(closedBar);
+						modelChanged = true;
+					}
 				}
 
-				UpdateIntrabarFvg(CurrentBar);
-				PublishRenderSnapshot();
+				// Historical callbacks need completed-bar model work only. Rebuilding
+				// developing FVG geometry and immutable render arrays on every
+				// OnPriceChange/Tick Replay event adds no historical correctness.
+				if (State == State.Historical)
+				{
+					if (isNewBar && Bars != null && CurrentBar >= Bars.Count - 1)
+						PublishRenderSnapshot();
+					return;
+				}
+
+				bool intrabarFvgChanged = UpdateIntrabarFvg(CurrentBar);
+				if (modelChanged || intrabarFvgChanged)
+					PublishRenderSnapshot();
 			}
 			finally
 			{
@@ -837,19 +854,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void UpdateIntrabarFvg(int barIndex)
+		private bool UpdateIntrabarFvg(int barIndex)
 		{
 			if (!CanReadBar(barIndex))
-				return;
+				return false;
 			double high = GetHighAtBar(barIndex);
 			double low = GetLowAtBar(barIndex);
+			bool changed = false;
 			for (int i = 0; i < fvgs.Count; i++)
 			{
 				FvgModel model = fvgs[i];
 				if (model == null || barIndex <= model.ConfirmationBar || model.State == ZoneState.Invalidated)
 					continue;
+				double oldLower = model.RemainingLower;
+				double oldUpper = model.RemainingUpper;
+				double oldFill = model.FillPercent;
 				ApplyFvgFill(model, barIndex, high, low, false);
+				if (oldLower != model.RemainingLower || oldUpper != model.RemainingUpper || oldFill != model.FillPercent)
+					changed = true;
 			}
+			return changed;
 		}
 
 		private void UpdateExistingFvgs(int barIndex)
@@ -1489,23 +1513,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void PruneTerminalRecords()
 		{
 			int maximum = Math.Max(10, MaximumTerminalRecords);
-			List<FvgModel> removableFvgs = fvgs
-				.Where(f => IsTerminal(f.State) && (f.IsIfvg || f.IfvgCreated || !EnableIfvgConversion))
-				.OrderByDescending(f => f.TerminalBar).Skip(maximum).ToList();
-			for (int i = 0; i < removableFvgs.Count; i++)
-				fvgs.Remove(removableFvgs[i]);
+			int removableFvgCount = fvgs.Count(f => IsTerminal(f.State)
+				&& (f.IsIfvg || f.IfvgCreated || !EnableIfvgConversion));
+			if (removableFvgCount > maximum)
+			{
+				List<FvgModel> removableFvgs = fvgs
+					.Where(f => IsTerminal(f.State) && (f.IsIfvg || f.IfvgCreated || !EnableIfvgConversion))
+					.OrderByDescending(f => f.TerminalBar).Skip(maximum).ToList();
+				for (int i = 0; i < removableFvgs.Count; i++)
+					fvgs.Remove(removableFvgs[i]);
+			}
 
-			List<VolumeImbalanceModel> removableVi = volumeImbalances.Where(v => IsTerminal(v.State))
-				.OrderByDescending(v => v.TerminalBar).Skip(maximum).ToList();
-			for (int i = 0; i < removableVi.Count; i++)
-				volumeImbalances.Remove(removableVi[i]);
+			int removableViCount = volumeImbalances.Count(v => IsTerminal(v.State));
+			if (removableViCount > maximum)
+			{
+				List<VolumeImbalanceModel> removableVi = volumeImbalances.Where(v => IsTerminal(v.State))
+					.OrderByDescending(v => v.TerminalBar).Skip(maximum).ToList();
+				for (int i = 0; i < removableVi.Count; i++)
+					volumeImbalances.Remove(removableVi[i]);
+			}
 
 			foreach (BlockType type in Enum.GetValues(typeof(BlockType)))
 			{
-				List<BlockModel> removable = blocks.Where(b => b.Type == type && IsTerminal(b.State))
-					.OrderByDescending(b => b.TerminalBar).Skip(maximum).ToList();
-				for (int i = 0; i < removable.Count; i++)
-					blocks.Remove(removable[i]);
+				int removableBlockCount = blocks.Count(b => b.Type == type && IsTerminal(b.State));
+				if (removableBlockCount > maximum)
+				{
+					List<BlockModel> removable = blocks.Where(b => b.Type == type && IsTerminal(b.State))
+						.OrderByDescending(b => b.TerminalBar).Skip(maximum).ToList();
+					for (int i = 0; i < removable.Count; i++)
+						blocks.Remove(removable[i]);
+				}
 			}
 
 			int cutoff = Math.Max(0, CurrentBar - Math.Max(500, MaximumHistoricalBars));
