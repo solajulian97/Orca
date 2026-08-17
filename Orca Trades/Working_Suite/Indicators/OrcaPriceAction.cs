@@ -57,8 +57,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private enum ZoneState { Candidate, Confirmed, Fresh, Touched, Mitigated, Completed, Failed, Expired, Invalidated }
 		private enum BlockType { Rejection, StructuralOrderBlock, ContinuationOrderBlock, PropulsionBlock }
 		private enum BlockQuality { Weak, Internal, Standard, Strong }
-		private enum StructureEventType { Pivot, Bos, Choch, Liquidity, Sweep, RoleChange }
-		private enum ZoneVisualType { Fvg, Ifvg, FvgFilled, VolumeImbalance, Rejection, StructuralOb, ContinuationOb, Propulsion }
+		private enum StructureEventType { Pivot, Bos, Choch, Sweep, RoleChange }
+		private enum ZoneVisualType { Fvg, Ifvg, FvgFilled, IfvgFilled, VolumeImbalance, Rejection, StructuralOb, ContinuationOb, Propulsion }
 		private enum LabelVisualType { Structure, Bullish, Bearish, Neutral }
 
 		private sealed class PivotModel
@@ -268,14 +268,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private const int BrushBull = 0;
 		private const int BrushBear = 1;
-		private const int BrushIfvgBull = 2;
-		private const int BrushIfvgBear = 3;
-		private const int BrushStructure = 4;
-		private const int BrushHighlight = 5;
-		private const int BrushText = 6;
-		private const int BrushNeutral = 7;
-		private const int BrushPanel = 8;
-		private const int BrushCount = 9;
+		private const int BrushStructure = 2;
+		private const int BrushHighlight = 3;
+		private const int BrushText = 4;
+		private const int BrushNeutral = 5;
+		private const int BrushPanel = 6;
+		private const int BrushFvgBullFill = 7;
+		private const int BrushFvgBearFill = 8;
+		private const int BrushFvgBullBorder = 9;
+		private const int BrushFvgBearBorder = 10;
+		private const int BrushIfvgBullFill = 11;
+		private const int BrushIfvgBearFill = 12;
+		private const int BrushIfvgBullBorder = 13;
+		private const int BrushIfvgBearBorder = 14;
+		private const int BrushViBullFill = 15;
+		private const int BrushViBearFill = 16;
+		private const int BrushViBullBorder = 17;
+		private const int BrushViBearBorder = 18;
+		private const int BrushRejectionBullFill = 19;
+		private const int BrushRejectionBearFill = 20;
+		private const int BrushRejectionBullBorder = 21;
+		private const int BrushRejectionBearBorder = 22;
+		private const int BrushStructuralObBullFill = 23;
+		private const int BrushStructuralObBearFill = 24;
+		private const int BrushStructuralObBullBorder = 25;
+		private const int BrushStructuralObBearBorder = 26;
+		private const int BrushContinuationObBullFill = 27;
+		private const int BrushContinuationObBearFill = 28;
+		private const int BrushContinuationObBullBorder = 29;
+		private const int BrushContinuationObBearBorder = 30;
+		private const int BrushPropulsionBullFill = 31;
+		private const int BrushPropulsionBearFill = 32;
+		private const int BrushPropulsionBullBorder = 33;
+		private const int BrushPropulsionBearBorder = 34;
+		private const int BrushCount = 35;
 		#endregion
 
 		#region State and update loop
@@ -348,19 +374,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowOrderBlockOpen = false;
 				ShowOrderBlockMidpoint = false;
 
-				ActiveZoneOpacity = 30;
 				FilledZoneOpacity = 10;
 				CompletedZoneOpacity = 12;
-				BlockOpacity = 24;
 				TextSize = 10;
 				TextFontName = "Segoe UI";
 				BullishColor = WpfBrushes.MediumSeaGreen;
 				BearishColor = WpfBrushes.IndianRed;
-				BullishIfvgColor = WpfBrushes.DodgerBlue;
-				BearishIfvgColor = WpfBrushes.DarkOrange;
 				StructureColor = WpfBrushes.SlateGray;
 				HighlightColor = WpfBrushes.Gold;
 				TextColor = WpfBrushes.WhiteSmoke;
+				BullishFvgFillColor = WpfBrushes.MediumSeaGreen;
+				BearishFvgFillColor = WpfBrushes.IndianRed;
+				BullishFvgBorderColor = WpfBrushes.MediumSeaGreen;
+				BearishFvgBorderColor = WpfBrushes.IndianRed;
+				FvgOpacity = 30;
+				BullishIfvgFillColor = WpfBrushes.DodgerBlue;
+				BearishIfvgFillColor = WpfBrushes.DarkOrange;
+				BullishIfvgBorderColor = WpfBrushes.DodgerBlue;
+				BearishIfvgBorderColor = WpfBrushes.DarkOrange;
+				IfvgOpacity = 30;
+				BullishVolumeImbalanceFillColor = WpfBrushes.MediumSeaGreen;
+				BearishVolumeImbalanceFillColor = WpfBrushes.IndianRed;
+				BullishVolumeImbalanceBorderColor = WpfBrushes.MediumSeaGreen;
+				BearishVolumeImbalanceBorderColor = WpfBrushes.IndianRed;
+				VolumeImbalanceOpacity = 30;
+				BullishRejectionBlockFillColor = WpfBrushes.SeaGreen;
+				BearishRejectionBlockFillColor = WpfBrushes.Firebrick;
+				BullishRejectionBlockBorderColor = WpfBrushes.SeaGreen;
+				BearishRejectionBlockBorderColor = WpfBrushes.Firebrick;
+				RejectionBlockOpacity = 24;
+				BullishStructuralObFillColor = WpfBrushes.ForestGreen;
+				BearishStructuralObFillColor = WpfBrushes.Crimson;
+				BullishStructuralObBorderColor = WpfBrushes.ForestGreen;
+				BearishStructuralObBorderColor = WpfBrushes.Crimson;
+				StructuralObOpacity = 24;
+				BullishContinuationObFillColor = WpfBrushes.OliveDrab;
+				BearishContinuationObFillColor = WpfBrushes.DarkSalmon;
+				BullishContinuationObBorderColor = WpfBrushes.OliveDrab;
+				BearishContinuationObBorderColor = WpfBrushes.DarkSalmon;
+				ContinuationObOpacity = 18;
+				BullishPropulsionBlockFillColor = WpfBrushes.LimeGreen;
+				BearishPropulsionBlockFillColor = WpfBrushes.OrangeRed;
+				BullishPropulsionBlockBorderColor = WpfBrushes.LimeGreen;
+				BearishPropulsionBlockBorderColor = WpfBrushes.OrangeRed;
+				PropulsionBlockOpacity = 32;
 
 				ShowDiagnosticsPanel = false;
 				ApplyDisplayPreset(OrcaPriceActionDisplayPreset.BlocksFocused);
@@ -672,7 +729,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			// The newest crossed pivot is the immediate structure level. A distinct
 			// protected boundary can still publish CHoCH for the parent trend. Every
-			// older crossed level is retired and summarized as one liquidity event.
+			// older crossed level is retired without another structure annotation.
 			PivotModel immediatePivot = crossed.Where(p => p.BosEligible)
 				.OrderByDescending(p => p.PivotBar).FirstOrDefault();
 			PivotModel protectedBreak = crossed
@@ -685,9 +742,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				publishedIds.Add(immediatePivot.Id);
 			if (protectedBreak != null)
 				publishedIds.Add(protectedBreak.Id);
-			PivotModel liquidityPivot = crossed
-				.Where(p => !publishedIds.Contains(p.Id))
-				.OrderByDescending(p => p.PivotBar).FirstOrDefault();
 			PivotModel structuralBoundary = immediatePivot ?? protectedBreak;
 			if (structuralBoundary != null)
 			{
@@ -734,23 +788,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				};
 				structureEvents.Add(model);
 				result.Add(model);
-			}
-
-			if (liquidityPivot != null)
-			{
-				structureEvents.Add(new StructureEventModel
-				{
-					Id = NextId("LIQ"),
-					Type = StructureEventType.Liquidity,
-					BarIndex = barIndex,
-					OriginBar = liquidityPivot.PivotBar,
-					Time = GetTimeAtBar(barIndex),
-					Price = liquidityPivot.Price,
-					Direction = breakDirection,
-					Scope = liquidityPivot.Scope,
-					PivotId = liquidityPivot.Id,
-					Text = "Liquidity"
-				});
 			}
 
 			if (result.Count == 0)
@@ -1670,11 +1707,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				if (periodHistorical && !terminal)
 				{
+					ZoneVisualType historyType = model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg;
 					ZoneRenderItem history = CreateZone(model.ConfirmationBar, model.PeriodEndBar,
 						model.RemainingLower, model.RemainingUpper,
-						model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg,
+						historyType,
 						model.Direction, model.State, BlockQuality.Standard, true,
-						Math.Min(0.08f, ActiveZoneOpacity / 100f), label);
+						Math.Min(0.08f, GetZoneOpacity(historyType, model.State, false)), label);
 					result.Add(history);
 					if (!baseVisible && !rthVisible)
 						continue;
@@ -1682,10 +1720,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				if (terminal)
 				{
+					ZoneVisualType terminalType = model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg;
 					result.Add(CreateZone(model.ConfirmationBar, endBar, model.OriginalLower, model.OriginalUpper,
-						model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg,
+						terminalType,
 						model.Direction, model.State, BlockQuality.Standard, highlight,
-						CompletedZoneOpacity / 100f, label));
+						GetZoneOpacity(terminalType, model.State, false), label));
 					continue;
 				}
 
@@ -1694,16 +1733,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 					double filledLower = model.Direction == Direction.Bullish ? model.RemainingUpper : model.OriginalLower;
 					double filledUpper = model.Direction == Direction.Bullish ? model.OriginalUpper : model.RemainingLower;
 					if (filledUpper > filledLower)
+					{
+						ZoneVisualType filledType = model.IsIfvg ? ZoneVisualType.IfvgFilled : ZoneVisualType.FvgFilled;
 						result.Add(CreateZone(model.ConfirmationBar, endBar, filledLower, filledUpper,
-							ZoneVisualType.FvgFilled, model.Direction, model.State, BlockQuality.Standard,
-							highlight, FilledZoneOpacity / 100f, string.Empty));
+							filledType, model.Direction, model.State, BlockQuality.Standard,
+							highlight, GetZoneOpacity(filledType, model.State, true), string.Empty));
+					}
 				}
 
 				if (model.RemainingUpper > model.RemainingLower)
+				{
+					ZoneVisualType activeType = model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg;
 					result.Add(CreateZone(model.ConfirmationBar, endBar, model.RemainingLower, model.RemainingUpper,
-						model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg,
+						activeType,
 						model.Direction, model.State, BlockQuality.Standard, highlight,
-						ActiveZoneOpacity / 100f, label));
+						GetZoneOpacity(activeType, model.State, false), label));
+				}
 			}
 		}
 
@@ -1730,7 +1775,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				int end = IsTerminal(model.State) ? Math.Max(model.OriginBar, model.TerminalBar) : CurrentBar;
 				result.Add(CreateZone(model.OriginBar, end, model.Lower, model.Upper,
 					ZoneVisualType.VolumeImbalance, model.Direction, model.State, BlockQuality.Standard,
-					false, (IsTerminal(model.State) ? CompletedZoneOpacity : ActiveZoneOpacity) / 100f, "VI"));
+					false, GetZoneOpacity(ZoneVisualType.VolumeImbalance, model.State, false), "VI"));
 			}
 		}
 
@@ -1770,7 +1815,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					label += " W";
 				ZoneRenderItem item = CreateZone(block.OriginBar, end, lower, upper, visual,
 					block.Direction, block.State, block.Quality, false,
-					(IsTerminal(block.State) ? CompletedZoneOpacity : BlockOpacity) / 100f, label);
+					GetZoneOpacity(visual, block.State, false), label);
 				item.Open = block.Open;
 				item.Midpoint = (block.BodyLower + block.BodyUpper) * 0.5;
 				item.LinesOnly = linesOnly;
@@ -1800,6 +1845,41 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Type = type, Direction = direction, State = state, Quality = quality,
 				Highlight = highlight, Opacity = (float)Clamp(opacity, 0, 1), Label = label
 			};
+		}
+
+		private float GetZoneOpacity(ZoneVisualType type, ZoneState state, bool filledPortion)
+		{
+			int opacity;
+			switch (type)
+			{
+				case ZoneVisualType.Ifvg:
+				case ZoneVisualType.IfvgFilled:
+					opacity = IfvgOpacity;
+					break;
+				case ZoneVisualType.VolumeImbalance:
+					opacity = VolumeImbalanceOpacity;
+					break;
+				case ZoneVisualType.Rejection:
+					opacity = RejectionBlockOpacity;
+					break;
+				case ZoneVisualType.StructuralOb:
+					opacity = StructuralObOpacity;
+					break;
+				case ZoneVisualType.ContinuationOb:
+					opacity = ContinuationObOpacity;
+					break;
+				case ZoneVisualType.Propulsion:
+					opacity = PropulsionBlockOpacity;
+					break;
+				default:
+					opacity = FvgOpacity;
+					break;
+			}
+			if (filledPortion)
+				opacity = Math.Min(opacity, FilledZoneOpacity);
+			else if (IsTerminal(state))
+				opacity = Math.Min(opacity, CompletedZoneOpacity);
+			return (float)Clamp(opacity / 100.0, 0, 1);
 		}
 
 		private void BuildStructureRenderItems(List<LineRenderItem> lines, List<LabelRenderItem> labels)
@@ -1838,15 +1918,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 							? OrcaPriceActionDashStyle.Solid : OrcaPriceActionDashStyle.Dash,
 						Width = model.Type == StructureEventType.Choch ? 2f : 1f,
 						Label = model.Text
-					});
-				}
-				else if (model.Type == StructureEventType.Liquidity && ShowBos)
-				{
-					labels.Add(new LabelRenderItem
-					{
-						BarIndex = model.BarIndex, Price = model.Price, Text = model.Text,
-						Type = LabelVisualType.Neutral,
-						Above = model.Direction == Direction.Bullish
 					});
 				}
 				else if (model.Type == StructureEventType.Sweep && ShowLiquiditySweeps)
@@ -1964,15 +2035,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float bottom = chartScale.GetYByValue(item.Lower);
 			RectangleF rectangle = new RectangleF(Math.Min(startX, endX), Math.Min(top, bottom),
 				Math.Max(1f, Math.Abs(endX - startX)), Math.Max(1f, Math.Abs(bottom - top)));
-			DxSolidBrush brush = GetZoneBrush(item);
-			float priorOpacity = brush.Opacity;
-			brush.Opacity = item.Opacity * (item.State == ZoneState.Candidate ? 0.55f : 1f);
+			DxSolidBrush fillBrush = GetZoneFillBrush(item);
+			DxSolidBrush borderBrush = item.Highlight ? dxBrushes[BrushHighlight] : GetZoneBorderBrush(item);
+			float priorFillOpacity = fillBrush.Opacity;
+			float priorBorderOpacity = borderBrush.Opacity;
+			fillBrush.Opacity = item.Opacity * (item.State == ZoneState.Candidate ? 0.55f : 1f);
 
 			if (!item.LinesOnly)
-				RenderTarget.FillRectangle(rectangle, brush);
-			brush.Opacity = Math.Min(1f, Math.Max(0.45f, item.Opacity + 0.25f));
+				RenderTarget.FillRectangle(rectangle, fillBrush);
+			borderBrush.Opacity = Math.Min(1f, Math.Max(0.45f, item.Opacity + 0.25f));
 			if (item.DrawBorder && !item.LinesOnly)
-				RenderTarget.DrawRectangle(rectangle, item.Highlight ? dxBrushes[BrushHighlight] : brush,
+				RenderTarget.DrawRectangle(rectangle, borderBrush,
 					item.Highlight ? Math.Max(2f, item.LineWidth) : item.LineWidth, GetStroke(item.DashStyle));
 
 			bool isOrderBlock = item.Type == ZoneVisualType.StructuralOb
@@ -1981,19 +2054,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 			bool drawMidpoint = isOrderBlock && (item.LinesOnly || ShowOrderBlockMidpoint);
 			if (drawOpen && IsFinite(item.Open))
 				RenderTarget.DrawLine(new Vector2(startX, chartScale.GetYByValue(item.Open)),
-					new Vector2(endX, chartScale.GetYByValue(item.Open)), brush, Math.Max(1f, item.LineWidth), GetStroke(item.DashStyle));
+					new Vector2(endX, chartScale.GetYByValue(item.Open)), borderBrush, Math.Max(1f, item.LineWidth), GetStroke(item.DashStyle));
 			if (drawMidpoint && IsFinite(item.Midpoint))
 				RenderTarget.DrawLine(new Vector2(startX, chartScale.GetYByValue(item.Midpoint)),
-					new Vector2(endX, chartScale.GetYByValue(item.Midpoint)), brush, 1f, GetStroke(OrcaPriceActionDashStyle.Dot));
+					new Vector2(endX, chartScale.GetYByValue(item.Midpoint)), borderBrush, 1f, GetStroke(OrcaPriceActionDashStyle.Dot));
 
 			if (!string.IsNullOrWhiteSpace(item.Label) && dxSmallFormat != null)
 			{
 				float labelY = item.Direction == Direction.Bullish ? bottom - TextSize - 3 : top + 1;
 				RenderTarget.DrawText(item.Label, dxSmallFormat,
 					new RectangleF(Math.Max(startX, endX - 130f), labelY, 128f, TextSize + 5),
-					item.Highlight ? dxBrushes[BrushHighlight] : brush);
+					borderBrush);
 			}
-			brush.Opacity = priorOpacity;
+			fillBrush.Opacity = priorFillOpacity;
+			borderBrush.Opacity = priorBorderOpacity;
 		}
 
 		private void RenderLine(LineRenderItem item, ChartControl chartControl, ChartScale chartScale)
@@ -2038,13 +2112,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RenderTarget.DrawText(text, dxSmallFormat, rectangle, dxBrushes[BrushText]);
 		}
 
-		private DxSolidBrush GetZoneBrush(ZoneRenderItem item)
+		private DxSolidBrush GetZoneFillBrush(ZoneRenderItem item)
 		{
-			if (item.Type == ZoneVisualType.Ifvg)
-				return item.Direction == Direction.Bullish ? dxBrushes[BrushIfvgBull] : dxBrushes[BrushIfvgBear];
-			if (item.Type == ZoneVisualType.FvgFilled)
-				return item.Direction == Direction.Bullish ? dxBrushes[BrushBull] : dxBrushes[BrushBear];
-			return item.Direction == Direction.Bullish ? dxBrushes[BrushBull] : dxBrushes[BrushBear];
+			bool bullish = item.Direction == Direction.Bullish;
+			switch (item.Type)
+			{
+				case ZoneVisualType.Ifvg:
+				case ZoneVisualType.IfvgFilled:
+					return dxBrushes[bullish ? BrushIfvgBullFill : BrushIfvgBearFill];
+				case ZoneVisualType.VolumeImbalance:
+					return dxBrushes[bullish ? BrushViBullFill : BrushViBearFill];
+				case ZoneVisualType.Rejection:
+					return dxBrushes[bullish ? BrushRejectionBullFill : BrushRejectionBearFill];
+				case ZoneVisualType.StructuralOb:
+					return dxBrushes[bullish ? BrushStructuralObBullFill : BrushStructuralObBearFill];
+				case ZoneVisualType.ContinuationOb:
+					return dxBrushes[bullish ? BrushContinuationObBullFill : BrushContinuationObBearFill];
+				case ZoneVisualType.Propulsion:
+					return dxBrushes[bullish ? BrushPropulsionBullFill : BrushPropulsionBearFill];
+				default:
+					return dxBrushes[bullish ? BrushFvgBullFill : BrushFvgBearFill];
+			}
+		}
+
+		private DxSolidBrush GetZoneBorderBrush(ZoneRenderItem item)
+		{
+			bool bullish = item.Direction == Direction.Bullish;
+			switch (item.Type)
+			{
+				case ZoneVisualType.Ifvg:
+				case ZoneVisualType.IfvgFilled:
+					return dxBrushes[bullish ? BrushIfvgBullBorder : BrushIfvgBearBorder];
+				case ZoneVisualType.VolumeImbalance:
+					return dxBrushes[bullish ? BrushViBullBorder : BrushViBearBorder];
+				case ZoneVisualType.Rejection:
+					return dxBrushes[bullish ? BrushRejectionBullBorder : BrushRejectionBearBorder];
+				case ZoneVisualType.StructuralOb:
+					return dxBrushes[bullish ? BrushStructuralObBullBorder : BrushStructuralObBearBorder];
+				case ZoneVisualType.ContinuationOb:
+					return dxBrushes[bullish ? BrushContinuationObBullBorder : BrushContinuationObBearBorder];
+				case ZoneVisualType.Propulsion:
+					return dxBrushes[bullish ? BrushPropulsionBullBorder : BrushPropulsionBearBorder];
+				default:
+					return dxBrushes[bullish ? BrushFvgBullBorder : BrushFvgBearBorder];
+			}
 		}
 
 		private void EnsureDxResources()
@@ -2056,8 +2167,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 			try
 			{
-				WpfBrush[] sources = { BullishColor, BearishColor, BullishIfvgColor, BearishIfvgColor,
-					StructureColor, HighlightColor, TextColor, WpfBrushes.DimGray, WpfBrushes.Black };
+				WpfBrush[] sources = {
+					BullishColor, BearishColor, StructureColor, HighlightColor, TextColor,
+					WpfBrushes.DimGray, WpfBrushes.Black,
+					BullishFvgFillColor, BearishFvgFillColor, BullishFvgBorderColor, BearishFvgBorderColor,
+					BullishIfvgFillColor, BearishIfvgFillColor, BullishIfvgBorderColor, BearishIfvgBorderColor,
+					BullishVolumeImbalanceFillColor, BearishVolumeImbalanceFillColor,
+					BullishVolumeImbalanceBorderColor, BearishVolumeImbalanceBorderColor,
+					BullishRejectionBlockFillColor, BearishRejectionBlockFillColor,
+					BullishRejectionBlockBorderColor, BearishRejectionBlockBorderColor,
+					BullishStructuralObFillColor, BearishStructuralObFillColor,
+					BullishStructuralObBorderColor, BearishStructuralObBorderColor,
+					BullishContinuationObFillColor, BearishContinuationObFillColor,
+					BullishContinuationObBorderColor, BearishContinuationObBorderColor,
+					BullishPropulsionBlockFillColor, BearishPropulsionBlockFillColor,
+					BullishPropulsionBlockBorderColor, BearishPropulsionBlockBorderColor
+				};
 				dxBrushes = new DxSolidBrush[BrushCount];
 				for (int i = 0; i < BrushCount; i++)
 					dxBrushes[i] = new DxSolidBrush(RenderTarget, ToColor4(sources[i]));
@@ -2576,77 +2701,258 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#region Properties - Visuals and diagnostics
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "Active Zone Opacity", Order = 1, GroupName = "09. Visuals")]
-		public int ActiveZoneOpacity { get; set; }
-
-		[NinjaScriptProperty]
-		[Range(0, 100)]
-		[Display(Name = "Filled Zone Opacity", Order = 2, GroupName = "09. Visuals")]
+		[Display(Name = "FVG Filled-Portion Max Opacity", Order = 1, GroupName = "09. General Rendering")]
 		public int FilledZoneOpacity { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "Completed Zone Opacity", Order = 3, GroupName = "09. Visuals")]
+		[Display(Name = "Completed-Zone Max Opacity", Order = 2, GroupName = "09. General Rendering")]
 		public int CompletedZoneOpacity { get; set; }
 
 		[NinjaScriptProperty]
-		[Range(0, 100)]
-		[Display(Name = "Block Opacity", Order = 4, GroupName = "09. Visuals")]
-		public int BlockOpacity { get; set; }
-
-		[NinjaScriptProperty]
 		[Range(6, 36)]
-		[Display(Name = "Text Size", Order = 5, GroupName = "09. Visuals")]
+		[Display(Name = "Text Size", Order = 3, GroupName = "09. General Rendering")]
 		public int TextSize { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Text Font", Order = 6, GroupName = "09. Visuals")]
+		[Display(Name = "Text Font", Order = 4, GroupName = "09. General Rendering")]
 		public string TextFontName { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "Bullish Color", Order = 1, GroupName = "10. Colors")]
+		[Display(Name = "Bullish Fill", Order = 1, GroupName = "10. FVG Style")]
+		public WpfBrush BullishFvgFillColor { get; set; }
+		[Browsable(false)]
+		public string BullishFvgFillColorSerializable { get { return Serialize.BrushToString(BullishFvgFillColor); } set { BullishFvgFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Fill", Order = 2, GroupName = "10. FVG Style")]
+		public WpfBrush BearishFvgFillColor { get; set; }
+		[Browsable(false)]
+		public string BearishFvgFillColorSerializable { get { return Serialize.BrushToString(BearishFvgFillColor); } set { BearishFvgFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Border", Order = 3, GroupName = "10. FVG Style")]
+		public WpfBrush BullishFvgBorderColor { get; set; }
+		[Browsable(false)]
+		public string BullishFvgBorderColorSerializable { get { return Serialize.BrushToString(BullishFvgBorderColor); } set { BullishFvgBorderColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Border", Order = 4, GroupName = "10. FVG Style")]
+		public WpfBrush BearishFvgBorderColor { get; set; }
+		[Browsable(false)]
+		public string BearishFvgBorderColorSerializable { get { return Serialize.BrushToString(BearishFvgBorderColor); } set { BearishFvgBorderColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Opacity", Order = 5, GroupName = "10. FVG Style")]
+		public int FvgOpacity { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Fill", Order = 1, GroupName = "11. iFVG Style")]
+		public WpfBrush BullishIfvgFillColor { get; set; }
+		[Browsable(false)]
+		public string BullishIfvgFillColorSerializable { get { return Serialize.BrushToString(BullishIfvgFillColor); } set { BullishIfvgFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Fill", Order = 2, GroupName = "11. iFVG Style")]
+		public WpfBrush BearishIfvgFillColor { get; set; }
+		[Browsable(false)]
+		public string BearishIfvgFillColorSerializable { get { return Serialize.BrushToString(BearishIfvgFillColor); } set { BearishIfvgFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Border", Order = 3, GroupName = "11. iFVG Style")]
+		public WpfBrush BullishIfvgBorderColor { get; set; }
+		[Browsable(false)]
+		public string BullishIfvgBorderColorSerializable { get { return Serialize.BrushToString(BullishIfvgBorderColor); } set { BullishIfvgBorderColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Border", Order = 4, GroupName = "11. iFVG Style")]
+		public WpfBrush BearishIfvgBorderColor { get; set; }
+		[Browsable(false)]
+		public string BearishIfvgBorderColorSerializable { get { return Serialize.BrushToString(BearishIfvgBorderColor); } set { BearishIfvgBorderColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Opacity", Order = 5, GroupName = "11. iFVG Style")]
+		public int IfvgOpacity { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Fill", Order = 1, GroupName = "12. Volume Imbalance Style")]
+		public WpfBrush BullishVolumeImbalanceFillColor { get; set; }
+		[Browsable(false)]
+		public string BullishVolumeImbalanceFillColorSerializable { get { return Serialize.BrushToString(BullishVolumeImbalanceFillColor); } set { BullishVolumeImbalanceFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Fill", Order = 2, GroupName = "12. Volume Imbalance Style")]
+		public WpfBrush BearishVolumeImbalanceFillColor { get; set; }
+		[Browsable(false)]
+		public string BearishVolumeImbalanceFillColorSerializable { get { return Serialize.BrushToString(BearishVolumeImbalanceFillColor); } set { BearishVolumeImbalanceFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Border", Order = 3, GroupName = "12. Volume Imbalance Style")]
+		public WpfBrush BullishVolumeImbalanceBorderColor { get; set; }
+		[Browsable(false)]
+		public string BullishVolumeImbalanceBorderColorSerializable { get { return Serialize.BrushToString(BullishVolumeImbalanceBorderColor); } set { BullishVolumeImbalanceBorderColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Border", Order = 4, GroupName = "12. Volume Imbalance Style")]
+		public WpfBrush BearishVolumeImbalanceBorderColor { get; set; }
+		[Browsable(false)]
+		public string BearishVolumeImbalanceBorderColorSerializable { get { return Serialize.BrushToString(BearishVolumeImbalanceBorderColor); } set { BearishVolumeImbalanceBorderColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Opacity", Order = 5, GroupName = "12. Volume Imbalance Style")]
+		public int VolumeImbalanceOpacity { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Fill", Order = 1, GroupName = "13. Rejection Block Style")]
+		public WpfBrush BullishRejectionBlockFillColor { get; set; }
+		[Browsable(false)]
+		public string BullishRejectionBlockFillColorSerializable { get { return Serialize.BrushToString(BullishRejectionBlockFillColor); } set { BullishRejectionBlockFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Fill", Order = 2, GroupName = "13. Rejection Block Style")]
+		public WpfBrush BearishRejectionBlockFillColor { get; set; }
+		[Browsable(false)]
+		public string BearishRejectionBlockFillColorSerializable { get { return Serialize.BrushToString(BearishRejectionBlockFillColor); } set { BearishRejectionBlockFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Border", Order = 3, GroupName = "13. Rejection Block Style")]
+		public WpfBrush BullishRejectionBlockBorderColor { get; set; }
+		[Browsable(false)]
+		public string BullishRejectionBlockBorderColorSerializable { get { return Serialize.BrushToString(BullishRejectionBlockBorderColor); } set { BullishRejectionBlockBorderColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Border", Order = 4, GroupName = "13. Rejection Block Style")]
+		public WpfBrush BearishRejectionBlockBorderColor { get; set; }
+		[Browsable(false)]
+		public string BearishRejectionBlockBorderColorSerializable { get { return Serialize.BrushToString(BearishRejectionBlockBorderColor); } set { BearishRejectionBlockBorderColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Opacity", Order = 5, GroupName = "13. Rejection Block Style")]
+		public int RejectionBlockOpacity { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Fill", Order = 1, GroupName = "14. Structural OB Style")]
+		public WpfBrush BullishStructuralObFillColor { get; set; }
+		[Browsable(false)]
+		public string BullishStructuralObFillColorSerializable { get { return Serialize.BrushToString(BullishStructuralObFillColor); } set { BullishStructuralObFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Fill", Order = 2, GroupName = "14. Structural OB Style")]
+		public WpfBrush BearishStructuralObFillColor { get; set; }
+		[Browsable(false)]
+		public string BearishStructuralObFillColorSerializable { get { return Serialize.BrushToString(BearishStructuralObFillColor); } set { BearishStructuralObFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Border", Order = 3, GroupName = "14. Structural OB Style")]
+		public WpfBrush BullishStructuralObBorderColor { get; set; }
+		[Browsable(false)]
+		public string BullishStructuralObBorderColorSerializable { get { return Serialize.BrushToString(BullishStructuralObBorderColor); } set { BullishStructuralObBorderColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Border", Order = 4, GroupName = "14. Structural OB Style")]
+		public WpfBrush BearishStructuralObBorderColor { get; set; }
+		[Browsable(false)]
+		public string BearishStructuralObBorderColorSerializable { get { return Serialize.BrushToString(BearishStructuralObBorderColor); } set { BearishStructuralObBorderColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Opacity", Order = 5, GroupName = "14. Structural OB Style")]
+		public int StructuralObOpacity { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Fill", Order = 1, GroupName = "15. Continuation OB Style")]
+		public WpfBrush BullishContinuationObFillColor { get; set; }
+		[Browsable(false)]
+		public string BullishContinuationObFillColorSerializable { get { return Serialize.BrushToString(BullishContinuationObFillColor); } set { BullishContinuationObFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Fill", Order = 2, GroupName = "15. Continuation OB Style")]
+		public WpfBrush BearishContinuationObFillColor { get; set; }
+		[Browsable(false)]
+		public string BearishContinuationObFillColorSerializable { get { return Serialize.BrushToString(BearishContinuationObFillColor); } set { BearishContinuationObFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Border", Order = 3, GroupName = "15. Continuation OB Style")]
+		public WpfBrush BullishContinuationObBorderColor { get; set; }
+		[Browsable(false)]
+		public string BullishContinuationObBorderColorSerializable { get { return Serialize.BrushToString(BullishContinuationObBorderColor); } set { BullishContinuationObBorderColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Border", Order = 4, GroupName = "15. Continuation OB Style")]
+		public WpfBrush BearishContinuationObBorderColor { get; set; }
+		[Browsable(false)]
+		public string BearishContinuationObBorderColorSerializable { get { return Serialize.BrushToString(BearishContinuationObBorderColor); } set { BearishContinuationObBorderColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Opacity", Order = 5, GroupName = "15. Continuation OB Style")]
+		public int ContinuationObOpacity { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Fill", Order = 1, GroupName = "16. Propulsion Block Style")]
+		public WpfBrush BullishPropulsionBlockFillColor { get; set; }
+		[Browsable(false)]
+		public string BullishPropulsionBlockFillColorSerializable { get { return Serialize.BrushToString(BullishPropulsionBlockFillColor); } set { BullishPropulsionBlockFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Fill", Order = 2, GroupName = "16. Propulsion Block Style")]
+		public WpfBrush BearishPropulsionBlockFillColor { get; set; }
+		[Browsable(false)]
+		public string BearishPropulsionBlockFillColorSerializable { get { return Serialize.BrushToString(BearishPropulsionBlockFillColor); } set { BearishPropulsionBlockFillColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Border", Order = 3, GroupName = "16. Propulsion Block Style")]
+		public WpfBrush BullishPropulsionBlockBorderColor { get; set; }
+		[Browsable(false)]
+		public string BullishPropulsionBlockBorderColorSerializable { get { return Serialize.BrushToString(BullishPropulsionBlockBorderColor); } set { BullishPropulsionBlockBorderColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bearish Border", Order = 4, GroupName = "16. Propulsion Block Style")]
+		public WpfBrush BearishPropulsionBlockBorderColor { get; set; }
+		[Browsable(false)]
+		public string BearishPropulsionBlockBorderColorSerializable { get { return Serialize.BrushToString(BearishPropulsionBlockBorderColor); } set { BearishPropulsionBlockBorderColor = Serialize.StringToBrush(value); } }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Opacity", Order = 5, GroupName = "16. Propulsion Block Style")]
+		public int PropulsionBlockOpacity { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Bullish Event Color", Order = 1, GroupName = "17. Structure and Text")]
 		public WpfBrush BullishColor { get; set; }
 		[Browsable(false)]
 		public string BullishColorSerializable { get { return Serialize.BrushToString(BullishColor); } set { BullishColor = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "Bearish Color", Order = 2, GroupName = "10. Colors")]
+		[Display(Name = "Bearish Event Color", Order = 2, GroupName = "17. Structure and Text")]
 		public WpfBrush BearishColor { get; set; }
 		[Browsable(false)]
 		public string BearishColorSerializable { get { return Serialize.BrushToString(BearishColor); } set { BearishColor = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "Bullish iFVG Color", Order = 3, GroupName = "10. Colors")]
-		public WpfBrush BullishIfvgColor { get; set; }
-		[Browsable(false)]
-		public string BullishIfvgColorSerializable { get { return Serialize.BrushToString(BullishIfvgColor); } set { BullishIfvgColor = Serialize.StringToBrush(value); } }
-
-		[XmlIgnore]
-		[Display(Name = "Bearish iFVG Color", Order = 4, GroupName = "10. Colors")]
-		public WpfBrush BearishIfvgColor { get; set; }
-		[Browsable(false)]
-		public string BearishIfvgColorSerializable { get { return Serialize.BrushToString(BearishIfvgColor); } set { BearishIfvgColor = Serialize.StringToBrush(value); } }
-
-		[XmlIgnore]
-		[Display(Name = "Structure Color", Order = 5, GroupName = "10. Colors")]
+		[Display(Name = "Pivot / Scope Color", Order = 3, GroupName = "17. Structure and Text")]
 		public WpfBrush StructureColor { get; set; }
 		[Browsable(false)]
 		public string StructureColorSerializable { get { return Serialize.BrushToString(StructureColor); } set { StructureColor = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "Highlight Color", Order = 6, GroupName = "10. Colors")]
+		[Display(Name = "Timed Highlight Border", Order = 4, GroupName = "17. Structure and Text")]
 		public WpfBrush HighlightColor { get; set; }
 		[Browsable(false)]
 		public string HighlightColorSerializable { get { return Serialize.BrushToString(HighlightColor); } set { HighlightColor = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "Text Color", Order = 7, GroupName = "10. Colors")]
+		[Display(Name = "Text Color", Order = 5, GroupName = "17. Structure and Text")]
 		public WpfBrush TextColor { get; set; }
 		[Browsable(false)]
 		public string TextColorSerializable { get { return Serialize.BrushToString(TextColor); } set { TextColor = Serialize.StringToBrush(value); } }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Diagnostics Panel", Order = 1, GroupName = "11. Diagnostics")]
+		[Display(Name = "Show Diagnostics Panel", Order = 1, GroupName = "18. Diagnostics")]
 		public bool ShowDiagnosticsPanel { get; set; }
 		#endregion
 	}

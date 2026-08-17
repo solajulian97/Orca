@@ -90,9 +90,13 @@ The newest BOS-eligible pivot on the crossed side is the immediate structure
 level and is the only level that can publish BOS. A distinct protected boundary
 may also publish CHoCH for the parent trend. Older same-side pivots lose future
 BOS eligibility when immediate structure breaks; if price later closes through
-them, they are retired as liquidity rather than relabeled as new structure. One
-close that crosses one or several of those older levels publishes at most one
-compact `Liquidity` label and no historical structure line.
+them, they are retired silently rather than relabeled as new structure. No
+stale-pivot `Liquidity` text or historical structure line is emitted.
+
+Pivot labels combine the price relation with scope. `HH`, `LH`, `HL`, and `LL`
+mean higher high, lower high, higher low, and lower low. The suffix `I` means
+Internal and `E` means External, so `LH I` is an Internal lower high and `HL E`
+is an External higher low.
 
 Visible sweep labels are clustered independently by direction. Sweeps within
 `Pivot Strength` bars (minimum two) and within the greater of four ticks or 5%
@@ -127,6 +131,24 @@ canonical touch area, a close through the source open is mitigation, and the
 full-candle distal extreme controls invalidation. Display can use body, full
 range, or open/body-midpoint lines.
 
+## Zone style controls
+
+FVG, iFVG, volume imbalance, rejection block, structural order block,
+continuation order block, and propulsion block each have an independent style
+group. Every group exposes:
+
+- bullish fill color;
+- bearish fill color;
+- bullish border color;
+- bearish border color; and
+- opacity.
+
+Brushes persist through XML string proxies. `FVG Filled-Portion Max Opacity`
+caps the faded portion of a Two-Tone FVG, and `Completed-Zone Max Opacity` caps
+terminal records without overriding a lower per-type opacity. Timed FVG
+highlight borders continue to use the separately configurable timed-highlight
+border color.
+
 ## Rendering and performance
 
 Calculation code publishes immutable arrays of zone, line, and label geometry.
@@ -134,6 +156,11 @@ Calculation code publishes immutable arrays of zone, line, and label geometry.
 calculation collections, query caches, rebuild history, or wait on locks.
 SharpDX brushes, stroke styles, and text formats are recreated when the render
 target changes and disposed at termination.
+
+Fill and border brushes are separate SharpDX resources for each zone type and
+direction. Render snapshots retain only immutable geometry, type, direction,
+and opacity; `OnRender` routes those items to the precreated resources without
+accessing mutable detector collections.
 
 The default historical discovery window is 3,000 bars. Active records are not
 age-evicted. Terminal records are capped per type, while completed original
@@ -169,4 +196,6 @@ and order-block detector presets remain independent.
    invalidation.
 8. Reload the same history and compare event bars and zone bounds.
 9. Pan and zoom through dense history and inspect labels and zone endpoints.
-10. Repeat a sanity pass on 15-second and range charts.
+10. Change every per-type fill, border, and opacity setting; save an indicator
+    template, reload it, and confirm the values round-trip.
+11. Repeat a sanity pass on 15-second and range charts.
