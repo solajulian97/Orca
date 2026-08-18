@@ -263,6 +263,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DxTextFormat dxTextFormat;
 		private DxTextFormat dxSmallFormat;
 		private DxTextFormat dxCenteredSmallFormat;
+		private DxTextFormat dxZoneLabelFormat;
 		private bool dxValid;
 
 		private bool applyingDisplayPreset;
@@ -2161,12 +2162,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RenderTarget.DrawLine(new Vector2(startX, chartScale.GetYByValue(item.Midpoint)),
 					new Vector2(endX, chartScale.GetYByValue(item.Midpoint)), borderBrush, 1f, GetStroke(OrcaPriceActionDashStyle.Dot));
 
-			if (!string.IsNullOrWhiteSpace(item.Label) && dxSmallFormat != null)
+			if (!string.IsNullOrWhiteSpace(item.Label) && dxZoneLabelFormat != null)
 			{
-				float labelY = item.Direction == Direction.Bullish ? bottom - TextSize - 3 : top + 1;
-				RenderTarget.DrawText(item.Label, dxSmallFormat,
-					new RectangleF(Math.Max(startX, endX - 130f), labelY, 128f, TextSize + 5),
-					borderBrush);
+				float labelRight = rectangle.Right - 3f;
+				float labelLeft = Math.Max(rectangle.Left + 3f, labelRight - 128f);
+				float labelHeight = Math.Max(rectangle.Height, TextSize + 5f);
+				float labelTop = rectangle.Top + (rectangle.Height - labelHeight) * 0.5f;
+				if (labelRight > labelLeft)
+					RenderTarget.DrawText(item.Label, dxZoneLabelFormat,
+						new RectangleF(labelLeft, labelTop, labelRight - labelLeft, labelHeight),
+						borderBrush);
 			}
 			fillBrush.Opacity = priorFillOpacity;
 			borderBrush.Opacity = priorBorderOpacity;
@@ -2312,6 +2317,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					ParagraphAlignment = ParagraphAlignment.Near,
 					TextAlignment = TextAlignment.Center
 				};
+				dxZoneLabelFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, TextFontName,
+					FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8, TextSize - 1))
+				{
+					WordWrapping = WordWrapping.NoWrap,
+					ParagraphAlignment = ParagraphAlignment.Center,
+					TextAlignment = TextAlignment.Trailing
+				};
 				dxRenderTarget = RenderTarget.NativePointer;
 				dxValid = true;
 			}
@@ -2345,11 +2357,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (dxTextFormat != null) dxTextFormat.Dispose();
 			if (dxSmallFormat != null) dxSmallFormat.Dispose();
 			if (dxCenteredSmallFormat != null) dxCenteredSmallFormat.Dispose();
+			if (dxZoneLabelFormat != null) dxZoneLabelFormat.Dispose();
 			dxBrushes = null;
 			dxStrokes = null;
 			dxTextFormat = null;
 			dxSmallFormat = null;
 			dxCenteredSmallFormat = null;
+			dxZoneLabelFormat = null;
 		}
 		#endregion
 

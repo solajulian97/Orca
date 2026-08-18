@@ -229,6 +229,13 @@ flag. `OnRender` calculates the three Y coordinates from the snapshot's full
 range and draws them with the existing dashed stroke resource; it does not read
 the mutable block model.
 
+All zone labels—FVG, iFVG, VI, RB, S-OB, C-OB, and PB—use a dedicated
+DirectWrite format with trailing horizontal alignment and centered paragraph
+alignment. The layout rectangle is inset from the zone's right edge and centered
+on the zone's vertical midpoint. Thin zones receive a minimum text-height layout
+while retaining the same vertical center so their label is not clipped away.
+Structure-event labels remain anchored to their own pivot/break geometry.
+
 Pivot labels use a separate centered DirectWrite format that follows the same
 render-target recreation and disposal lifecycle as the other text resources.
 Protected labels use the same centered format and carry only a small immutable
@@ -282,6 +289,9 @@ and order-block detector presets remain independent.
    not for Rejection Blocks.
 8. Reload the same history and compare event bars and zone bounds.
 9. Pan and zoom through dense history and inspect labels and zone endpoints.
+   Confirm every zone label is vertically centered and right-aligned inside its
+   visible zone, including very thin FVG/VI zones and lines-only Order Blocks,
+   while structure labels retain their event anchors.
 10. Change every per-type fill, border, and opacity setting; save an indicator
     template, reload it, and confirm the values round-trip.
 11. Repeat a sanity pass on 15-second and range charts.
