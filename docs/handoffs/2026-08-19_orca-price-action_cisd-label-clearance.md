@@ -79,6 +79,15 @@ confirmation/validation consistency, and removal of close-price label anchors.
 Pending. Confirm bullish labels below lows and bearish labels above highs for
 Raw, Qualified, and later Validated events while zooming and panning.
 
+## Deployment status
+
+Targeted deployment completed with
+`deploy_orca.ps1 -Target OrcaPriceAction`; no other target was deployed. The
+normalized authored Working_Suite and live NinjaTrader regions both have
+SHA-256 `3ac69449ee0216a3bd2f5352833bf52ec02b1c0eb40a71e584ae6f551728b7a5`,
+so authored-source parity passed. Source implementation commit: `8ff3375`.
+NinjaTrader F5 compilation remains pending and is not implied by deployment.
+
 ## Known issues, risks, and follow-up work
 
 - A label can still share space with an unrelated neighboring candle or another
