@@ -170,7 +170,12 @@ No post-change NinjaTrader chart test has been performed yet.
 
 ## Deployment status
 
-Pending targeted `OrcaPriceAction` deployment and authored-source parity check.
+Targeted deployment completed with
+`deploy_orca.ps1 -Target OrcaPriceAction`; no other target was deployed. The
+normalized authored Working_Suite and live NinjaTrader regions both have
+SHA-256 `27933f95cace3ca422386afb16c0a3d6d2ddc5a3814b8454dd56ae2c4065cd8b`,
+so authored-source parity passed. Source implementation commit: `ff12f9f`.
+NinjaTrader `F5` compilation remains pending and is not implied by deployment.
 
 ## Manual-validation status
 
