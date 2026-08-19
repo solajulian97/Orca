@@ -200,7 +200,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Content = BuildCopierTab()
 			});
 			tabs.Items.Add(new TabItem {
-				Header = "Health",
+				Header = "P&L",
 				Foreground = Brush("#FFEAF0F6"),
 				Background = Brush("#FF141D27"),
 				Content = BuildHealthTab()
