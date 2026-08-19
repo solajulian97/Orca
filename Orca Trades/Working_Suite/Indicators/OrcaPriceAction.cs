@@ -2621,32 +2621,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 					Width = (float)Math.Max(0.5, CisdLineWidth),
 					Opacity = opacity
 				});
-				labels.Add(new LabelRenderItem
-				{
-					BarIndex = model.ConfirmationBar,
-					Price = model.ConfirmationPrice,
-					Text = model.Direction == Direction.Bullish
+				AddCisdLabel(labels, model.ConfirmationBar, model.Direction,
+					model.Direction == Direction.Bullish
 						? (model.InitialQuality == CisdQuality.Qualified ? "CISD ↑ Q" : "CISD ↑")
 						: (model.InitialQuality == CisdQuality.Qualified ? "CISD ↓ Q" : "CISD ↓"),
-					Type = model.Direction == Direction.Bullish ? LabelVisualType.Bullish : LabelVisualType.Bearish,
-					Above = model.Direction == Direction.Bearish,
-					Centered = true,
-					Opacity = opacity
-				});
+					opacity);
 
 				if (model.Validated && ShowValidatedCisd && model.ValidationBar >= 0)
-				{
-					labels.Add(new LabelRenderItem
-					{
-						BarIndex = model.ValidationBar,
-						Price = model.ValidationPrice,
-						Text = model.Direction == Direction.Bullish ? "CISD ✓ ↑" : "CISD ✓ ↓",
-						Type = model.Direction == Direction.Bullish ? LabelVisualType.Bullish : LabelVisualType.Bearish,
-						Above = model.Direction == Direction.Bearish,
-						Centered = true,
-						Opacity = CisdValidatedOpacity / 100f
-					});
-				}
+					AddCisdLabel(labels, model.ValidationBar, model.Direction,
+						model.Direction == Direction.Bullish ? "CISD ✓ ↑" : "CISD ✓ ↓",
+						CisdValidatedOpacity / 100f);
 			}
 
 			if (ShowActiveCisdReferences)
@@ -2654,6 +2638,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 				AddActiveCisdReferenceLine(lines, Direction.Bearish);
 				AddActiveCisdReferenceLine(lines, Direction.Bullish);
 			}
+		}
+
+		private void AddCisdLabel(List<LabelRenderItem> labels, int barIndex, Direction direction,
+			string text, float opacity)
+		{
+			bool above = direction == Direction.Bearish;
+			labels.Add(new LabelRenderItem
+			{
+				BarIndex = barIndex,
+				Price = above ? GetHighAtBar(barIndex) : GetLowAtBar(barIndex),
+				Text = text,
+				Type = direction == Direction.Bullish ? LabelVisualType.Bullish : LabelVisualType.Bearish,
+				Above = above,
+				Centered = true,
+				PixelOffsetY = above ? -4f : 4f,
+				Opacity = opacity
+			});
 		}
 
 		private void AddActiveCisdReferenceLine(List<LineRenderItem> lines, Direction runDirection)

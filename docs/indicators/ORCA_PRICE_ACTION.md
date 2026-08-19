@@ -225,12 +225,15 @@ later validation. CISD never changes trend direction, protected pivots, pivot
 roles, BOS/CHoCH, or Order Block confirmation.
 
 Visuals use a short dashed reference line plus `CISD ↑` or `CISD ↓` on the
-confirmation candle. Qualified labels add `Q`; validation adds a later
-checkmarked marker. Active references, Raw events, and the engine itself are off
-by default. `FullContext` enables CISD visibility but does not override the
-independent `Enable CISD Engine` detector switch. Event history is capped at 200
-by default, and at most one completed bullish-run reference and one completed
-bearish-run reference are retained.
+confirmation candle. Bullish text is centered below the confirmation candle's
+low and bearish text above its high, with a small screen-space gap so candle
+bodies and wicks do not cover the label. Qualified labels add `Q`; the later
+checkmarked validation marker uses the same wick-relative placement. Active
+references, Raw events, and the engine itself are off by default. `FullContext`
+enables CISD visibility but does not override the independent `Enable CISD Engine`
+detector switch. Event history is capped at 200 by default, and at most one
+completed bullish-run reference and one completed bearish-run reference are
+retained.
 
 Initial MNQ two-minute calibration starting point—not statistically validated:
 
@@ -393,7 +396,9 @@ independent.
 11. Enable CISD on MNQ two-minute. Exercise Delivery Run Origin and Last
     Opposing Candle, equality/buffer boundaries, same-bar reversal confirmation,
     doji interruption, reference expiry, suppression, Raw/Qualified visibility,
-    and later CHoCH/BOS validation. Confirm no CISD changes protected pivots or
-    creates an S-OB by itself. Repeat selectivity checks on MNQ three-minute and
-    a noise check on MNQ one-minute.
+    and later CHoCH/BOS validation. Confirm bullish labels remain below their
+    event candle's low and bearish labels above its high at different chart
+    scales, including the later validated marker. Confirm no CISD changes
+    protected pivots or creates an S-OB by itself. Repeat selectivity checks on
+    MNQ three-minute and a noise check on MNQ one-minute.
 12. Repeat the existing non-CISD sanity pass on 15-second and range charts.
