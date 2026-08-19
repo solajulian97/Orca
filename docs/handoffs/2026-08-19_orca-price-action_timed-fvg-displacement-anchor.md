@@ -92,7 +92,13 @@ No post-change NinjaTrader chart test has been performed yet.
 
 ## Deployment status
 
-Pending targeted `OrcaPriceAction` deployment and authored-source parity check.
+- `deploy_orca.ps1 -Target OrcaPriceAction -DryRun`: passed and resolved one
+  live indicator target.
+- `deploy_orca.ps1 -Target OrcaPriceAction`: completed successfully.
+- Working_Suite versus live NinjaTrader authored-source parity: passed. The
+  deployed copy contains the displacement-opening period clock and the separate
+  confirmation-based RTH clock.
+- No other target was deployed.
 
 ## Manual-validation status
 
