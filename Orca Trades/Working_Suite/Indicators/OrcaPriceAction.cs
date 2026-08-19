@@ -932,20 +932,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				State = ZoneState.Fresh,
 				FillPercent = 0
 			};
-			QualifyTimedFvg(model);
+			DateTime displacementOpenTime = GetFvgDisplacementOpenTime(barIndex);
+			QualifyTimedFvg(model, displacementOpenTime);
 			fvgs.Add(model);
 		}
 
-		private void QualifyTimedFvg(FvgModel model)
+		private void QualifyTimedFvg(FvgModel model, DateTime displacementOpenTime)
 		{
 			if (model == null || model.IsIfvg)
 				return;
 
-			DateTime eastern = ToEastern(model.ConfirmationTime);
 			if (ShowTimedFirstFvg)
 			{
+				DateTime periodEastern = ToEastern(displacementOpenTime);
 				int minutes = GetTimedPeriodMinutes();
-				DateTime bucketStart = GetClockBucketStart(eastern, minutes);
+				DateTime bucketStart = GetClockBucketStart(periodEastern, minutes);
 				string key = bucketStart.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture)
 					+ "-" + minutes.ToString(CultureInfo.InvariantCulture);
 				if (!firstPeriodFvgIds.ContainsKey(key))
@@ -956,9 +957,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			if (ShowFirstRthFvg && eastern.TimeOfDay > RthOpen && eastern.TimeOfDay < RthClose)
+			DateTime confirmationEastern = ToEastern(model.ConfirmationTime);
+			if (ShowFirstRthFvg && confirmationEastern.TimeOfDay > RthOpen && confirmationEastern.TimeOfDay < RthClose)
 			{
-				string key = eastern.Date.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+				string key = confirmationEastern.Date.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
 				if (!firstRthFvgIds.ContainsKey(key))
 				{
 					firstRthFvgIds[key] = model.Id;
@@ -2385,6 +2387,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double GetCloseAtBar(int absoluteBar) { return Close[BarsAgo(absoluteBar)]; }
 		private DateTime GetTimeAtBar(int absoluteBar) { return Time[BarsAgo(absoluteBar)]; }
 
+		private DateTime GetFvgDisplacementOpenTime(int confirmationBar)
+		{
+			int displacementBar = confirmationBar - 1;
+			DateTime displacementCloseTime = GetTimeAtBar(displacementBar);
+			DateTime previousCloseTime = GetTimeAtBar(displacementBar - 1);
+			BarsPeriodType periodType = BarsPeriod == null ? BarsPeriodType.Tick : BarsPeriod.BarsPeriodType;
+			int periodValue = BarsPeriod == null ? 1 : BarsPeriod.Value;
+			return GetBarOpeningTime(displacementCloseTime, previousCloseTime, periodType, periodValue);
+		}
+
 		private double GetAtrAtBar(int absoluteBar)
 		{
 			if (atr == null || !CanReadBar(absoluteBar))
@@ -2462,6 +2474,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int safeMinutes = Math.Max(1, periodMinutes);
 			int minuteOfDay = clock.Hour * 60 + clock.Minute;
 			return clock.Date.AddMinutes(minuteOfDay - minuteOfDay % safeMinutes);
+		}
+
+		internal static DateTime GetBarOpeningTime(DateTime closeTime, DateTime previousCloseTime,
+			BarsPeriodType periodType, int periodValue)
+		{
+			int safeValue = Math.Max(1, periodValue);
+			if (periodType == BarsPeriodType.Minute)
+				return closeTime.AddMinutes(-safeValue);
+			if (periodType == BarsPeriodType.Second)
+				return closeTime.AddSeconds(-safeValue);
+			return previousCloseTime <= closeTime ? previousCloseTime : closeTime;
 		}
 
 		internal static bool IsStrictBreak(double close, double level, double buffer, int direction)

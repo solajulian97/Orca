@@ -80,11 +80,16 @@ extension instead of the standard bar cap. For standard FVGs the bar count is
 measured from the first pattern candle.
 
 Timed FVGs use a DST-aware New York clock. The first qualifying FVG of either
-direction claims a 15-minute, 30-minute, 1-hour, or 4-hour bucket. Four-hour
-buckets begin at 00:00, 04:00, 08:00, 12:00, 16:00, and 20:00. The separate RTH
-feature accepts timestamps strictly after the configured 09:30 open and before
-the configured 16:00 close. Period-end rendering never extrapolates a synthetic
-future bar on non-time charts.
+direction claims a 15-minute, 30-minute, 1-hour, or 4-hour bucket from the
+opening timestamp of its middle displacement candle, not from the third
+candle's later confirmation timestamp. On fixed-minute and fixed-second charts,
+the displacement opening timestamp is derived from NinjaTrader's close-stamped
+bar time and the primary bar interval. Non-time charts use the preceding bar
+timestamp as the causal opening boundary. Four-hour buckets begin at 00:00,
+04:00, 08:00, 12:00, 16:00, and 20:00. The separate RTH feature continues to
+accept confirmation timestamps strictly after the configured 09:30 open and
+before the configured 16:00 close. Period-end rendering never extrapolates a
+synthetic future bar on non-time charts.
 
 ## Volume imbalances
 
