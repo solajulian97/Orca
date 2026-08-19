@@ -49,6 +49,11 @@ namespace NinjaTrader.NinjaScript
 	public enum OrcaPriceActionBlockInvalidation { CloseBeyondDistal, WickBeyondDistal }
 	public enum OrcaPriceActionFvgConfluence { Off, Supporting, Required }
 	public enum OrcaPriceActionDashStyle { Solid, Dash, Dot, DashDot }
+	public enum OrcaPriceActionCisdReferenceMode { DeliveryRunOrigin, LastOpposingCandle }
+	public enum OrcaPriceActionCisdSignalMode { RawResearch, Balanced, Strict, Custom }
+	public enum OrcaPriceActionCisdSweepRequirement { Off, AnyConfirmedPivot, InternalAndExternal, ExternalOnly }
+	public enum OrcaPriceActionCisdContextRequirement { Off, Supporting, Required }
+	public enum OrcaPriceActionCisdValidationType { ChochOnly, ChochOrBos }
 }
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -65,6 +70,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private enum BlockType { Rejection, StructuralOrderBlock, ContinuationOrderBlock, PropulsionBlock }
 		private enum BlockQuality { Weak, Internal, Standard, Strong }
 		private enum StructureEventType { Pivot, Bos, Choch, Sweep, RoleChange }
+		private enum CisdQuality { Raw, Qualified }
 		private enum ZoneVisualType { Fvg, Ifvg, FvgFilled, IfvgFilled, VolumeImbalance, Rejection, StructuralOb, ContinuationOb, Propulsion }
 		private enum LabelVisualType { Structure, Bullish, Bearish, Neutral }
 
@@ -102,6 +108,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public double Price;
 			public Direction Direction;
 			public PivotScope Scope;
+			public PivotProtection Protection;
+			public OrcaPriceActionPivotImportance Importance;
 			public string PivotId = string.Empty;
 			public string Text = string.Empty;
 			public bool DisplayLabel = true;
@@ -170,6 +178,72 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public readonly List<string> AttachedStructureEvents = new List<string>();
 		}
 
+		private sealed class CisdRunModel
+		{
+			public Direction Direction;
+			public int StartBar;
+			public int EndBar;
+			public DateTime StartTime;
+			public DateTime EndTime;
+			public double FirstOpen;
+			public double LastOpen;
+			public double LastClose;
+			public double High;
+			public double Low;
+			public int CandleCount;
+		}
+
+		private sealed class CisdReferenceModel
+		{
+			public string Id = string.Empty;
+			public Direction RunDirection;
+			public int RunStartBar;
+			public int RunEndBar;
+			public DateTime RunStartTime;
+			public DateTime RunEndTime;
+			public double FirstOpen;
+			public double LastOpen;
+			public double RunHigh;
+			public double RunLow;
+			public int CandleCount;
+			public double MoveAtr;
+			public double ReferencePrice;
+			public int ReferenceBar;
+			public int ExpiryBar;
+			public bool Fired;
+		}
+
+		private sealed class CisdEventModel
+		{
+			public string Id = string.Empty;
+			public string ReferenceId = string.Empty;
+			public Direction Direction;
+			public CisdQuality InitialQuality;
+			public int ReferenceBar;
+			public int ConfirmationBar;
+			public DateTime ReferenceTime;
+			public DateTime ConfirmationTime;
+			public double ReferencePrice;
+			public double ConfirmationPrice;
+			public double RunMoveAtr;
+			public double DisplacementAtr;
+			public bool HasSweep;
+			public bool SweepExternal;
+			public bool SweepProtected;
+			public OrcaPriceActionPivotImportance SweepImportance;
+			public string SweepEventId = string.Empty;
+			public string SweptPivotId = string.Empty;
+			public int SweepBar = -1;
+			public bool HasFvg;
+			public bool HasRejectionBlock;
+			public bool Validated;
+			public int ValidationBar = -1;
+			public DateTime ValidationTime;
+			public double ValidationPrice;
+			public string ValidationEventId = string.Empty;
+			public StructureEventType ValidationType;
+		}
+
 		private sealed class ZoneRenderItem
 		{
 			public int StartBar;
@@ -200,6 +274,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public Direction Direction;
 			public OrcaPriceActionDashStyle DashStyle;
 			public float Width;
+			public float Opacity = 1f;
 			public string Label = string.Empty;
 		}
 
@@ -212,6 +287,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public bool Above;
 			public bool Centered;
 			public float PixelOffsetY;
+			public float Opacity = 1f;
 		}
 
 		private sealed class RenderSnapshot
@@ -239,6 +315,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private readonly List<FvgModel> fvgs = new List<FvgModel>();
 		private readonly List<VolumeImbalanceModel> volumeImbalances = new List<VolumeImbalanceModel>();
 		private readonly List<BlockModel> blocks = new List<BlockModel>();
+		private readonly List<CisdEventModel> cisdEvents = new List<CisdEventModel>();
 		private readonly Dictionary<string, string> firstPeriodFvgIds = new Dictionary<string, string>();
 		private readonly Dictionary<string, string> firstRthFvgIds = new Dictionary<string, string>();
 
@@ -250,6 +327,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string protectedHighId = string.Empty;
 		private string activeTargetId = string.Empty;
 		private double continuationTriggerPrice = double.NaN;
+		private CisdRunModel activeCisdRun;
+		private CisdReferenceModel bearishCisdReference;
+		private CisdReferenceModel bullishCisdReference;
+		private int cisdExpiredReferences;
+		private int cisdSuppressedDuplicates;
 		private TimeZoneInfo easternTimeZone;
 		private volatile RenderSnapshot renderSnapshot = RenderSnapshot.Empty;
 		private string diagnosticsInstanceId = string.Empty;
@@ -278,6 +360,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool showPropulsionBlocks;
 		private bool showTimedFirstFvg;
 		private bool showFirstRthFvg;
+		private bool showCisd;
 
 		private const int BrushBull = 0;
 		private const int BrushBear = 1;
@@ -323,7 +406,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Name = "Orca Price Action";
-				Description = "Causal price-action context: FVG/iFVG, volume imbalance, market structure, rejection blocks, and typed order blocks.";
+				Description = "Causal price-action context: FVG/iFVG, volume imbalance, market structure, CISD, rejection blocks, and typed order blocks.";
 				Calculate = Calculate.OnPriceChange;
 				IsOverlay = true;
 				DrawOnPricePanel = true;
@@ -364,6 +447,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 				SweepLabelWindowBars = 5;
 				ShowProtectedLevels = true;
 				ShowDetailedRoleBadges = false;
+
+				EnableCisd = false;
+				CisdReferenceMode = OrcaPriceActionCisdReferenceMode.DeliveryRunOrigin;
+				CisdSignalMode = OrcaPriceActionCisdSignalMode.Balanced;
+				CisdMinimumRunCandles = 1;
+				CisdMaximumReferenceAgeBars = 20;
+				CisdBreakBufferTicks = 0;
+				CisdMinimumRunMovementAtr = 0.5;
+				CisdSweepRequirement = OrcaPriceActionCisdSweepRequirement.InternalAndExternal;
+				CisdSweepLookbackBars = 8;
+				CisdDisplacementRequirement = OrcaPriceActionCisdContextRequirement.Supporting;
+				CisdMinimumDisplacementAtr = 0.5;
+				CisdFvgRequirement = OrcaPriceActionCisdContextRequirement.Supporting;
+				CisdRejectionBlockRequirement = OrcaPriceActionCisdContextRequirement.Supporting;
+				CisdValidationType = OrcaPriceActionCisdValidationType.ChochOnly;
+				CisdValidationWindowBars = 20;
+				CisdDuplicateSuppressionBars = 3;
+				ShowActiveCisdReferences = false;
+				ShowRawCisd = false;
+				ShowQualifiedCisd = true;
+				ShowValidatedCisd = true;
+				MaximumHistoricalCisdEvents = 200;
+				CisdRawOpacity = 30;
+				CisdQualifiedOpacity = 75;
+				CisdValidatedOpacity = 100;
+				CisdLineStyle = OrcaPriceActionDashStyle.Dash;
+				CisdLineWidth = 1.5;
 
 				RejectionPreset = OrcaPriceActionRejectionPreset.Strict;
 				RejectionLiquidityScope = OrcaPriceActionLiquidityScope.ProtectedExternalOnly;
@@ -472,6 +582,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			fvgs.Clear();
 			volumeImbalances.Clear();
 			blocks.Clear();
+			cisdEvents.Clear();
 			firstPeriodFvgIds.Clear();
 			firstRthFvgIds.Clear();
 			lastSeenBar = -1;
@@ -481,6 +592,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			protectedHighId = string.Empty;
 			activeTargetId = string.Empty;
 			continuationTriggerPrice = double.NaN;
+			activeCisdRun = null;
+			bearishCisdReference = null;
+			bullishCisdReference = null;
+			cisdExpiredReferences = 0;
+			cisdSuppressedDuplicates = 0;
 			renderSnapshot = RenderSnapshot.Empty;
 		}
 
@@ -552,7 +668,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			List<StructureEventModel> sweeps = DetectStructureSweeps(barIndex);
 			DetectRejectionBlocks(barIndex, sweeps);
+			ProcessCisdBar(barIndex);
 			List<StructureEventModel> breaks = DetectStructureBreaks(barIndex);
+			ValidateCisdEvents(barIndex, breaks);
 			CreateOrderBlocksFromStructure(barIndex, breaks);
 			CreateContinuationFromExtension(barIndex, breaks);
 			CreatePropulsionCandidates(barIndex);
@@ -562,12 +680,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (OrcaDiagnosticsCore.IsEnabled)
 			{
 				OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, GetTimeAtBar(barIndex), null);
+				int rawCisd = cisdEvents.Count(e => e.InitialQuality == CisdQuality.Raw);
+				int qualifiedCisd = cisdEvents.Count(e => e.InitialQuality == CisdQuality.Qualified);
+				int validatedCisd = cisdEvents.Count(e => e.Validated);
+				int bullishCisd = cisdEvents.Count(e => e.Direction == Direction.Bullish);
+				int externalSweepCisd = cisdEvents.Count(e => e.SweepExternal);
+				int cisdToChoch = cisdEvents.Count(e => e.Validated && e.ValidationType == StructureEventType.Choch);
+				int cisdToBos = cisdEvents.Count(e => e.Validated && e.ValidationType == StructureEventType.Bos);
 				int active = fvgs.Count(f => !IsTerminal(f.State))
 					+ volumeImbalances.Count(v => !IsTerminal(v.State))
-					+ blocks.Count(b => !IsTerminal(b.State));
+					+ blocks.Count(b => !IsTerminal(b.State))
+					+ (bearishCisdReference != null ? 1 : 0)
+					+ (bullishCisdReference != null ? 1 : 0);
 				OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "PriceActionState",
 					"active=" + active.ToString(CultureInfo.InvariantCulture)
 					+ " pivots=" + pivots.Count.ToString(CultureInfo.InvariantCulture)
+					+ " cisd=" + cisdEvents.Count.ToString(CultureInfo.InvariantCulture)
+					+ " cisdRaw=" + rawCisd.ToString(CultureInfo.InvariantCulture)
+					+ " cisdQualified=" + qualifiedCisd.ToString(CultureInfo.InvariantCulture)
+					+ " cisdValidated=" + validatedCisd.ToString(CultureInfo.InvariantCulture)
+					+ " cisdBull=" + bullishCisd.ToString(CultureInfo.InvariantCulture)
+					+ " cisdBear=" + (cisdEvents.Count - bullishCisd).ToString(CultureInfo.InvariantCulture)
+					+ " cisdExternalSweep=" + externalSweepCisd.ToString(CultureInfo.InvariantCulture)
+					+ " cisdToChoch=" + cisdToChoch.ToString(CultureInfo.InvariantCulture)
+					+ " cisdToBos=" + cisdToBos.ToString(CultureInfo.InvariantCulture)
+					+ " cisdExpired=" + cisdExpiredReferences.ToString(CultureInfo.InvariantCulture)
+					+ " cisdSuppressed=" + cisdSuppressedDuplicates.ToString(CultureInfo.InvariantCulture)
 					+ (active > 500 ? " warning=ActiveRecordPressure" : string.Empty));
 			}
 		}
@@ -678,6 +816,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Price = price,
 				Direction = isHigh ? Direction.Bearish : Direction.Bullish,
 				Scope = pivot.Scope,
+				Protection = pivot.Protection,
+				Importance = pivot.Importance,
 				PivotId = pivot.Id,
 				Text = relation + " " + (pivot.Scope == PivotScope.External ? "E" : "I")
 			});
@@ -735,6 +875,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Price = pivot.Price,
 				Direction = direction,
 				Scope = pivot.Scope,
+				Protection = pivot.Protection,
+				Importance = pivot.Importance,
 				PivotId = pivot.Id,
 				Text = "Sweep",
 				DisplayLabel = displayLabel
@@ -881,6 +1023,371 @@ namespace NinjaTrader.NinjaScript.Indicators
 				PivotId = pivot.Id,
 				Text = text
 			});
+		}
+		#endregion
+
+		#region Change in State of Delivery
+		private void ProcessCisdBar(int barIndex)
+		{
+			if (!EnableCisd || !CanReadBar(barIndex))
+				return;
+
+			ExpireCisdReferences(barIndex);
+			DetectCisdContextSweeps(barIndex);
+			Direction candleDirection = CandleDirection(barIndex);
+			if (candleDirection == Direction.None)
+			{
+				if (activeCisdRun != null)
+				{
+					CompleteCisdRun(activeCisdRun);
+					activeCisdRun = null;
+				}
+				return;
+			}
+
+			if (activeCisdRun == null)
+			{
+				TryConfirmCisd(candleDirection, barIndex);
+				activeCisdRun = StartCisdRun(candleDirection, barIndex);
+				return;
+			}
+
+			if (activeCisdRun.Direction == candleDirection)
+			{
+				TryConfirmCisd(candleDirection, barIndex);
+				ExtendCisdRun(activeCisdRun, barIndex);
+				return;
+			}
+
+			CompleteCisdRun(activeCisdRun);
+			activeCisdRun = null;
+			TryConfirmCisd(candleDirection, barIndex);
+			activeCisdRun = StartCisdRun(candleDirection, barIndex);
+		}
+
+		private CisdRunModel StartCisdRun(Direction direction, int barIndex)
+		{
+			return new CisdRunModel
+			{
+				Direction = direction,
+				StartBar = barIndex,
+				EndBar = barIndex,
+				StartTime = GetTimeAtBar(barIndex),
+				EndTime = GetTimeAtBar(barIndex),
+				FirstOpen = GetOpenAtBar(barIndex),
+				LastOpen = GetOpenAtBar(barIndex),
+				LastClose = GetCloseAtBar(barIndex),
+				High = GetHighAtBar(barIndex),
+				Low = GetLowAtBar(barIndex),
+				CandleCount = 1
+			};
+		}
+
+		private void ExtendCisdRun(CisdRunModel run, int barIndex)
+		{
+			if (run == null)
+				return;
+			run.EndBar = barIndex;
+			run.EndTime = GetTimeAtBar(barIndex);
+			run.LastOpen = GetOpenAtBar(barIndex);
+			run.LastClose = GetCloseAtBar(barIndex);
+			run.High = Math.Max(run.High, GetHighAtBar(barIndex));
+			run.Low = Math.Min(run.Low, GetLowAtBar(barIndex));
+			run.CandleCount++;
+		}
+
+		private void CompleteCisdRun(CisdRunModel run)
+		{
+			if (run == null || run.CandleCount < GetCisdMinimumRunCandles())
+				return;
+
+			double moveAtr = GetCisdRunMoveAtr(run.FirstOpen, run.LastClose,
+				GetAtrAtBar(run.EndBar), (int)run.Direction);
+			double referencePrice = GetCisdReferencePrice(run.FirstOpen, run.LastOpen, CisdReferenceMode);
+			int referenceBar = CisdReferenceMode == OrcaPriceActionCisdReferenceMode.DeliveryRunOrigin
+				? run.StartBar : run.EndBar;
+			CisdReferenceModel reference = new CisdReferenceModel
+			{
+				Id = NextId(run.Direction == Direction.Bullish ? "CISD-BR" : "CISD-SR"),
+				RunDirection = run.Direction,
+				RunStartBar = run.StartBar,
+				RunEndBar = run.EndBar,
+				RunStartTime = run.StartTime,
+				RunEndTime = run.EndTime,
+				FirstOpen = run.FirstOpen,
+				LastOpen = run.LastOpen,
+				RunHigh = run.High,
+				RunLow = run.Low,
+				CandleCount = run.CandleCount,
+				MoveAtr = moveAtr,
+				ReferencePrice = referencePrice,
+				ReferenceBar = referenceBar,
+				ExpiryBar = run.EndBar + Math.Max(1, CisdMaximumReferenceAgeBars)
+			};
+
+			if (run.Direction == Direction.Bearish)
+				bearishCisdReference = reference;
+			else
+				bullishCisdReference = reference;
+		}
+
+		private void ExpireCisdReferences(int barIndex)
+		{
+			if (bearishCisdReference != null
+				&& IsCisdReferenceExpired(bearishCisdReference.RunEndBar, barIndex, CisdMaximumReferenceAgeBars))
+			{
+				bearishCisdReference = null;
+				cisdExpiredReferences++;
+			}
+			if (bullishCisdReference != null
+				&& IsCisdReferenceExpired(bullishCisdReference.RunEndBar, barIndex, CisdMaximumReferenceAgeBars))
+			{
+				bullishCisdReference = null;
+				cisdExpiredReferences++;
+			}
+		}
+
+		private void TryConfirmCisd(Direction candleDirection, int barIndex)
+		{
+			Direction cisdDirection = candleDirection == Direction.Bullish
+				? Direction.Bullish : Direction.Bearish;
+			CisdReferenceModel reference = cisdDirection == Direction.Bullish
+				? bearishCisdReference : bullishCisdReference;
+			if (reference == null || reference.Fired || barIndex <= reference.RunEndBar)
+				return;
+
+			double close = GetCloseAtBar(barIndex);
+			double buffer = Math.Max(0, CisdBreakBufferTicks) * TickSize;
+			if (!IsCisdCloseBreak(close, reference.ReferencePrice, buffer, (int)cisdDirection))
+				return;
+
+			reference.Fired = true;
+			CisdEventModel latest = cisdEvents.Count == 0 ? null : cisdEvents[cisdEvents.Count - 1];
+			if (latest != null && latest.Direction == cisdDirection
+				&& IsCisdDuplicate(latest.ConfirmationBar, barIndex, CisdDuplicateSuppressionBars))
+			{
+				cisdSuppressedDuplicates++;
+				ClearCisdReference(reference);
+				return;
+			}
+
+			StructureEventModel sweep = FindCisdSweepContext(cisdDirection, barIndex);
+			double body = Math.Abs(close - GetOpenAtBar(barIndex));
+			double displacementAtr = body / GetAtrAtBar(barIndex);
+			bool hasFvg = fvgs.Any(f => !f.IsIfvg && f.Direction == cisdDirection
+				&& f.ConfirmationBar == barIndex);
+			bool hasRejection = blocks.Any(b => b.Type == BlockType.Rejection
+				&& b.Direction == cisdDirection && b.ConfirmationBar >= 0
+				&& b.ConfirmationBar <= barIndex
+				&& b.ConfirmationBar >= barIndex - Math.Max(1, CisdSweepLookbackBars)
+				&& b.Quality == BlockQuality.Strong && !IsTerminal(b.State));
+
+			bool qualified = IsCisdQualified(reference, sweep, displacementAtr, hasFvg, hasRejection);
+			cisdEvents.Add(new CisdEventModel
+			{
+				Id = NextId(cisdDirection == Direction.Bullish ? "CISD-UP" : "CISD-DN"),
+				ReferenceId = reference.Id,
+				Direction = cisdDirection,
+				InitialQuality = qualified ? CisdQuality.Qualified : CisdQuality.Raw,
+				ReferenceBar = reference.ReferenceBar,
+				ConfirmationBar = barIndex,
+				ReferenceTime = reference.ReferenceBar == reference.RunStartBar
+					? reference.RunStartTime : reference.RunEndTime,
+				ConfirmationTime = GetTimeAtBar(barIndex),
+				ReferencePrice = reference.ReferencePrice,
+				ConfirmationPrice = close,
+				RunMoveAtr = reference.MoveAtr,
+				DisplacementAtr = displacementAtr,
+				HasSweep = sweep != null,
+				SweepExternal = sweep != null && sweep.Scope == PivotScope.External,
+				SweepProtected = sweep != null && sweep.Protection == PivotProtection.Protected,
+				SweepImportance = sweep == null ? OrcaPriceActionPivotImportance.Weak : sweep.Importance,
+				SweepEventId = sweep == null ? string.Empty : sweep.Id,
+				SweptPivotId = sweep == null ? string.Empty : sweep.PivotId,
+				SweepBar = sweep == null ? -1 : sweep.BarIndex,
+				HasFvg = hasFvg,
+				HasRejectionBlock = hasRejection
+			});
+			ClearCisdReference(reference);
+		}
+
+		private void ClearCisdReference(CisdReferenceModel reference)
+		{
+			if (reference == bearishCisdReference)
+				bearishCisdReference = null;
+			if (reference == bullishCisdReference)
+				bullishCisdReference = null;
+		}
+
+		private StructureEventModel FindCisdSweepContext(Direction direction, int barIndex)
+		{
+			OrcaPriceActionCisdSweepRequirement requirement = GetCisdSweepRequirement();
+			if (requirement == OrcaPriceActionCisdSweepRequirement.Off)
+				return null;
+			int earliest = barIndex - Math.Max(1, CisdSweepLookbackBars);
+			return structureEvents.Where(e => e.Type == StructureEventType.Sweep
+					&& !string.IsNullOrEmpty(e.PivotId) && e.Direction == direction
+					&& e.BarIndex >= earliest && e.BarIndex <= barIndex)
+				.Where(e => IsCisdSweepEligible(e, requirement))
+				.OrderByDescending(e => e.BarIndex).ThenByDescending(e => e.Scope).FirstOrDefault();
+		}
+
+		private void DetectCisdContextSweeps(int barIndex)
+		{
+			OrcaPriceActionCisdSweepRequirement requirement = GetCisdSweepRequirement();
+			if (requirement == OrcaPriceActionCisdSweepRequirement.Off)
+				return;
+			double high = GetHighAtBar(barIndex);
+			double low = GetLowAtBar(barIndex);
+			double close = GetCloseAtBar(barIndex);
+			double penetration = Math.Max(0, MinimumSweepPenetrationTicks) * TickSize;
+			foreach (bool highSide in new[] { true, false })
+			{
+				Direction direction = highSide ? Direction.Bearish : Direction.Bullish;
+				PivotModel pivot = pivots.Where(p => p.IsHigh == highSide && !p.Broken
+						&& p.ConfirmationBar < barIndex
+						&& IsCisdPivotEligible(p, requirement)
+						&& barIndex - p.ConfirmationBar >= Math.Max(0, MinimumSweepRestingBars)
+						&& (highSide
+							? IsSweepPriceAction(high, close, p.Price, penetration, -1)
+							: IsSweepPriceAction(low, close, p.Price, penetration, 1)))
+					.OrderBy(p => Math.Abs((highSide ? high : low) - p.Price))
+					.ThenByDescending(p => p.PivotBar).FirstOrDefault();
+				if (pivot == null || structureEvents.Any(e => e.Type == StructureEventType.Sweep
+					&& e.BarIndex == barIndex && e.PivotId == pivot.Id))
+					continue;
+				RecordSweep(pivot, barIndex, direction, false);
+			}
+		}
+
+		private bool IsCisdPivotEligible(PivotModel pivot,
+			OrcaPriceActionCisdSweepRequirement requirement)
+		{
+			if (pivot == null)
+				return false;
+			if (requirement == OrcaPriceActionCisdSweepRequirement.AnyConfirmedPivot)
+				return true;
+			if (pivot.Importance < OrcaPriceActionPivotImportance.Standard)
+				return false;
+			return requirement != OrcaPriceActionCisdSweepRequirement.ExternalOnly
+				|| pivot.Scope == PivotScope.External;
+		}
+
+		private bool IsCisdSweepEligible(StructureEventModel sweep,
+			OrcaPriceActionCisdSweepRequirement requirement)
+		{
+			if (sweep == null)
+				return false;
+			if (requirement == OrcaPriceActionCisdSweepRequirement.AnyConfirmedPivot)
+				return !string.IsNullOrEmpty(sweep.PivotId);
+			return sweep.Importance >= OrcaPriceActionPivotImportance.Standard
+				&& (requirement != OrcaPriceActionCisdSweepRequirement.ExternalOnly
+					|| sweep.Scope == PivotScope.External);
+		}
+
+		private bool IsCisdQualified(CisdReferenceModel reference, StructureEventModel sweep,
+			double displacementAtr, bool hasFvg, bool hasRejection)
+		{
+			if (reference == null || CisdSignalMode == OrcaPriceActionCisdSignalMode.RawResearch)
+				return false;
+			if (reference.MoveAtr + 1e-10 < GetCisdMinimumRunMovementAtr())
+				return false;
+
+			OrcaPriceActionCisdSweepRequirement sweepRequirement = GetCisdSweepRequirement();
+			if (sweepRequirement != OrcaPriceActionCisdSweepRequirement.Off && sweep == null)
+				return false;
+			if (GetCisdDisplacementRequirement() == OrcaPriceActionCisdContextRequirement.Required
+				&& displacementAtr + 1e-10 < GetCisdMinimumDisplacementAtr())
+				return false;
+			if (GetCisdFvgRequirement() == OrcaPriceActionCisdContextRequirement.Required && !hasFvg)
+				return false;
+			if (GetCisdRejectionRequirement() == OrcaPriceActionCisdContextRequirement.Required && !hasRejection)
+				return false;
+			return true;
+		}
+
+		private int GetCisdMinimumRunCandles()
+		{
+			return CisdSignalMode == OrcaPriceActionCisdSignalMode.Strict
+				? Math.Max(2, CisdMinimumRunCandles) : Math.Max(1, CisdMinimumRunCandles);
+		}
+
+		private double GetCisdMinimumRunMovementAtr()
+		{
+			return CisdSignalMode == OrcaPriceActionCisdSignalMode.Strict
+				? Math.Max(0.75, CisdMinimumRunMovementAtr) : Math.Max(0, CisdMinimumRunMovementAtr);
+		}
+
+		private double GetCisdMinimumDisplacementAtr()
+		{
+			return CisdSignalMode == OrcaPriceActionCisdSignalMode.Strict
+				? Math.Max(0.75, CisdMinimumDisplacementAtr) : Math.Max(0, CisdMinimumDisplacementAtr);
+		}
+
+		private OrcaPriceActionCisdSweepRequirement GetCisdSweepRequirement()
+		{
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.RawResearch)
+				return OrcaPriceActionCisdSweepRequirement.Off;
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.Balanced)
+				return OrcaPriceActionCisdSweepRequirement.InternalAndExternal;
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.Strict)
+				return OrcaPriceActionCisdSweepRequirement.ExternalOnly;
+			return CisdSweepRequirement;
+		}
+
+		private OrcaPriceActionCisdContextRequirement GetCisdDisplacementRequirement()
+		{
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.RawResearch)
+				return OrcaPriceActionCisdContextRequirement.Off;
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.Balanced)
+				return OrcaPriceActionCisdContextRequirement.Supporting;
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.Strict)
+				return OrcaPriceActionCisdContextRequirement.Required;
+			return CisdDisplacementRequirement;
+		}
+
+		private OrcaPriceActionCisdContextRequirement GetCisdFvgRequirement()
+		{
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.RawResearch)
+				return OrcaPriceActionCisdContextRequirement.Off;
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.Custom)
+				return CisdFvgRequirement;
+			return OrcaPriceActionCisdContextRequirement.Supporting;
+		}
+
+		private OrcaPriceActionCisdContextRequirement GetCisdRejectionRequirement()
+		{
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.RawResearch)
+				return OrcaPriceActionCisdContextRequirement.Off;
+			if (CisdSignalMode == OrcaPriceActionCisdSignalMode.Custom)
+				return CisdRejectionBlockRequirement;
+			return OrcaPriceActionCisdContextRequirement.Supporting;
+		}
+
+		private void ValidateCisdEvents(int barIndex, List<StructureEventModel> breaks)
+		{
+			if (!EnableCisd || breaks == null || breaks.Count == 0)
+				return;
+			int window = Math.Max(1, CisdValidationWindowBars);
+			StructureEventModel validationEvent = breaks.Where(e => e.Type == StructureEventType.Choch
+					|| CisdValidationType == OrcaPriceActionCisdValidationType.ChochOrBos
+						&& e.Type == StructureEventType.Bos)
+				.OrderByDescending(e => e.Type == StructureEventType.Choch ? 1 : 0)
+				.ThenByDescending(e => e.OriginBar).FirstOrDefault();
+			if (validationEvent == null)
+				return;
+			CisdEventModel cisd = cisdEvents.Where(e => !e.Validated
+					&& e.Direction == validationEvent.Direction && e.ConfirmationBar < barIndex
+					&& barIndex - e.ConfirmationBar <= window)
+				.OrderByDescending(e => e.ConfirmationBar).FirstOrDefault();
+			if (cisd == null)
+				return;
+			cisd.Validated = true;
+			cisd.ValidationBar = barIndex;
+			cisd.ValidationTime = GetTimeAtBar(barIndex);
+			cisd.ValidationPrice = GetCloseAtBar(barIndex);
+			cisd.ValidationEventId = validationEvent.Id;
+			cisd.ValidationType = validationEvent.Type;
 		}
 		#endregion
 
@@ -1671,6 +2178,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
+			int maximumCisd = Math.Max(10, MaximumHistoricalCisdEvents);
+			if (cisdEvents.Count > maximumCisd)
+			{
+				List<CisdEventModel> removableCisd = cisdEvents.OrderByDescending(e => e.ConfirmationBar)
+					.Skip(maximumCisd).ToList();
+				for (int i = 0; i < removableCisd.Count; i++)
+					cisdEvents.Remove(removableCisd[i]);
+			}
+
 			int cutoff = Math.Max(0, CurrentBar - Math.Max(500, MaximumHistoricalBars));
 			structureEvents.RemoveAll(e => e.BarIndex < cutoff);
 			pivots.RemoveAll(p => p.Broken && p.BreakBar >= 0 && p.BreakBar < cutoff
@@ -1690,11 +2206,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			BuildVolumeImbalanceRenderItems(zones);
 			BuildBlockRenderItems(zones);
 			BuildStructureRenderItems(lines, labels);
+			BuildCisdRenderItems(lines, labels);
 
 			string diagnostics = ShowDiagnosticsPanel
 				? string.Format(CultureInfo.InvariantCulture,
-					"Orca Price Action\nFVG {0} | VI {1} | Pivots {2} | Blocks {3}\nModel {4:F2}ms | Snapshot {5:F2}ms | Render {6:F2}ms",
-					fvgs.Count, volumeImbalances.Count, pivots.Count, blocks.Count,
+					"Orca Price Action\nFVG {0} | VI {1} | Pivots {2} | Blocks {3} | CISD {4}\nModel {5:F2}ms | Snapshot {6:F2}ms | Render {7:F2}ms",
+					fvgs.Count, volumeImbalances.Count, pivots.Count, blocks.Count, cisdEvents.Count,
 					lastModelTicks * 1000.0 / Stopwatch.Frequency,
 					lastSnapshotTicks * 1000.0 / Stopwatch.Frequency,
 					lastRenderMilliseconds)
@@ -2075,6 +2592,97 @@ namespace NinjaTrader.NinjaScript.Indicators
 				PixelOffsetY = isHigh ? -(TextSize + 4f) : TextSize + 4f
 			});
 		}
+
+		private void BuildCisdRenderItems(List<LineRenderItem> lines, List<LabelRenderItem> labels)
+		{
+			if (!EnableCisd || !ShowCisd)
+				return;
+
+			for (int i = 0; i < cisdEvents.Count; i++)
+			{
+				CisdEventModel model = cisdEvents[i];
+				if (model == null)
+					continue;
+				bool visible = model.Validated && ShowValidatedCisd
+					|| model.InitialQuality == CisdQuality.Qualified && ShowQualifiedCisd
+					|| model.InitialQuality == CisdQuality.Raw && ShowRawCisd;
+				if (!visible)
+					continue;
+
+				float opacity = (model.InitialQuality == CisdQuality.Qualified
+					? CisdQualifiedOpacity : CisdRawOpacity) / 100f;
+				lines.Add(new LineRenderItem
+				{
+					StartBar = model.ReferenceBar,
+					EndBar = model.ConfirmationBar,
+					Price = model.ReferencePrice,
+					Direction = model.Direction,
+					DashStyle = CisdLineStyle,
+					Width = (float)Math.Max(0.5, CisdLineWidth),
+					Opacity = opacity
+				});
+				labels.Add(new LabelRenderItem
+				{
+					BarIndex = model.ConfirmationBar,
+					Price = model.ConfirmationPrice,
+					Text = model.Direction == Direction.Bullish
+						? (model.InitialQuality == CisdQuality.Qualified ? "CISD ↑ Q" : "CISD ↑")
+						: (model.InitialQuality == CisdQuality.Qualified ? "CISD ↓ Q" : "CISD ↓"),
+					Type = model.Direction == Direction.Bullish ? LabelVisualType.Bullish : LabelVisualType.Bearish,
+					Above = model.Direction == Direction.Bearish,
+					Centered = true,
+					Opacity = opacity
+				});
+
+				if (model.Validated && ShowValidatedCisd && model.ValidationBar >= 0)
+				{
+					labels.Add(new LabelRenderItem
+					{
+						BarIndex = model.ValidationBar,
+						Price = model.ValidationPrice,
+						Text = model.Direction == Direction.Bullish ? "CISD ✓ ↑" : "CISD ✓ ↓",
+						Type = model.Direction == Direction.Bullish ? LabelVisualType.Bullish : LabelVisualType.Bearish,
+						Above = model.Direction == Direction.Bearish,
+						Centered = true,
+						Opacity = CisdValidatedOpacity / 100f
+					});
+				}
+			}
+
+			if (ShowActiveCisdReferences)
+			{
+				AddActiveCisdReferenceLine(lines, Direction.Bearish);
+				AddActiveCisdReferenceLine(lines, Direction.Bullish);
+			}
+		}
+
+		private void AddActiveCisdReferenceLine(List<LineRenderItem> lines, Direction runDirection)
+		{
+			CisdReferenceModel reference = runDirection == Direction.Bearish
+				? bearishCisdReference : bullishCisdReference;
+			bool useRun = activeCisdRun != null && activeCisdRun.Direction == runDirection
+				&& activeCisdRun.CandleCount >= GetCisdMinimumRunCandles();
+			if (!useRun && reference == null)
+				return;
+
+			double price = useRun
+				? GetCisdReferencePrice(activeCisdRun.FirstOpen, activeCisdRun.LastOpen, CisdReferenceMode)
+				: reference.ReferencePrice;
+			int startBar = useRun
+				? (CisdReferenceMode == OrcaPriceActionCisdReferenceMode.DeliveryRunOrigin
+					? activeCisdRun.StartBar : activeCisdRun.EndBar)
+				: reference.ReferenceBar;
+			lines.Add(new LineRenderItem
+			{
+				StartBar = startBar,
+				EndBar = CurrentBar,
+				Price = price,
+				Direction = runDirection == Direction.Bearish ? Direction.Bullish : Direction.Bearish,
+				DashStyle = OrcaPriceActionDashStyle.Dot,
+				Width = 1f,
+				Opacity = Math.Min(0.4f, CisdRawOpacity / 100f)
+			});
+		}
 		#endregion
 
 		#region Rendering
@@ -2190,10 +2798,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float y = chartScale.GetYByValue(item.Price);
 			DxSolidBrush brush = item.Direction == Direction.Bullish ? dxBrushes[BrushBull]
 				: item.Direction == Direction.Bearish ? dxBrushes[BrushBear] : dxBrushes[BrushStructure];
+			float priorOpacity = brush.Opacity;
+			brush.Opacity = (float)Clamp(item.Opacity, 0, 1);
 			RenderTarget.DrawLine(new Vector2(x1, y), new Vector2(x2, y), brush, item.Width, GetStroke(item.DashStyle));
 			if (!string.IsNullOrWhiteSpace(item.Label) && dxSmallFormat != null)
 				RenderTarget.DrawText(item.Label, dxSmallFormat,
 					new RectangleF(Math.Max(x1, x2 - 100f), y - TextSize - 2, 98f, TextSize + 4), brush);
+			brush.Opacity = priorOpacity;
 		}
 
 		private void RenderLabel(LabelRenderItem item, ChartControl chartControl, ChartScale chartScale)
@@ -2206,10 +2817,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				: item.Type == LabelVisualType.Bearish ? dxBrushes[BrushBear]
 				: item.Type == LabelVisualType.Structure ? dxBrushes[BrushStructure] : dxBrushes[BrushNeutral];
 			float top = (item.Above ? y - TextSize - 4 : y + 2) + item.PixelOffsetY;
+			float priorOpacity = brush.Opacity;
+			brush.Opacity = (float)Clamp(item.Opacity, 0, 1);
 			DxTextFormat format = item.Centered && dxCenteredSmallFormat != null ? dxCenteredSmallFormat : dxSmallFormat;
 			float width = item.Centered ? 180f : 150f;
 			float left = item.Centered ? x - width * 0.5f : x + 3f;
 			RenderTarget.DrawText(item.Text, format, new RectangleF(left, top, width, TextSize + 6), brush);
+			brush.Opacity = priorOpacity;
 		}
 
 		private void RenderDiagnostics(string text)
@@ -2493,6 +3107,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 				: direction < 0 && close < level - Math.Max(0, buffer);
 		}
 
+		internal static bool IsCisdCloseBreak(double close, double reference, double buffer, int direction)
+		{
+			return IsStrictBreak(close, reference, buffer, direction);
+		}
+
+		internal static double GetCisdReferencePrice(double firstOpen, double lastOpen,
+			OrcaPriceActionCisdReferenceMode mode)
+		{
+			return mode == OrcaPriceActionCisdReferenceMode.DeliveryRunOrigin ? firstOpen : lastOpen;
+		}
+
+		internal static double GetCisdRunMoveAtr(double firstOpen, double lastClose, double atrValue, int direction)
+		{
+			double move = direction > 0 ? lastClose - firstOpen
+				: direction < 0 ? firstOpen - lastClose : 0;
+			return Math.Max(0, move) / Math.Max(1e-10, atrValue);
+		}
+
+		internal static bool IsCisdReferenceExpired(int runEndBar, int currentBar, int maximumAgeBars)
+		{
+			return currentBar > runEndBar + Math.Max(1, maximumAgeBars);
+		}
+
+		internal static bool IsCisdDuplicate(int previousConfirmationBar, int currentBar, int suppressionBars)
+		{
+			return previousConfirmationBar >= 0 && currentBar >= previousConfirmationBar
+				&& currentBar - previousConfirmationBar <= Math.Max(0, suppressionBars);
+		}
+
 		internal static bool IsSameSweepEpisode(int previousBar, int currentBar, int windowBars)
 		{
 			return previousBar >= 0 && currentBar >= previousBar
@@ -2602,6 +3245,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				showPropulsionBlocks = preset == OrcaPriceActionDisplayPreset.FullContext;
 				showTimedFirstFvg = preset == OrcaPriceActionDisplayPreset.FullContext;
 				showFirstRthFvg = preset == OrcaPriceActionDisplayPreset.FullContext;
+				showCisd = preset == OrcaPriceActionDisplayPreset.FullContext;
 			}
 			finally
 			{
@@ -2692,6 +3336,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty]
 		[Display(Name = "Show Propulsion Blocks", Order = 8, GroupName = "02. Visibility")]
 		public bool ShowPropulsionBlocks { get { return showPropulsionBlocks; } set { SetVisibility(ref showPropulsionBlocks, value); } }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show CISD", Order = 9, GroupName = "02. Visibility")]
+		public bool ShowCisd { get { return showCisd; } set { SetVisibility(ref showCisd, value); } }
 		#endregion
 
 		#region Properties - FVG and timed FVG
@@ -2808,6 +3456,125 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty]
 		[Display(Name = "Show Detailed Role Badges", Order = 11, GroupName = "06. Market Structure")]
 		public bool ShowDetailedRoleBadges { get; set; }
+		#endregion
+
+		#region Properties - CISD
+		[NinjaScriptProperty]
+		[Display(Name = "Enable CISD Engine", Order = 1, GroupName = "08A. CISD")]
+		public bool EnableCisd { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Reference Mode", Order = 2, GroupName = "08A. CISD")]
+		public OrcaPriceActionCisdReferenceMode CisdReferenceMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Signal Mode", Order = 3, GroupName = "08A. CISD")]
+		public OrcaPriceActionCisdSignalMode CisdSignalMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 100)]
+		[Display(Name = "Minimum Delivery Run Candles", Order = 4, GroupName = "08A. CISD")]
+		public int CisdMinimumRunCandles { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 1000)]
+		[Display(Name = "Maximum Reference Age (Bars)", Order = 5, GroupName = "08A. CISD")]
+		public int CisdMaximumReferenceAgeBars { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Break Buffer (Ticks)", Order = 6, GroupName = "08A. CISD")]
+		public int CisdBreakBufferTicks { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.0, 20.0)]
+		[Display(Name = "Minimum Delivery Move (ATR)", Order = 7, GroupName = "08A. CISD")]
+		public double CisdMinimumRunMovementAtr { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Liquidity Sweep Requirement", Order = 8, GroupName = "08A. CISD")]
+		public OrcaPriceActionCisdSweepRequirement CisdSweepRequirement { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 100)]
+		[Display(Name = "Sweep Lookback Bars", Order = 9, GroupName = "08A. CISD")]
+		public int CisdSweepLookbackBars { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Displacement Requirement", Order = 10, GroupName = "08A. CISD")]
+		public OrcaPriceActionCisdContextRequirement CisdDisplacementRequirement { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.0, 20.0)]
+		[Display(Name = "Minimum CISD Candle Body (ATR)", Order = 11, GroupName = "08A. CISD")]
+		public double CisdMinimumDisplacementAtr { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Same-Direction FVG Requirement", Order = 12, GroupName = "08A. CISD")]
+		public OrcaPriceActionCisdContextRequirement CisdFvgRequirement { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Strict Rejection Block Requirement", Order = 13, GroupName = "08A. CISD")]
+		public OrcaPriceActionCisdContextRequirement CisdRejectionBlockRequirement { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Structural Validation", Order = 14, GroupName = "08A. CISD")]
+		public OrcaPriceActionCisdValidationType CisdValidationType { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 200)]
+		[Display(Name = "Validation Window (Bars)", Order = 15, GroupName = "08A. CISD")]
+		public int CisdValidationWindowBars { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Same-Direction Suppression (Bars)", Order = 16, GroupName = "08A. CISD")]
+		public int CisdDuplicateSuppressionBars { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Active References", Order = 17, GroupName = "08A. CISD")]
+		public bool ShowActiveCisdReferences { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Raw CISD", Order = 18, GroupName = "08A. CISD")]
+		public bool ShowRawCisd { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Qualified CISD", Order = 19, GroupName = "08A. CISD")]
+		public bool ShowQualifiedCisd { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Validated CISD", Order = 20, GroupName = "08A. CISD")]
+		public bool ShowValidatedCisd { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(10, 2000)]
+		[Display(Name = "Maximum Historical Events", Order = 21, GroupName = "08A. CISD")]
+		public int MaximumHistoricalCisdEvents { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Raw Opacity", Order = 22, GroupName = "08A. CISD")]
+		public int CisdRawOpacity { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Qualified Opacity", Order = 23, GroupName = "08A. CISD")]
+		public int CisdQualifiedOpacity { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Validated Opacity", Order = 24, GroupName = "08A. CISD")]
+		public int CisdValidatedOpacity { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Reference Line Style", Order = 25, GroupName = "08A. CISD")]
+		public OrcaPriceActionDashStyle CisdLineStyle { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.5, 10.0)]
+		[Display(Name = "Reference Line Width", Order = 26, GroupName = "08A. CISD")]
+		public double CisdLineWidth { get; set; }
 		#endregion
 
 		#region Properties - Rejection blocks

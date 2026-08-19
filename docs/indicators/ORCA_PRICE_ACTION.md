@@ -168,6 +168,86 @@ configured wick ratio. Follow-through mode confirms on a later close through
 the rejection candle's opposite extreme within the window. The rejection zone
 is the swept wick from the extreme to the nearest body edge.
 
+## Change in State of Delivery (CISD)
+
+CISD is an optional body/open-based delivery engine, not a second market-
+structure engine. A bullish CISD requires a completed close strictly above the
+selected opening reference of a bearish delivery run. A bearish CISD requires a
+completed close strictly below the selected opening reference of a bullish run.
+Wicks and equal closes do not confirm CISD, and the independent CISD tick buffer
+is applied to the strict close comparison.
+
+The engine incrementally tracks consecutive up-close or down-close candles. A
+doji ends the consecutive run without becoming a reference candle or confirming
+a signal; the completed reference remains available. When direction reverses,
+the prior run becomes a candidate before the reversal close is tested, allowing
+that same completed reversal candle to confirm CISD without an extra-bar delay.
+Each reference fires at most once, expires after its configured age, and is
+replaced by a newer eligible run in the same delivery direction.
+
+Reference modes are:
+
+- `Delivery Run Origin` (default): the first directional candle's open;
+- `Last Opposing Candle`: the last directional candle's open, producing a
+  faster and noisier threshold.
+
+Signal modes preserve separate event quality:
+
+- `Raw/Research`: strict open-cross only; no contextual qualification;
+- `Balanced`: requires the configured delivery-run ATR move plus a recent
+  Standard-or-better internal or external pivot sweep. Displacement, same-bar
+  same-direction FVG, and confirmed Strong Rejection Block are supporting
+  metadata;
+- `Strict`: requires at least two delivery candles, at least 0.75 ATR delivery
+  movement, an External sweep, and at least 0.75 ATR body displacement on the
+  CISD confirmation candle. FVG and Rejection Block remain supporting;
+- `Custom`: uses the exposed sweep and Off/Supporting/Required context choices.
+
+The numeric delivery-run and displacement settings remain configurable.
+`Strict` treats 0.75 ATR and two candles as floors rather than overwriting the
+stored custom values. `Balanced` uses the configured 0.5 ATR starting value.
+When the global visible Sweep Quality is narrower than the CISD requirement,
+the CISD engine reuses the same strict wick/close-back-inside, minimum-
+penetration, and minimum-resting predicates to record eligible context-only
+sweeps. Those events never force another visible `Sweep` label or consume its
+rolling label episode.
+Same-direction FVG context is restricted to a standard FVG confirmed on the
+CISD bar; Strong Rejection Block context must already be confirmed inside the
+sweep-lookback window. Sweep metadata retains the pivot/event identifiers and
+Internal/External scope.
+
+A CISD begins as Raw or Qualified. It becomes Validated only when a later same-
+direction CHoCH occurs inside the validation window, or a later same-direction
+BOS when `CHoCH or BOS` validation is selected. The original CISD label keeps
+its original `Q` or Raw state, and a separate checkmarked marker appears on the
+later structural-validation bar. Same-bar structural events are not treated as
+later validation. CISD never changes trend direction, protected pivots, pivot
+roles, BOS/CHoCH, or Order Block confirmation.
+
+Visuals use a short dashed reference line plus `CISD ↑` or `CISD ↓` on the
+confirmation candle. Qualified labels add `Q`; validation adds a later
+checkmarked marker. Active references, Raw events, and the engine itself are off
+by default. `FullContext` enables CISD visibility but does not override the
+independent `Enable CISD Engine` detector switch. Event history is capped at 200
+by default, and at most one completed bullish-run reference and one completed
+bearish-run reference are retained.
+
+Initial MNQ two-minute calibration starting point—not statistically validated:
+
+- Engine: enabled manually;
+- Visibility > Show CISD: enabled manually (or use Full Context);
+- Reference: Delivery Run Origin;
+- Signal mode: Balanced;
+- Minimum run: 1 candle and 0.5 ATR net delivery move;
+- Reference age: 20 bars;
+- Sweep lookback: 8 bars;
+- Raw hidden, Qualified and Validated shown;
+- Active references hidden;
+- Validation: CHoCH only within 20 bars.
+
+The same settings should be checked on MNQ three-minute for selectivity and on
+MNQ one-minute for noise. Range-chart tuning is outside the V1 acceptance gate.
+
 ## Order-block types
 
 - `S-OB`: the nearest opposing candle before a close-confirmed external BOS or
@@ -252,6 +332,15 @@ FVGs that can still invert are retained until inversion or feature disablement.
 Diagnostics declare one primary series and report bar-update, model, active
 state, and render timing through the existing Orca diagnostics core.
 
+With CISD disabled, its engine and snapshot builder return immediately. When
+enabled, delivery-run updates are constant-time; context-only liquidity coverage
+can add one filtered high-side and low-side scan of the existing pruned pivot
+list per completed bar. FVG/Rejection qualification runs only when a Raw CISD
+fires, and structural validation scans the capped CISD list only on BOS/CHoCH.
+Diagnostics report CISD quality/direction/context/follow-through, expired-
+reference, and suppressed-duplicate counters for enabled-versus-disabled load
+comparison.
+
 Historical callbacks before the discovery cutoff do not build render arrays.
 During the discovery window, completed bars update the causal model without
 publishing a full snapshot after every bar. The chart-ready immutable snapshot
@@ -263,9 +352,11 @@ transition. This preserves the completed-bar model while avoiding historical
 
 `BlocksFocused` is the default display preset: structure, standard FVG,
 confirmed rejection blocks, and S-OB are visible. `CleanCore` shows structure
-and FVG only. `FullContext` enables every detector type plus first-period and
-first-RTH FVG highlighting. Display presets change visibility only; rejection
-and order-block detector presets remain independent.
+and FVG only. `FullContext` enables every detector-type visibility plus first-
+period and first-RTH FVG highlighting, including CISD visibility. The CISD
+engine remains independently disabled until explicitly enabled. Display presets
+change visibility only; CISD, rejection, and order-block detector modes remain
+independent.
 
 ## Required live validation
 
@@ -299,4 +390,10 @@ and order-block detector presets remain independent.
    while structure labels retain their event anchors.
 10. Change every per-type fill, border, and opacity setting; save an indicator
     template, reload it, and confirm the values round-trip.
-11. Repeat a sanity pass on 15-second and range charts.
+11. Enable CISD on MNQ two-minute. Exercise Delivery Run Origin and Last
+    Opposing Candle, equality/buffer boundaries, same-bar reversal confirmation,
+    doji interruption, reference expiry, suppression, Raw/Qualified visibility,
+    and later CHoCH/BOS validation. Confirm no CISD changes protected pivots or
+    creates an S-OB by itself. Repeat selectivity checks on MNQ three-minute and
+    a noise check on MNQ one-minute.
+12. Repeat the existing non-CISD sanity pass on 15-second and range charts.
