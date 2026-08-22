@@ -72,12 +72,14 @@ entire three-candle formation. Detection remains third-candle-close causal.
 iFVG rendering begins at the later close-through conversion bar rather than
 being back-placed before inversion.
 
-`Extension Bars` limits standard FVG, iFVG, and first-RTH zone geometry to 30
-bars by default. This is a visual endpoint only: the model continues tracking
-fills and close-through invalidation after the rectangle stops. A first-period
-FVG using `Until Filled` or `Until Period End` follows that explicit timed
-extension instead of the standard bar cap. For standard FVGs the bar count is
-measured from the first pattern candle.
+`Extension Bars` limits ordinary standard FVG and iFVG geometry to 30 bars by
+default. This is a visual endpoint only: the model continues tracking fills and
+close-through invalidation after the rectangle stops. A first-period FVG using
+`Until Filled` or `Until Period End` follows that explicit timed extension
+instead of the standard bar cap. The first-RTH FVG also overrides the bar cap:
+it extends through the configured New York RTH close and remains visible at the
+completed-zone opacity after it fills or invalidates. For ordinary standard
+FVGs the bar count is measured from the first pattern candle.
 
 Timed FVGs use a DST-aware New York clock. The first qualifying FVG of either
 direction claims a 15-minute, 30-minute, 1-hour, or 4-hour bucket from the
@@ -88,8 +90,9 @@ bar time and the primary bar interval. Non-time charts use the preceding bar
 timestamp as the causal opening boundary. Four-hour buckets begin at 00:00,
 04:00, 08:00, 12:00, 16:00, and 20:00. The separate RTH feature continues to
 accept confirmation timestamps strictly after the configured 09:30 open and
-before the configured 16:00 close. Period-end rendering never extrapolates a
-synthetic future bar on non-time charts.
+before the configured 16:00 close. Its first claimed gap persists through the
+last eligible RTH bar even if fully traded through. Period and RTH endpoint
+rendering never extrapolates a synthetic future bar on non-time charts.
 
 ## Volume imbalances
 
@@ -377,7 +380,9 @@ independent.
    Confirm protected labels are centered on the actual protected pivot, not the
    current endpoint, and that wick/equal-close tests do not create CHoCH.
 4. Exercise FVG partial fill, Two-Tone, completion, iFVG conversion, first-hour,
-   and first-RTH behavior.
+   and first-RTH behavior. Confirm the first-RTH original range remains faded
+   after fill/invalidation and extends to the final eligible RTH bar, while
+   ordinary FVGs retain their configured bar cap.
 5. Exercise VI Classic/Advanced and true-gap exclusion.
 6. Exercise rejection Strict/Balanced/Aggressive confirmation and failure.
 7. Exercise S-OB, C-OB, PB parent linkage, display modes, mitigation, and

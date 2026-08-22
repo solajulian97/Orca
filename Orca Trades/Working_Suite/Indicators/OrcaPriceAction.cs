@@ -135,6 +135,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public bool FirstRth;
 			public DateTime PeriodEndEastern = DateTime.MinValue;
 			public int PeriodEndBar = -1;
+			public DateTime RthEndEastern = DateTime.MinValue;
+			public int RthEndBar = -1;
 			public double FillPercent;
 		}
 
@@ -1472,6 +1474,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					firstRthFvgIds[key] = model.Id;
 					model.FirstRth = true;
+					model.RthEndEastern = confirmationEastern.Date.Add(RthClose);
 				}
 			}
 		}
@@ -1526,6 +1529,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (model.FirstPeriod && model.PeriodEndBar < 0
 					&& model.PeriodEndEastern != DateTime.MinValue && eastern >= model.PeriodEndEastern)
 					model.PeriodEndBar = Math.Max(model.ConfirmationBar, barIndex - 1);
+				if (model.FirstRth && model.RthEndBar < 0
+					&& model.RthEndEastern != DateTime.MinValue && eastern >= model.RthEndEastern)
+					model.RthEndBar = ResolveRthEndBar(model.ConfirmationBar, barIndex,
+						eastern, model.RthEndEastern);
 
 				if (!model.IsIfvg && !model.IfvgCreated)
 				{
@@ -2146,12 +2153,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void PruneTerminalRecords()
 		{
 			int maximum = Math.Max(10, MaximumTerminalRecords);
-			int removableFvgCount = fvgs.Count(f => IsTerminal(f.State)
-				&& (f.IsIfvg || f.IfvgCreated || !EnableIfvgConversion));
+			int removableFvgCount = fvgs.Count(IsTerminalFvgPrunable);
 			if (removableFvgCount > maximum)
 			{
 				List<FvgModel> removableFvgs = fvgs
-					.Where(f => IsTerminal(f.State) && (f.IsIfvg || f.IfvgCreated || !EnableIfvgConversion))
+					.Where(IsTerminalFvgPrunable)
 					.OrderByDescending(f => f.TerminalBar).Skip(maximum).ToList();
 				for (int i = 0; i < removableFvgs.Count; i++)
 					fvgs.Remove(removableFvgs[i]);
@@ -2191,6 +2197,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			structureEvents.RemoveAll(e => e.BarIndex < cutoff);
 			pivots.RemoveAll(p => p.Broken && p.BreakBar >= 0 && p.BreakBar < cutoff
 				&& p.Id != protectedLowId && p.Id != protectedHighId && p.Id != activeTargetId);
+		}
+
+		private bool IsTerminalFvgPrunable(FvgModel model)
+		{
+			return model != null && IsTerminal(model.State)
+				&& (model.IsIfvg || model.IfvgCreated || !EnableIfvgConversion)
+				&& (!model.FirstRth || model.RthEndBar >= 0);
 		}
 		#endregion
 
@@ -2239,9 +2252,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 					&& TimedFvgExtension == OrcaPriceActionTimedExtension.UntilPeriodEnd && model.PeriodEndBar >= 0;
 				bool timedKeepCompleted = model.FirstPeriod && ShowTimedFirstFvg
 					&& TimedFvgExtension == OrcaPriceActionTimedExtension.UntilPeriodEnd && terminal;
+				bool rthKeepCompleted = rthVisible && terminal;
 				if (!baseVisible && !periodActive && !rthVisible && !timedKeepCompleted && !periodHistorical)
 					continue;
-				if (terminal && !ShowCompletedZones && !timedKeepCompleted)
+				if (terminal && !ShowCompletedZones && !timedKeepCompleted && !rthKeepCompleted)
 					continue;
 
 				int visualStartBar = model.IsIfvg ? model.ConfirmationBar : model.OriginBar;
@@ -2252,14 +2266,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 					: CapFvgEndBar(visualStartBar, requestedEndBar, FvgExtensionBars);
 				if (timedKeepCompleted)
 					endBar = model.PeriodEndBar >= 0 ? model.PeriodEndBar : CurrentBar;
-				bool highlight = periodActive || rthVisible || timedKeepCompleted;
+				if (rthVisible)
+					endBar = model.RthEndBar >= 0 ? model.RthEndBar : CurrentBar;
+				bool highlight = periodActive || rthVisible || timedKeepCompleted || rthKeepCompleted;
 				string label = model.IsIfvg ? "iFVG" : "FVG";
 				if (model.FirstPeriod && ShowTimedFirstFvg)
 					label += " " + TimedPeriodLabel();
 				if (model.FirstRth && ShowFirstRthFvg)
 					label += " RTH";
 
-				if (periodHistorical && !terminal)
+				if (periodHistorical && !terminal && !rthVisible)
 				{
 					ZoneVisualType historyType = model.IsIfvg ? ZoneVisualType.Ifvg : ZoneVisualType.Fvg;
 					ZoneRenderItem history = CreateZone(visualStartBar, model.PeriodEndBar,
@@ -3056,6 +3072,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int safeRequested = Math.Max(safeConfirmation, requestedEndBar);
 			long maximumEnd = (long)safeConfirmation + Math.Max(1, extensionBars);
 			return (int)Math.Min(safeRequested, Math.Min(int.MaxValue, maximumEnd));
+		}
+
+		internal static int ResolveRthEndBar(int confirmationBar, int boundaryBar,
+			DateTime boundaryClock, DateTime rthEndClock)
+		{
+			if (boundaryClock < rthEndClock)
+				return -1;
+			int candidate = boundaryClock == rthEndClock ? boundaryBar : boundaryBar - 1;
+			return Math.Max(Math.Max(0, confirmationBar), candidate);
 		}
 
 		internal static int CapOrderBlockEndBar(int originBar, int requestedEndBar, int extensionBars)
