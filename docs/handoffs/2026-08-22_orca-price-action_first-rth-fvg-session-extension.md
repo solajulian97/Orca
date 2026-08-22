@@ -92,6 +92,15 @@ extends through the configured RTH close after partial fill, completion, and
 close-through inversion. Confirm ordinary FVGs still stop at their configured
 bar limit.
 
+## Deployment status
+
+Targeted deployment completed with
+`deploy_orca.ps1 -Target OrcaPriceAction`; no other target was deployed. The
+normalized authored Working_Suite and live NinjaTrader regions both have
+SHA-256 `5c6a5a31fed5618bc9eeb61957875e7f0d331b117a36f405a9e57f92d82bb862`,
+so authored-source parity passed. Source implementation commit: `acb4478`.
+NinjaTrader F5 compilation remains pending and is not implied by deployment.
+
 ## Known issues, risks, and follow-up work
 
 - On non-time charts, a bar that crosses the RTH boundary is not split; the
