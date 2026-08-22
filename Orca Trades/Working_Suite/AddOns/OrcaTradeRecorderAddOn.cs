@@ -8,6 +8,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -259,12 +260,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (string.IsNullOrEmpty(value))
 				return string.Empty;
+			byte[] raw = null;
+			byte[] protectedBytes = null;
 			try {
-				byte[] raw = Encoding.UTF8.GetBytes(value);
-				byte[] protectedBytes = ProtectedData.Protect(raw, null, DataProtectionScope.CurrentUser);
+				raw = Encoding.UTF8.GetBytes(value);
+				protectedBytes = NativeDpapi.ProtectForCurrentUser(raw);
 				return Convert.ToBase64String(protectedBytes);
 			} catch (Exception ex) {
 				throw new InvalidOperationException("OBS password could not be protected for this Windows user.", ex);
+			} finally {
+				if (raw != null)
+					Array.Clear(raw, 0, raw.Length);
+				if (protectedBytes != null)
+					Array.Clear(protectedBytes, 0, protectedBytes.Length);
 			}
 		}
 
@@ -272,12 +280,137 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (string.IsNullOrWhiteSpace(value))
 				return string.Empty;
+			byte[] protectedBytes = null;
+			byte[] raw = null;
 			try {
-				byte[] protectedBytes = Convert.FromBase64String(value);
-				return Encoding.UTF8.GetString(ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser));
+				protectedBytes = Convert.FromBase64String(value);
+				raw = NativeDpapi.UnprotectForCurrentUser(protectedBytes);
+				return Encoding.UTF8.GetString(raw);
 			} catch (Exception ex) {
 				OrcaTradeRecorderDiagnostics.Write("Stored OBS password could not be decrypted: " + ex.Message);
 				return string.Empty;
+			} finally {
+				if (protectedBytes != null)
+					Array.Clear(protectedBytes, 0, protectedBytes.Length);
+				if (raw != null)
+					Array.Clear(raw, 0, raw.Length);
+			}
+		}
+
+		private static class NativeDpapi
+		{
+			private const int CryptProtectUiForbidden = 0x1;
+
+			[StructLayout(LayoutKind.Sequential)]
+			private struct DataBlob
+			{
+				public int Length;
+				public IntPtr Data;
+			}
+
+			[DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			private static extern bool CryptProtectData(
+				ref DataBlob dataIn,
+				string dataDescription,
+				IntPtr optionalEntropy,
+				IntPtr reserved,
+				IntPtr promptStruct,
+				int flags,
+				out DataBlob dataOut);
+
+			[DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			private static extern bool CryptUnprotectData(
+				ref DataBlob dataIn,
+				out IntPtr dataDescription,
+				IntPtr optionalEntropy,
+				IntPtr reserved,
+				IntPtr promptStruct,
+				int flags,
+				out DataBlob dataOut);
+
+			[DllImport("kernel32.dll", SetLastError = true)]
+			private static extern IntPtr LocalFree(IntPtr memory);
+
+			public static byte[] ProtectForCurrentUser(byte[] value)
+			{
+				DataBlob input = CreateInput(value);
+				DataBlob output = new DataBlob();
+				try {
+					if (!CryptProtectData(ref input, "Orca Trade Recorder OBS password", IntPtr.Zero,
+						IntPtr.Zero, IntPtr.Zero, CryptProtectUiForbidden, out output))
+						throw new Win32Exception(Marshal.GetLastWin32Error());
+					return CopyOutput(output);
+				} finally {
+					FreeInput(ref input);
+					FreeOutput(ref output);
+				}
+			}
+
+			public static byte[] UnprotectForCurrentUser(byte[] value)
+			{
+				DataBlob input = CreateInput(value);
+				DataBlob output = new DataBlob();
+				IntPtr description = IntPtr.Zero;
+				try {
+					if (!CryptUnprotectData(ref input, out description, IntPtr.Zero, IntPtr.Zero,
+						IntPtr.Zero, CryptProtectUiForbidden, out output))
+						throw new Win32Exception(Marshal.GetLastWin32Error());
+					return CopyOutput(output);
+				} finally {
+					FreeInput(ref input);
+					FreeOutput(ref output);
+					if (description != IntPtr.Zero)
+						LocalFree(description);
+				}
+			}
+
+			private static DataBlob CreateInput(byte[] value)
+			{
+				if (value == null || value.Length == 0)
+					throw new ArgumentException("DPAPI input cannot be empty.", "value");
+				DataBlob blob = new DataBlob {
+					Length = value.Length,
+					Data = Marshal.AllocHGlobal(value.Length)
+				};
+				Marshal.Copy(value, 0, blob.Data, value.Length);
+				return blob;
+			}
+
+			private static byte[] CopyOutput(DataBlob blob)
+			{
+				if (blob.Data == IntPtr.Zero || blob.Length <= 0)
+					throw new InvalidOperationException("Windows DPAPI returned no data.");
+				byte[] result = new byte[blob.Length];
+				Marshal.Copy(blob.Data, result, 0, blob.Length);
+				return result;
+			}
+
+			private static void FreeInput(ref DataBlob blob)
+			{
+				if (blob.Data != IntPtr.Zero) {
+					ZeroMemory(blob.Data, blob.Length);
+					Marshal.FreeHGlobal(blob.Data);
+				}
+				blob.Data = IntPtr.Zero;
+				blob.Length = 0;
+			}
+
+			private static void FreeOutput(ref DataBlob blob)
+			{
+				if (blob.Data != IntPtr.Zero) {
+					ZeroMemory(blob.Data, blob.Length);
+					LocalFree(blob.Data);
+				}
+				blob.Data = IntPtr.Zero;
+				blob.Length = 0;
+			}
+
+			private static void ZeroMemory(IntPtr memory, int length)
+			{
+				for (int index = 0; index < length; index++)
+					Marshal.WriteByte(memory, index, 0);
 			}
 		}
 

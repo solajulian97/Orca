@@ -20,6 +20,7 @@ No existing dirty source file was edited. `Full_Suite` was not changed.
 - Added global position state transitions: first non-flat starts one recording; scaling, partial exits, reversals, and overlaps continue it; global flat starts a cancellable post-roll timer.
 - Added OBS WebSocket 5 authentication/control, minimized dedicated-profile launch, scene/microphone/profile validation, replay-buffer and recording control, five-second health reconciliation, and continuation recovery.
 - Added raw recording bundles, JSON manifests, deferred FFmpeg stream-copy MP4 finalization, ffprobe audio/video validation, and bounded asynchronous diagnostics.
+- Replaced the managed `ProtectedData` calls with direct Windows DPAPI interop after NinjaTrader F5 reported four `CS0103` errors for `ProtectedData` and `DataProtectionScope`. Password protection remains scoped to the current Windows user and no plaintext persistence was introduced.
 - No existing indicator, AddOn, order-routing, risk-management, copier, execution-line, or discipline behavior changed.
 
 ## User-facing settings added, changed, deprecated, or removed
@@ -61,18 +62,20 @@ The AddOn uses WPF only. It adds no chart overlay and no SharpDX path. The statu
 
 ## Tests performed in NinjaTrader
 
-- No NinjaTrader F5 or live SIM recording test has been performed yet.
+- Julian's first NinjaTrader F5 attempt reached the recorder and reported four `CS0103` errors at the managed DPAPI calls. This established that NinjaTrader's custom compiler does not expose that managed assembly by default; it was not a recorder state-machine or OBS error.
+- A post-fix NinjaTrader F5 attempt has not yet been performed.
 - Roslyn syntax parsing passed for the complete new source.
-- A .NET Framework semantic compile against the installed NinjaTrader 8.1.8.1 `NinjaTrader.Core.dll` and `NinjaTrader.Gui.dll` passed with no compiler errors.
+- A post-fix .NET Framework semantic compile against the installed NinjaTrader 8.1.8.1 `NinjaTrader.Core.dll` and `NinjaTrader.Gui.dll` passed with no compiler errors.
 - Targeted deployment completed with `deploy_orca.ps1 -Target OrcaTradeRecorderAddOn`.
-- Working_Suite and the live NinjaTrader AddOn match after newline normalization: SHA-256 `B7842A80052509E1984B3294F047AE29D86C17844E6F04592955040DCE76B018`.
+- Post-fix Working_Suite and live NinjaTrader AddOn match after newline normalization: SHA-256 `6A843F318DDD80E376B0412A3E5DC7CE1182F4B40B34DD56600EA0391FCD4CA5`.
 - Cached `git diff --check`, NinjaTrader F5, OBS configuration, microphone verification, SIM state transitions, recovery, and performance testing are recorded separately as they occur.
 
 ## Compile status
 
 - Static NinjaTrader-reference compile: passed.
 - Targeted deployment and normalized source/live parity: passed.
-- NinjaTrader F5 compile: pending Julian.
+- NinjaTrader F5 compile before DPAPI interop fix: failed with four `CS0103` errors.
+- NinjaTrader F5 compile after DPAPI interop fix: pending Julian.
 
 ## Manual-validation status
 

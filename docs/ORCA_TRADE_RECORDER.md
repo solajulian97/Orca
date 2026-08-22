@@ -19,7 +19,7 @@ The active source is `Orca Trades/Working_Suite/AddOns/OrcaTradeRecorderAddOn.cs
 7. Press `Arm` before trading. Closing the Recorder window does not disarm its AddOn-owned runtime.
 8. Press `Disarm` after the session. Disarming stops and preserves any active recording, stops Orca-owned replay buffering, and finalizes pending clips.
 
-The OBS password is protected with Windows DPAPI for the current user before it is written to `Documents/NinjaTrader 8/OrcaTradeRecorder.xml`. Armed state is never persisted.
+The OBS password is protected with Windows DPAPI for the current user before it is written to `Documents/NinjaTrader 8/OrcaTradeRecorder.xml`. The AddOn calls the native Windows DPAPI entry points directly so it does not require NinjaTrader to carry an additional managed cryptography reference. Armed state is never persisted.
 
 ## Capture State Machine
 
