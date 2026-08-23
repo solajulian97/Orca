@@ -88,6 +88,10 @@ large active collections remains applicable.
 - Normalized authored-source parity passed after deployment. Working and live
   authored regions both hashed to
   `da4d7290efd20d0d2edcca5f03f8edd98b4f6d04838a54623bf83eb9e4ffc6c9`.
+- The live `NinjaTrader.Custom.dll` timestamp advanced to 7:34:10 PM EDT after
+  the deployed source timestamp of 7:33:58 PM EDT. This records automatic
+  assembly generation only; it is not proof of an explicit F5 compile, assembly
+  load, or chart behavior.
 
 ## Manual-validation checklist
 
