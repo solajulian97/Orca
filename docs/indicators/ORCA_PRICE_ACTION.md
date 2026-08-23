@@ -66,6 +66,16 @@ displayed zone. `TwoTone` renders the traded portion with lower opacity and the
 remaining portion with active opacity. A strict close through the original far
 edge can create an opposite iFVG over the original range.
 
+`Mitigation Mode` separates wick filling from close-confirmed invalidation.
+`Wick Fill` is the backward-compatible default: a fully wick-filled FVG becomes
+terminal. `Close Through` keeps a fully wick-filled FVG active until a completed
+candle closes strictly beyond its original far edge; an equal close does not
+invalidate it. While waiting for that close, the full original range remains
+visible at the filled-portion opacity, including when `RemainingOnly` is the
+selected fill display. A standard FVG may still convert once into an opposite
+iFVG when enabled. An iFVG uses the same close-through lifecycle without
+recursively creating another inversion.
+
 After the third candle confirms the pattern, a standard FVG rectangle is
 back-placed to the first candle so it begins at that candle's wick and spans the
 entire three-candle formation. Detection remains third-candle-close causal.
@@ -379,10 +389,13 @@ independent.
    sweep events.
    Confirm protected labels are centered on the actual protected pivot, not the
    current endpoint, and that wick/equal-close tests do not create CHoCH.
-4. Exercise FVG partial fill, Two-Tone, completion, iFVG conversion, first-hour,
-   and first-RTH behavior. Confirm the first-RTH original range remains faded
-   after fill/invalidation and extends to the final eligible RTH bar, while
-   ordinary FVGs retain their configured bar cap.
+4. Exercise both FVG Mitigation modes, partial fill, Two-Tone, completion, iFVG
+   conversion, first-hour, and first-RTH behavior. In `Close Through`, confirm a
+   fully wick-filled zone remains as the faded original range, an equal close
+   leaves it active, and only a strict far-edge close terminates it. Confirm an
+   iFVG terminates without recursively inverting. Confirm the first-RTH original
+   range remains faded after fill/invalidation and extends to the final eligible
+   RTH bar, while ordinary FVGs retain their configured bar cap.
 5. Exercise VI Classic/Advanced and true-gap exclusion.
 6. Exercise rejection Strict/Balanced/Aggressive confirmation and failure.
 7. Exercise S-OB, C-OB, PB parent linkage, display modes, mitigation, and

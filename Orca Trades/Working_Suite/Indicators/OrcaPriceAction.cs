@@ -30,6 +30,7 @@ namespace NinjaTrader.NinjaScript
 {
 	public enum OrcaPriceActionDisplayPreset { CleanCore, BlocksFocused, FullContext, Custom }
 	public enum OrcaPriceActionFvgFillMode { RemainingOnly, TwoTone }
+	public enum OrcaPriceActionFvgMitigationMode { WickFill, CloseThrough }
 	public enum OrcaPriceActionTimedPeriod { Minutes15, Minutes30, Hour1, Hours4 }
 	public enum OrcaPriceActionTimedExtension { UntilPeriodEnd, UntilFilled }
 	public enum OrcaPriceActionVolumeImbalanceMode { Classic, Advanced }
@@ -429,6 +430,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RequireFvgDisplacement = false;
 				FvgDisplacementAtr = 1.0;
 				FvgFillMode = OrcaPriceActionFvgFillMode.RemainingOnly;
+				FvgMitigationMode = OrcaPriceActionFvgMitigationMode.WickFill;
 				EnableIfvgConversion = true;
 				FvgExtensionBars = 30;
 				TimedFvgPeriod = OrcaPriceActionTimedPeriod.Hour1;
@@ -1534,12 +1536,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 					model.RthEndBar = ResolveRthEndBar(model.ConfirmationBar, barIndex,
 						eastern, model.RthEndEastern);
 
+				bool closeThrough = IsFvgCloseThrough(close, model.OriginalLower,
+					model.OriginalUpper, (int)model.Direction);
 				if (!model.IsIfvg && !model.IfvgCreated)
 				{
-					bool inverted = model.Direction == Direction.Bullish
-						? close < model.OriginalLower
-						: close > model.OriginalUpper;
-					if (inverted)
+					if (closeThrough)
 					{
 						model.IfvgCreated = true;
 						model.State = ZoneState.Invalidated;
@@ -1548,6 +1549,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 							inversions.Add(CreateInverseFvg(model, barIndex));
 						continue;
 					}
+				}
+				else if (model.IsIfvg
+					&& FvgMitigationMode == OrcaPriceActionFvgMitigationMode.CloseThrough
+					&& closeThrough)
+				{
+					model.State = ZoneState.Invalidated;
+					model.TerminalBar = barIndex;
+					continue;
 				}
 
 				if (model.State != ZoneState.Invalidated)
@@ -1581,7 +1590,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			model.LastUpdateBar = barIndex;
 			if (commitState)
 			{
-				if (remaining <= TickSize * 0.01)
+				if (remaining <= TickSize * 0.01
+					&& FvgMitigationMode == OrcaPriceActionFvgMitigationMode.WickFill)
 				{
 					model.State = ZoneState.Completed;
 					if (model.TerminalBar < 0)
@@ -2298,6 +2308,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 					continue;
 				}
 
+				bool fullyWickFilled = model.FillPercent >= 100.0 - 1e-10;
+				bool awaitingCloseThrough = fullyWickFilled
+					&& FvgMitigationMode == OrcaPriceActionFvgMitigationMode.CloseThrough;
+
 				if (FvgFillMode == OrcaPriceActionFvgFillMode.TwoTone && model.FillPercent > 0)
 				{
 					double filledLower = model.Direction == Direction.Bullish ? model.RemainingUpper : model.OriginalLower;
@@ -2307,8 +2321,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 						ZoneVisualType filledType = model.IsIfvg ? ZoneVisualType.IfvgFilled : ZoneVisualType.FvgFilled;
 						result.Add(CreateZone(visualStartBar, endBar, filledLower, filledUpper,
 							filledType, model.Direction, model.State, BlockQuality.Standard,
-							highlight, GetZoneOpacity(filledType, model.State, true), string.Empty));
+							highlight, GetZoneOpacity(filledType, model.State, true),
+							awaitingCloseThrough ? label : string.Empty));
 					}
+				}
+				else if (awaitingCloseThrough)
+				{
+					ZoneVisualType filledType = model.IsIfvg ? ZoneVisualType.IfvgFilled : ZoneVisualType.FvgFilled;
+					result.Add(CreateZone(visualStartBar, endBar, model.OriginalLower, model.OriginalUpper,
+						filledType, model.Direction, model.State, BlockQuality.Standard,
+						highlight, GetZoneOpacity(filledType, model.State, true), label));
 				}
 
 				if (model.RemainingUpper > model.RemainingLower)
@@ -3066,6 +3088,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return 0;
 		}
 
+		internal static bool IsFvgCloseThrough(double close, double lower, double upper, int direction)
+		{
+			if (direction > 0)
+				return close < lower;
+			if (direction < 0)
+				return close > upper;
+			return false;
+		}
+
 		internal static int CapFvgEndBar(int confirmationBar, int requestedEndBar, int extensionBars)
 		{
 			int safeConfirmation = Math.Max(0, confirmationBar);
@@ -3396,12 +3427,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public OrcaPriceActionFvgFillMode FvgFillMode { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable iFVG Conversion", Order = 7, GroupName = "03. Fair Value Gaps")]
+		[Display(Name = "Mitigation Mode", Order = 7, GroupName = "03. Fair Value Gaps")]
+		public OrcaPriceActionFvgMitigationMode FvgMitigationMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Enable iFVG Conversion", Order = 8, GroupName = "03. Fair Value Gaps")]
 		public bool EnableIfvgConversion { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 10000)]
-		[Display(Name = "Extension Bars", Order = 8, GroupName = "03. Fair Value Gaps")]
+		[Display(Name = "Extension Bars", Order = 9, GroupName = "03. Fair Value Gaps")]
 		public int FvgExtensionBars { get; set; }
 
 		[NinjaScriptProperty]
