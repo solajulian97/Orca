@@ -91,7 +91,7 @@ Tick Replay is not required. The indicator uses native HTF OHLC and has no `OnMa
 ## Tests performed in NinjaTrader
 
 - Targeted Working_Suite deployment copied only `OrcaHTFCandles.cs` to the live NinjaTrader Indicators folder.
-- NinjaTrader's automatic source watcher includes `Indicators\OrcaHTFCandles.cs` in `NinjaTrader.Custom.csproj` and regenerated `NinjaTrader.Custom.dll`/`.pdb` at 23:16:03, after the final live-source write at 23:15:59. This is platform semantic-compile evidence.
+- NinjaTrader's automatic source watcher included `Indicators\OrcaHTFCandles.cs` in `NinjaTrader.Custom.csproj` and regenerated `NinjaTrader.Custom.dll`/`.pdb` at 23:16:03 after the final live-source write at 23:15:59. At 23:16:04, however, Windows Smart App Control blocked NinjaTrader from loading the unsigned temporary Custom assembly. Assembly generation completed; the NinjaTrader load gate failed.
 - No chart was opened or modified, and no historical, Market Replay, or live visual behavior was tested.
 - An explicit F5 keystroke was not sent because Windows app control was not approved for NinjaTrader.
 
@@ -107,7 +107,7 @@ Tick Replay is not required. The indicator uses native HTF OHLC and has no `OnMa
 ## Compile status
 
 - Isolated semantic compile: passed.
-- NinjaTrader automatic source-watcher semantic compile: passed; Custom project/DLL/PDB regenerated after deployment.
+- NinjaTrader assembly generation: completed, but Custom-assembly load failed under Smart App Control. Do not treat this as a successful platform compile/load gate.
 - Explicit NinjaTrader F5: not performed because app control was not approved.
 
 ## Deployment status

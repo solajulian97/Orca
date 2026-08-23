@@ -30,7 +30,9 @@ namespace NinjaTrader.NinjaScript
 		Hours2,
 		Hours4,
 		Day1,
-		Week1
+		Week1,
+		EthRth,
+		AsiaLondonNewYork
 	}
 
 	public class OrcaHTFTimeframeConverter : EnumConverter
@@ -67,15 +69,17 @@ namespace NinjaTrader.NinjaScript
 		{
 			switch (timeframe)
 			{
-				case OrcaHTFTimeframe.Minutes5:  return "5 Minutes";
-				case OrcaHTFTimeframe.Minutes15: return "15 Minutes";
-				case OrcaHTFTimeframe.Minutes30: return "30 Minutes";
-				case OrcaHTFTimeframe.Hour1:      return "1 Hour";
-				case OrcaHTFTimeframe.Hours2:     return "2 Hours";
-				case OrcaHTFTimeframe.Hours4:     return "4 Hours";
-				case OrcaHTFTimeframe.Day1:       return "1 Day";
-				case OrcaHTFTimeframe.Week1:      return "1 Week";
-				default:                          return timeframe.ToString();
+				case OrcaHTFTimeframe.Minutes5:          return "5 Minutes";
+				case OrcaHTFTimeframe.Minutes15:         return "15 Minutes";
+				case OrcaHTFTimeframe.Minutes30:         return "30 Minutes";
+				case OrcaHTFTimeframe.Hour1:             return "1 Hour";
+				case OrcaHTFTimeframe.Hours2:            return "2 Hours";
+				case OrcaHTFTimeframe.Hours4:            return "4 Hours";
+				case OrcaHTFTimeframe.Day1:              return "1 Day";
+				case OrcaHTFTimeframe.Week1:             return "Weekly";
+				case OrcaHTFTimeframe.EthRth:            return "ETH / RTH";
+				case OrcaHTFTimeframe.AsiaLondonNewYork: return "Asia / London / New York";
+				default:                                  return timeframe.ToString();
 			}
 		}
 	}
@@ -100,6 +104,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public int EndPrimaryIndex;
 		}
 
+		private struct CustomCandleWindow
+		{
+			public DateTime StartTime;
+			public DateTime EndTime;
+		}
+
 		private static readonly HtfCandleSnapshot[] EmptySnapshot = new HtfCandleSnapshot[0];
 
 		private readonly object activeSync = new object();
@@ -110,6 +120,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int historicalBarsSincePublish;
 		private bool timeframeIsHigherThanPrimary;
 		private SessionIterator htfSessionIterator;
+		private TimeZoneInfo chartTimeZone;
+		private TimeZoneInfo easternTimeZone;
+		private int lastCustomSourceIndex;
 
 		private DxBrush dxBullBodyBrush;
 		private DxBrush dxBearBodyBrush;
@@ -122,7 +135,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Name = "Orca HTF Candles";
-				Description = "Overlays native higher-timeframe candles behind the primary chart bars.";
+				Description = "Overlays native or Eastern-session higher-timeframe candles behind the primary chart bars.";
 				Calculate = Calculate.OnPriceChange;
 				IsOverlay = true;
 				DrawOnPricePanel = true;
@@ -154,7 +167,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				completedRenderSnapshot = EmptySnapshot;
 				historicalBarsSincePublish = 0;
 				hasActiveCandle = false;
+				lastCustomSourceIndex = -1;
 				timeframeIsHigherThanPrimary = IsSelectedTimeframeHigherThanPrimary();
+				chartTimeZone = GetChartTimeZone();
+				easternTimeZone = FindEasternTimeZone();
 
 				if (BarsArray != null && BarsArray.Length > 1)
 					htfSessionIterator = new SessionIterator(BarsArray[1]);
@@ -174,6 +190,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				completedRenderSnapshot = EmptySnapshot;
 				completedCandles = null;
 				htfSessionIterator = null;
+				chartTimeZone = null;
+				easternTimeZone = null;
+				lastCustomSourceIndex = -1;
 				lock (activeSync)
 				{
 					hasActiveCandle = false;
@@ -212,7 +231,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					AddDataSeries(BarsPeriodType.Day, 1);
 					break;
 				case OrcaHTFTimeframe.Week1:
-					AddDataSeries(BarsPeriodType.Week, 1);
+				case OrcaHTFTimeframe.EthRth:
+				case OrcaHTFTimeframe.AsiaLondonNewYork:
+					AddDataSeries(BarsPeriodType.Minute, 30);
 					break;
 				default:
 					AddDataSeries(BarsPeriodType.Minute, 60);
@@ -225,6 +246,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (BarsInProgress != 1 || !timeframeIsHigherThanPrimary || CurrentBars == null || CurrentBars.Length < 2 || CurrentBars[1] < 0)
 				return;
 
+			if (UsesCustomAggregation())
+			{
+				ProcessCustomAggregation();
+				return;
+			}
+
+			ProcessNativeSeriesCandle();
+		}
+
+		private void ProcessNativeSeriesCandle()
+		{
 			HtfCandleSnapshot next;
 			if (!TryBuildCurrentCandle(out next))
 				return;
@@ -265,25 +297,343 @@ namespace NinjaTrader.NinjaScript.Indicators
 					historicalBarsSincePublish = 0;
 				}
 
-				if (State == State.Realtime)
-				{
-					PublishCompletedSnapshot();
-				}
-				else
-				{
-					historicalBarsSincePublish += completedAdded;
-					if (completedCandles.Count == 1 || historicalBarsSincePublish >= 64)
-					{
-						PublishCompletedSnapshot();
-						historicalBarsSincePublish = 0;
-					}
-				}
+				PublishAfterCompletedCandles(completedAdded);
 			}
 
 			lock (activeSync)
 			{
 				activeCandle = next;
 				hasActiveCandle = true;
+			}
+		}
+
+		private void ProcessCustomAggregation()
+		{
+			int currentSourceIndex = CurrentBars[1];
+			if (currentSourceIndex < lastCustomSourceIndex)
+				ResetCandleState();
+
+			int firstUnprocessedIndex = lastCustomSourceIndex < 0 ? 0 : lastCustomSourceIndex + 1;
+			for (int sourceIndex = firstUnprocessedIndex; sourceIndex < currentSourceIndex; sourceIndex++)
+				ProcessCustomSourceIndex(sourceIndex);
+
+			ProcessCustomSourceIndex(currentSourceIndex);
+			lastCustomSourceIndex = currentSourceIndex;
+		}
+
+		private void ProcessCustomSourceIndex(int sourceIndex)
+		{
+			if (BarsArray == null || BarsArray.Length < 2 || sourceIndex < 0 || sourceIndex >= BarsArray[1].Count)
+				return;
+
+			DateTime sourceEndTime = BarsArray[1].GetTime(sourceIndex);
+			DateTime sourceStartTime = sourceEndTime.AddMinutes(-30);
+			CustomCandleWindow window;
+			if (!TryGetCustomCandleWindow(sourceStartTime, out window))
+				return;
+
+			double open = BarsArray[1].GetOpen(sourceIndex);
+			double high = BarsArray[1].GetHigh(sourceIndex);
+			double low = BarsArray[1].GetLow(sourceIndex);
+			double close = BarsArray[1].GetClose(sourceIndex);
+			if (!IsFinite(open) || !IsFinite(high) || !IsFinite(low) || !IsFinite(close))
+				return;
+
+			HtfCandleSnapshot previous;
+			bool hadPrevious;
+			lock (activeSync)
+			{
+				hadPrevious = hasActiveCandle;
+				previous = activeCandle;
+			}
+
+			bool startedNewCandle = !hadPrevious
+				|| previous.StartTime != window.StartTime
+				|| previous.EndTime != window.EndTime;
+
+			HtfCandleSnapshot next;
+			if (startedNewCandle)
+			{
+				if (hadPrevious)
+					CompleteCandle(previous);
+
+				next = new HtfCandleSnapshot
+				{
+					SourceBarIndex = sourceIndex,
+					StartTime = window.StartTime,
+					MidTime = MidpointInChartTime(window.StartTime, window.EndTime),
+					EndTime = window.EndTime,
+					Open = open,
+					High = high,
+					Low = low,
+					Close = close,
+					StartPrimaryIndex = -1,
+					MidPrimaryIndex = -1,
+					EndPrimaryIndex = -1
+				};
+			}
+			else
+			{
+				next = previous;
+				next.SourceBarIndex = sourceIndex;
+				next.High = Math.Max(previous.High, high);
+				next.Low = Math.Min(previous.Low, low);
+				next.Close = close;
+			}
+
+			lock (activeSync)
+			{
+				activeCandle = next;
+				hasActiveCandle = true;
+			}
+		}
+
+		private void CompleteCandle(HtfCandleSnapshot candle)
+		{
+			MapCompletedCandleToPrimaryBars(ref candle);
+			completedCandles.Enqueue(candle);
+			while (completedCandles.Count > CandleLookback)
+				completedCandles.Dequeue();
+
+			PublishAfterCompletedCandles(1);
+		}
+
+		private void PublishAfterCompletedCandles(int completedAdded)
+		{
+			if (completedAdded <= 0)
+				return;
+
+			if (State == State.Realtime)
+			{
+				PublishCompletedSnapshot();
+				return;
+			}
+
+			historicalBarsSincePublish += completedAdded;
+			if (completedCandles.Count == 1 || historicalBarsSincePublish >= 64)
+			{
+				PublishCompletedSnapshot();
+				historicalBarsSincePublish = 0;
+			}
+		}
+
+		private void ResetCandleState()
+		{
+			if (completedCandles != null)
+				completedCandles.Clear();
+			completedRenderSnapshot = EmptySnapshot;
+			historicalBarsSincePublish = 0;
+			lastCustomSourceIndex = -1;
+
+			lock (activeSync)
+			{
+				hasActiveCandle = false;
+				activeCandle = default(HtfCandleSnapshot);
+			}
+		}
+
+		private bool UsesCustomAggregation()
+		{
+			return Timeframe == OrcaHTFTimeframe.Week1
+				|| Timeframe == OrcaHTFTimeframe.EthRth
+				|| Timeframe == OrcaHTFTimeframe.AsiaLondonNewYork;
+		}
+
+		private bool TryGetCustomCandleWindow(DateTime sourceStartTime, out CustomCandleWindow window)
+		{
+			window = default(CustomCandleWindow);
+			DateTime easternSourceStart = ConvertChartTimeToEastern(sourceStartTime);
+			DateTime easternStart;
+			DateTime easternEnd;
+
+			bool found;
+			switch (Timeframe)
+			{
+				case OrcaHTFTimeframe.Week1:
+					found = TryGetWeeklyEasternWindow(easternSourceStart, out easternStart, out easternEnd);
+					break;
+				case OrcaHTFTimeframe.EthRth:
+					found = TryGetEthRthEasternWindow(easternSourceStart, out easternStart, out easternEnd);
+					break;
+				case OrcaHTFTimeframe.AsiaLondonNewYork:
+					found = TryGetThreeSessionEasternWindow(easternSourceStart, out easternStart, out easternEnd);
+					break;
+				default:
+					return false;
+			}
+
+			if (!found)
+				return false;
+
+			window.StartTime = ConvertEasternTimeToChart(easternStart);
+			window.EndTime = ConvertEasternTimeToChart(easternEnd);
+			return window.EndTime > window.StartTime;
+		}
+
+		private static bool TryGetWeeklyEasternWindow(DateTime sourceStart, out DateTime startTime, out DateTime endTime)
+		{
+			DateTime date = sourceStart.Date;
+			DateTime sunday = date.AddDays(-(int)date.DayOfWeek);
+			startTime = sunday.AddHours(18);
+			if (sourceStart < startTime)
+				startTime = startTime.AddDays(-7);
+
+			endTime = startTime.Date.AddDays(5).AddHours(17);
+			return sourceStart >= startTime && sourceStart < endTime;
+		}
+
+		private static bool TryGetEthRthEasternWindow(DateTime sourceStart, out DateTime startTime, out DateTime endTime)
+		{
+			DateTime date = sourceStart.Date;
+			TimeSpan time = sourceStart.TimeOfDay;
+			TimeSpan overnightStart = new TimeSpan(18, 0, 0);
+			TimeSpan rthStart = new TimeSpan(9, 30, 0);
+			TimeSpan rthEnd = new TimeSpan(17, 0, 0);
+
+			if (time >= overnightStart)
+			{
+				startTime = date.Add(overnightStart);
+				endTime = date.AddDays(1).Add(rthStart);
+				return IsFuturesWeeknightStart(date.DayOfWeek);
+			}
+
+			if (time < rthStart)
+			{
+				DateTime priorDate = date.AddDays(-1);
+				startTime = priorDate.Add(overnightStart);
+				endTime = date.Add(rthStart);
+				return IsFuturesWeeknightStart(priorDate.DayOfWeek);
+			}
+
+			if (time < rthEnd && IsWeekday(date.DayOfWeek))
+			{
+				startTime = date.Add(rthStart);
+				endTime = date.Add(rthEnd);
+				return true;
+			}
+
+			startTime = DateTime.MinValue;
+			endTime = DateTime.MinValue;
+			return false;
+		}
+
+		private static bool TryGetThreeSessionEasternWindow(DateTime sourceStart, out DateTime startTime, out DateTime endTime)
+		{
+			DateTime date = sourceStart.Date;
+			TimeSpan time = sourceStart.TimeOfDay;
+			TimeSpan asiaStart = new TimeSpan(18, 0, 0);
+			TimeSpan londonStart = new TimeSpan(3, 0, 0);
+			TimeSpan newYorkStart = new TimeSpan(9, 30, 0);
+			TimeSpan newYorkEnd = new TimeSpan(17, 0, 0);
+
+			if (time >= asiaStart)
+			{
+				startTime = date.Add(asiaStart);
+				endTime = date.AddDays(1).Add(londonStart);
+				return IsFuturesWeeknightStart(date.DayOfWeek);
+			}
+
+			if (time < londonStart)
+			{
+				DateTime priorDate = date.AddDays(-1);
+				startTime = priorDate.Add(asiaStart);
+				endTime = date.Add(londonStart);
+				return IsFuturesWeeknightStart(priorDate.DayOfWeek);
+			}
+
+			if (time < newYorkStart && IsWeekday(date.DayOfWeek))
+			{
+				startTime = date.Add(londonStart);
+				endTime = date.Add(newYorkStart);
+				return true;
+			}
+
+			if (time < newYorkEnd && IsWeekday(date.DayOfWeek))
+			{
+				startTime = date.Add(newYorkStart);
+				endTime = date.Add(newYorkEnd);
+				return true;
+			}
+
+			startTime = DateTime.MinValue;
+			endTime = DateTime.MinValue;
+			return false;
+		}
+
+		private static bool IsFuturesWeeknightStart(DayOfWeek dayOfWeek)
+		{
+			int day = (int)dayOfWeek;
+			return day >= (int)DayOfWeek.Sunday && day <= (int)DayOfWeek.Thursday;
+		}
+
+		private static bool IsWeekday(DayOfWeek dayOfWeek)
+		{
+			int day = (int)dayOfWeek;
+			return day >= (int)DayOfWeek.Monday && day <= (int)DayOfWeek.Friday;
+		}
+
+		private static TimeZoneInfo FindEasternTimeZone()
+		{
+			try
+			{
+				return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+			}
+			catch
+			{
+				return TimeZoneInfo.Local;
+			}
+		}
+
+		private static TimeZoneInfo GetChartTimeZone()
+		{
+			try
+			{
+				return NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo ?? TimeZoneInfo.Local;
+			}
+			catch
+			{
+				return TimeZoneInfo.Local;
+			}
+		}
+
+		private DateTime ConvertChartTimeToEastern(DateTime chartTime)
+		{
+			return ConvertBetweenTimeZones(chartTime, chartTimeZone, easternTimeZone);
+		}
+
+		private DateTime ConvertEasternTimeToChart(DateTime easternTime)
+		{
+			return ConvertBetweenTimeZones(easternTime, easternTimeZone, chartTimeZone);
+		}
+
+		private static DateTime ConvertBetweenTimeZones(DateTime value, TimeZoneInfo source, TimeZoneInfo destination)
+		{
+			if (source == null || destination == null || string.Equals(source.Id, destination.Id, StringComparison.OrdinalIgnoreCase))
+				return DateTime.SpecifyKind(value, DateTimeKind.Unspecified);
+
+			try
+			{
+				return TimeZoneInfo.ConvertTime(DateTime.SpecifyKind(value, DateTimeKind.Unspecified), source, destination);
+			}
+			catch
+			{
+				return DateTime.SpecifyKind(value, DateTimeKind.Unspecified);
+			}
+		}
+
+		private DateTime MidpointInChartTime(DateTime startTime, DateTime endTime)
+		{
+			TimeZoneInfo timeZone = chartTimeZone ?? TimeZoneInfo.Local;
+			try
+			{
+				DateTime startUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(startTime, DateTimeKind.Unspecified), timeZone);
+				DateTime endUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(endTime, DateTimeKind.Unspecified), timeZone);
+				DateTime midpointUtc = new DateTime(startUtc.Ticks + ((endUtc.Ticks - startUtc.Ticks) / 2), DateTimeKind.Utc);
+				return TimeZoneInfo.ConvertTimeFromUtc(midpointUtc, timeZone);
+			}
+			catch
+			{
+				return Midpoint(startTime, endTime);
 			}
 		}
 
@@ -333,9 +683,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (Timeframe == OrcaHTFTimeframe.Day1)
 				return TryGetDailyBounds(sourceTime, out startTime, out endTime);
-
-			if (Timeframe == OrcaHTFTimeframe.Week1)
-				return TryGetWeeklyBounds(sourceTime, out startTime, out endTime);
 
 			endTime = sourceTime;
 			DateTime sessionBegin;
@@ -401,48 +748,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			return endTime > startTime;
-		}
-
-		private bool TryGetWeeklyBounds(DateTime barTime, out DateTime startTime, out DateTime endTime)
-		{
-			DateTime weekDate = barTime.Date;
-			int daysSinceMonday = ((int)weekDate.DayOfWeek + 6) % 7;
-			DateTime monday = weekDate.AddDays(-daysSinceMonday);
-
-			if (!TryFindTradingDayBegin(monday, 7, out startTime))
-				startTime = monday;
-
-			DateTime nextMonday = monday.AddDays(7);
-			if (!TryFindTradingDayBegin(nextMonday, 7, out endTime) || endTime <= startTime)
-				endTime = startTime.AddDays(7);
-
-			return endTime > startTime;
-		}
-
-		private bool TryFindTradingDayBegin(DateTime firstDate, int maximumDays, out DateTime beginTime)
-		{
-			beginTime = DateTime.MinValue;
-			if (htfSessionIterator == null)
-				return false;
-
-			for (int dayOffset = 0; dayOffset < maximumDays; dayOffset++)
-			{
-				DateTime tradingDay = firstDate.Date.AddDays(dayOffset);
-				try
-				{
-					if (!htfSessionIterator.IsTradingDayDefined(tradingDay))
-						continue;
-
-					beginTime = htfSessionIterator.GetTradingDayBeginLocal(tradingDay);
-					return beginTime != DateTime.MinValue;
-				}
-				catch
-				{
-					beginTime = DateTime.MinValue;
-				}
-			}
-
-			return false;
 		}
 
 		private bool TryGetTradingDayBegin(DateTime tradingDay, out DateTime beginTime)
@@ -675,6 +980,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				case OrcaHTFTimeframe.Hours4:     return 240;
 				case OrcaHTFTimeframe.Day1:       return 1440;
 				case OrcaHTFTimeframe.Week1:      return 10080;
+				case OrcaHTFTimeframe.EthRth:     return 450;
+				case OrcaHTFTimeframe.AsiaLondonNewYork: return 390;
 				default:                          return 60;
 			}
 		}
@@ -747,7 +1054,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty]
 		[TypeConverter(typeof(OrcaHTFTimeframeConverter))]
 		[RefreshProperties(RefreshProperties.All)]
-		[Display(Name = "Timeframe", Description = "Higher timeframe used to build the candle overlay. Changing it reloads the indicator with one matching secondary series.", Order = 1, GroupName = "General")]
+		[Display(Name = "Timeframe", Description = "Higher timeframe or Eastern futures-session split used to build the candle overlay. Changing it reloads the indicator with one matching secondary series.", Order = 1, GroupName = "General")]
 		public OrcaHTFTimeframe Timeframe { get; set; }
 
 		[NinjaScriptProperty]

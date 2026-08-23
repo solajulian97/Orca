@@ -22,7 +22,7 @@ Order-flow/profile: `OrcaAbsorptionCandles`, `OrcaCandleVolumeProfile`, `OrcaCum
 
 Prints/execution: `OrcaPrints`, `OrcaPrints.Engine`, `OrcaPrints.Models`, `OrcaPrints.Rendering`, `OrcaPrints.Scoring`, `OrcaExecutionLines`, `OrcaExecutionLines2`, `OrcaVisualOrders`.
 
-VWAP/session context: `OrcaAnchoredVWAPs`, `OrcaManualAnchoredVWAP`, `OrcaTimeVWAPs`, `OrcaTimeStatistics`, `OrcaSessionContextMap`, `OrcaMGIDaily`, `OrcaMGIWeekly`, `OrcaMGIStatistics`.
+VWAP/session context and time overlays: `OrcaAnchoredVWAPs`, `OrcaManualAnchoredVWAP`, `OrcaTimeVWAPs`, `OrcaTimeStatistics`, `OrcaSessionContextMap`, `OrcaMGIDaily`, `OrcaMGIWeekly`, `OrcaMGIStatistics`, `OrcaHTFCandles`.
 
 Add-ons: `OrcaCopyAddOn`, `OrcaCopyEngine`, `OrcaCopyNetwork`, `OrcaTradeCopierAddOn`, `OrcaTradeCopierEngine`, `OrcaTradeCopierNetwork`, `OrcaRiskManagerAddOn`, `OrcaExecutionRouterAddOn`, `OrcaDisciplineGuardAddOn`.
 
@@ -68,6 +68,7 @@ Existing shared consumers include `OrcaRollingProfiles`, `OrcaVisibleRangeVolume
 | `OrcaVisibleRangeVolumeProfile` | Conditional | 1 Tick | Adds local tick series when true VAP and local tick cache are enabled. |
 | `OrcaMGIDaily` | Yes | 1 Minute and 30 Second | Daily/session opening-range and anchor behavior. |
 | `OrcaSessionContextMap` | Yes | 30 Second; 1 Tick when session volume profile is enabled | 30-second opening range plus true traded-at-price session profile/VWAP; no bar-range volume estimate. |
+| `OrcaHTFCandles` | Yes | One selected Minute 5/15/30/60/120/240 or Day 1 series; Minute 30 for custom Weekly and Eastern session splits | Native fixed-timeframe OHLC or bounded 30-minute session aggregation; no Tick Replay, Bid/Ask, or order-flow dependency. |
 | `OrcaAtrAdaptiveRangeBarsType` | BarsType | Built from Tick; base period Second | Custom BarsType work may appear in utilization. |
 
 No `AddVolumetric` usage was found in `Working_Suite`.
@@ -90,7 +91,7 @@ Common calculation modes:
 - `Calculate.OnPriceChange`: `OrcaCandleVolumeProfile`, `OrcaExecutionLines`, `OrcaLegtoLegProfile`, `OrcaMGIDaily`, `OrcaMGIWeekly`, `OrcaRollingProfiles`, `OrcaStepProfile`, `OrcaTimeVWAPs`, default `OrcaSessionContextMap`.
 - `Calculate.OnBarClose`: `OrcaAnchoredVWAPs`.
 
-Render-heavy components with explicit `OnRender`: `OrcaCandleVolumeProfile`, `OrcaExecutionLines`, `OrcaFixedRangeProfile`, `OrcaLegtoLegProfile`, `OrcaManualAnchoredVWAP`, `OrcaMGIDaily`, `OrcaMGIStatistics`, `OrcaMGIWeekly`, `OrcaPrints.Rendering`, `OrcaProfileDataProvider`, `OrcaRollingProfiles`, `OrcaSessionContextMap`, `OrcaStepProfile`, `OrcaTickDirectionIndex`, `OrcaTimeStatistics`, `OrcaVisibleRangeVolumeProfile`, and `OrcaVisualOrders`.
+Render-heavy components with explicit `OnRender`: `OrcaCandleVolumeProfile`, `OrcaExecutionLines`, `OrcaFixedRangeProfile`, `OrcaHTFCandles`, `OrcaLegtoLegProfile`, `OrcaManualAnchoredVWAP`, `OrcaMGIDaily`, `OrcaMGIStatistics`, `OrcaMGIWeekly`, `OrcaPrints.Rendering`, `OrcaProfileDataProvider`, `OrcaRollingProfiles`, `OrcaSessionContextMap`, `OrcaStepProfile`, `OrcaTickDirectionIndex`, `OrcaTimeStatistics`, `OrcaVisibleRangeVolumeProfile`, and `OrcaVisualOrders`.
 
 Render risk areas:
 

@@ -1,13 +1,13 @@
 # Orca HTF Candles
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 ## Component
 
 - Display name: `Orca HTF Candles`
 - Class: `OrcaHTFCandles`
 - Active source: `Orca Trades/Working_Suite/Indicators/OrcaHTFCandles.cs`
-- Status: initial Working_Suite implementation; NinjaTrader runtime validation pending
+- Status: Working_Suite implementation with Eastern session options; NinjaTrader runtime validation pending
 
 ## Pine Reference Behavior
 
@@ -43,11 +43,13 @@ The indicator adds exactly one same-instrument secondary series selected during 
 | 2 Hours | Minute 120 |
 | 4 Hours | Minute 240 |
 | 1 Day | Day 1 |
-| 1 Week | Week 1 |
+| Weekly | Minute 30, aggregated Sunday 18:00 through Friday 17:00 Eastern |
+| ETH / RTH | Minute 30, aggregated into 18:00-09:30 and 09:30-17:00 Eastern candles |
+| Asia / London / New York | Minute 30, aggregated into 18:00-03:00, 03:00-09:30, and 09:30-17:00 Eastern candles |
 
-`BarsInProgress == 1` is the only calculation path. OHLC comes directly from that native secondary series and is never reconstructed from the primary chart. `Calculate.OnPriceChange` is sufficient because this version has no volume-dependent behavior. Tick Replay is not required.
+`BarsInProgress == 1` is the only calculation path. Fixed timeframes use the secondary bar's native OHLC directly. Weekly and session-split modes aggregate native 30-minute secondary OHLC; this preserves exact open/high/low/close for boundaries that all align to 30 minutes without adding a Tick series. OHLC is never reconstructed from the primary chart. `Calculate.OnPriceChange` is sufficient because this version has no volume-dependent behavior. Tick Replay is not required.
 
-The latest secondary index is stored as the active candle. When the index advances, the former active candle is moved to a bounded completed-candle queue. Completed render data is published as an immutable array only at HTF transitions, in bounded historical batches, and at `State.Transition`. The active candle is copied under a short lock. `OnRender` never traverses the mutable queue.
+For fixed timeframes, the latest secondary index is stored as the active candle. For custom modes, each 30-minute source bar updates the active scheduled window, and a changed window freezes the prior aggregate. Completed render data is published as an immutable array only at candle transitions, in bounded historical batches, and at `State.Transition`. The active candle is copied under a short lock. `OnRender` never traverses the mutable queue.
 
 If the selected timeframe is equal to or lower than a time-based primary chart period, the indicator leaves the chart unchanged without throwing or printing. Tick, volume, range, and other non-time primary bars continue to use the selected HTF series because they have no fixed period duration that can be compared safely.
 
@@ -60,7 +62,18 @@ NinjaTrader intraday time bars are close-stamped. For Minute-based HTF series:
 - The first HTF bar after a session break starts at `SessionIterator`'s trading-day begin, not at the prior session's close.
 - NinjaTrader's shortened final bar timestamp is retained, so an early-close candle stops at the actual native bar end rather than extending by a fixed number of minutes.
 
-Daily bars use the selected Trading Hours trading-day begin and a one-day scheduled interval. Weekly bars use the first defined trading-day begin in the native weekly bar's calendar week and the next week's first defined trading-day begin. These rules keep the overlay session-aligned while preserving a scheduled future edge for the active candle.
+Daily bars use the selected Trading Hours trading-day begin and a one-day scheduled interval.
+
+The three custom modes use Eastern market time with daylight-saving transitions (`Eastern Standard Time` is the Windows timezone identifier, not a fixed UTC-5 offset):
+
+- `Weekly`: Sunday 18:00 through Friday 17:00.
+- `ETH / RTH`: overnight 18:00-09:30, then RTH 09:30-17:00.
+- `Asia / London / New York`: Asia 18:00-03:00, London 03:00-09:30, then New York/RTH 09:30-17:00.
+- The 17:00-18:00 maintenance interval is excluded.
+- Overnight/Asia starts are allowed Sunday through Thursday only. RTH, London, and New York windows are allowed Monday through Friday only.
+- Scheduled Eastern boundaries are converted to NinjaTrader's configured chart timezone before rendering.
+
+The custom windows are drawn across their complete scheduled interval as soon as their first native 30-minute source bar begins. Their OHLC then develops from the source bars received inside that window. A prior window is frozen when the first source bar of the next valid window arrives.
 
 Logical boundaries are mapped to the first primary bar whose timestamp is strictly later than the boundary. This matches NinjaTrader's close-stamped convention: on a five-minute chart, an hourly boundary at 05:00 maps to the 05:05 close-stamped bar that represents the 05:00-05:05 interval. Completed candles cache these primary indices. The active future edge falls back to `ChartControl.GetXByTime()` until a qualifying primary bar exists.
 
@@ -83,6 +96,7 @@ On tick, volume, and range charts, the same rule maps each boundary to the first
 Defaults match the supplied settings/appearance screenshot:
 
 - Timeframe: 1 Hour
+- Timeframe options: 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 2 Hours, 4 Hours, 1 Day, Weekly, ETH / RTH, and Asia / London / New York
 - Candle Lookback: 200 completed candles plus the active candle
 - Bull Body: RGB `76,175,80` (`#4CAF50`)
 - Bear Body: RGB `255,82,82` (`#FF5252`)
@@ -95,19 +109,25 @@ Defaults match the supplied settings/appearance screenshot:
 
 Brushes use public `[XmlIgnore]` properties and hidden `Serialize.BrushToString`/`Serialize.StringToBrush` properties.
 
+For split modes, Candle Lookback counts individual session candles rather than trading days. For example, `ETH / RTH` produces up to two candles per trading day and `Asia / London / New York` produces up to three.
+
 ## TradingView Differences And Limitations
 
 - Intraday shortened bars stop at NinjaTrader's actual native close rather than Pine's unconditional nominal-duration right edge.
-- Daily and weekly OHLC availability can depend on the data provider. NinjaTrader native Day/Week bars may not reproduce every custom Trading Hours template exactly even though the display boundaries use the secondary series' `SessionIterator`.
+- Daily OHLC availability can depend on the data provider and selected Trading Hours template.
+- Weekly and session-split modes can aggregate only the 30-minute bars made available by the chart's Trading Hours template. An RTH-only template cannot supply overnight/Asia/London OHLC, and missing provider history cannot be reconstructed.
+- Holiday and early-close windows retain the requested scheduled right edge even when the final available 30-minute source bar ends earlier.
 - A non-time chart has no deterministic future bar spacing. Active future projection is therefore limited by NinjaTrader's `GetXByTime()` behavior until new tick/range/volume bars exist.
 - Historical bars are derived from confirmed native secondary OHLC. The active bar develops in realtime, but completed snapshots are not revised by primary-chart reconstruction.
 - Loaded history controls availability. A lookback larger than the available secondary data shows only the candles NinjaTrader loaded.
 
 ## Validation Status
 
-- Isolated semantic compile against the installed NinjaTrader, WPF, and SharpDX assemblies: passed with zero C# errors.
+- Initial and 2026-08-22 session-extension isolated semantic compiles against the installed NinjaTrader, WPF, and SharpDX assemblies: passed with zero C# errors.
+- Fourteen exact-source boundary assertions passed for Weekly, ETH/RTH, Asia, London, New York, the 17:00 maintenance boundary, Friday-night exclusion, and winter/summer Eastern offsets.
 - Targeted Working_Suite deployment: passed; the normalized authored region has source/live SHA-256 parity at `018F814ADA53F5AAF55A84B60E54245DC1182E869EC99D3E9B44A579334220D`. NinjaTrader appended its generated-code region only to the live copy.
-- NinjaTrader automatic source-watcher compile: passed. `NinjaTrader.Custom.csproj` includes `Indicators\OrcaHTFCandles.cs`, and the Custom DLL/PDB regenerated at 2026-08-21 23:16:03 local time after the final live-source write at 23:15:59.
+- Prior NinjaTrader assembly generation completed, but Windows Smart App Control blocked NinjaTrader from loading the unsigned temporary Custom assembly. The platform compile/load gate therefore remains failed/pending even though no C# compiler diagnostic was recorded.
+- The 2026-08-22 session extension was not deployed while that policy blocker remains.
 - Explicit NinjaTrader F5: not sent because Windows app control was not approved for NinjaTrader.
 - Historical rendering: pending.
 - Market Replay: pending.
