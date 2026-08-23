@@ -82,7 +82,12 @@ large active collections remains applicable.
   Fill terminal guard, Close Through faded fallback, iFVG terminal branch,
   preserved RTH endpoint/override, and absence of `AddDataSeries`/`OnMarketData`.
 - `git diff --check` passed.
-- Targeted deployment and authored-source parity: pending at handoff creation.
+- Targeted deployment completed with `deploy_orca.ps1 -Target
+  OrcaPriceAction`; its dry run and actual run named only the live
+  `Indicators/OrcaPriceAction.cs` target.
+- Normalized authored-source parity passed after deployment. Working and live
+  authored regions both hashed to
+  `da4d7290efd20d0d2edcca5f03f8edd98b4f6d04838a54623bf83eb9e4ffc6c9`.
 
 ## Manual-validation checklist
 
