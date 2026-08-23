@@ -86,8 +86,10 @@ Tick Replay is not required. Custom OHLC is aggregated from native 30-minute ope
 
 ## Tests performed in NinjaTrader
 
-- None. The updated source was not deployed because the previously diagnosed Windows Smart App Control policy blocks NinjaTrader from loading its unsigned generated temporary Custom assembly.
-- No F5, historical chart, Market Replay, or live session test was performed.
+- Targeted Working_Suite deployment completed at 20:29 local time while NinjaTrader was running.
+- NinjaTrader appended its generated-code region to the live source and regenerated `NinjaTrader.Custom.dll` at 20:29:06.
+- No explicit F5, historical chart, Market Replay, or live session test was performed.
+- Windows app inspection/control was not approved for NinjaTrader, so no UI compile result or chart state was inferred.
 
 ## Static tests performed
 
@@ -95,12 +97,16 @@ Tick Replay is not required. Custom OHLC is aggregated from native 30-minute ope
 - Fourteen boundary assertions extracted from the exact source helpers passed for Weekly, ETH/RTH, Asia, London, New York, the 17:00 maintenance boundary, and the Friday-night exclusion.
 - Eastern timezone conversion was checked at UTC-5 in winter and UTC-4 in summer.
 - Source inspection confirmed one secondary series per setting, no Tick Replay path, and no new work in `OnRender`.
+- Normalized authored source/live SHA-256 parity passed at `9BD0113627DA4477E515E8DD93005D4F91F2970D89F61C33A440CAEBD8CDCC5E` after deployment.
+- No new Code Integrity 3033/3077 event appeared after the 20:29 deployment check.
 
 ## Compile status
 
 - Isolated semantic compile: passed.
-- NinjaTrader assembly generation/load: not attempted for this change.
-- NinjaTrader F5: pending after the Smart App Control policy is resolved by Julian.
+- Live source deployment: passed.
+- NinjaTrader assembly generation: observed at 20:29:06.
+- NinjaTrader Custom-assembly load: not independently verified; no repeat Code Integrity block was observed.
+- NinjaTrader F5: pending.
 
 ## Manual-validation status
 
@@ -121,7 +127,8 @@ Pending Julian validation for:
 - An RTH-only Trading Hours template cannot produce overnight/Asia/London OHLC.
 - The first custom candle can be partial when loaded history begins inside its scheduled window.
 - Holiday early closes retain the scheduled window edge rather than shrinking geometry to the final source bar.
-- Smart App Control currently prevents the required NinjaTrader Custom-assembly load gate.
+- Smart App Control blocked the prior 2026-08-21 generated assembly. The block did not recur during the immediate 2026-08-22 deployment observation, but a successful load still requires NinjaTrader/F5 confirmation.
+- The `OrcaHTFCandlesCompile.exe` application-error dialog observed during development came from the temporary external semantic-validation harness, not from NinjaTrader. The harness attempted to execute against protected NinjaTrader assemblies; it was removed after the compile-only check.
 
 ## Promotion eligibility
 

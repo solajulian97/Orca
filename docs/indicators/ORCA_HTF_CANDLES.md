@@ -127,8 +127,9 @@ For split modes, Candle Lookback counts individual session candles rather than t
 - Fourteen exact-source boundary assertions passed for Weekly, ETH/RTH, Asia, London, New York, the 17:00 maintenance boundary, Friday-night exclusion, and winter/summer Eastern offsets.
 - Targeted Working_Suite deployment: passed; the normalized authored region has source/live SHA-256 parity at `018F814ADA53F5AAF55A84B60E54245DC1182E869EC99D3E9B44A579334220D`. NinjaTrader appended its generated-code region only to the live copy.
 - Prior NinjaTrader assembly generation completed, but Windows Smart App Control blocked NinjaTrader from loading the unsigned temporary Custom assembly. The platform compile/load gate therefore remains failed/pending even though no C# compiler diagnostic was recorded.
-- The 2026-08-22 session extension was not deployed while that policy blocker remains.
-- Explicit NinjaTrader F5: not sent because Windows app control was not approved for NinjaTrader.
+- The 2026-08-22 session extension was targeted-deployed at 20:29 local time. The live authored region matches `Working_Suite` at SHA-256 `9BD0113627DA4477E515E8DD93005D4F91F2970D89F61C33A440CAEBD8CDCC5E`, NinjaTrader appended its generated-code region, and `NinjaTrader.Custom.dll` regenerated at 20:29:06.
+- No new Code Integrity 3033/3077 event appeared after this deployment. That does not independently prove a successful Custom-assembly load.
+- Explicit NinjaTrader F5: not sent; Windows app inspection/control was not approved for NinjaTrader.
 - Historical rendering: pending.
 - Market Replay: pending.
 - Live behavior: pending Julian validation.
