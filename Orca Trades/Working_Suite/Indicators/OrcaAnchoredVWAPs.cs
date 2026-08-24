@@ -24,6 +24,7 @@ using NinjaTrader.NinjaScript.DrawingTools;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
+	[TypeConverter(typeof(OrcaAnchoredVwapTypeConverter))]
 	public class OrcaAnchoredVWAPs : Indicator
 	{
 		private VwapTracker devTracker;
@@ -78,6 +79,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				FillOpacityStd12 = 15;
 				FillColorStd23 = Brushes.RoyalBlue;
 				FillOpacityStd23 = 10;
+				ShowVwap2Fills = true;
 
 				FillColorHtfCore1 = Brushes.PaleTurquoise;
 				FillOpacityHtfCore1 = 20;
@@ -85,6 +87,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				FillOpacityHtf12 = 15;
 				FillColorHtf23 = Brushes.Teal;
 				FillOpacityHtf23 = 10;
+				ShowVwap3Fills = true;
 
 				AddPlot(new Stroke(Brushes.Gray, 2), PlotStyle.Line, "VWAP 1");
 				AddPlot(new Stroke(Brushes.Magenta, 2), PlotStyle.Line, "VWAP 2");
@@ -154,7 +157,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawRegions(bool drawStd, bool drawHtf)
 		{
-			if (ShowStdBands && drawStd && stdTracker.ActiveAnchorBar >= 0 && stdTracker.ActiveAnchorBar <= CurrentBar)
+			if (ShowVwap2Fills && ShowStdBands && drawStd && stdTracker.ActiveAnchorBar >= 0 && stdTracker.ActiveAnchorBar <= CurrentBar)
 			{
 				int stdStartBarsAgo = CurrentBar - stdTracker.ActiveAnchorBar;
 				bool stdShowUp = ShowAllBands || stdTracker.Direction == -1;
@@ -163,8 +166,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (stdShowUp)
 				{
 					if (ShowStdDev1) Draw.Region(this, "StdUpperCore_1", stdStartBarsAgo, 0, Values[1], Values[3], null, FillColorStdCore1, FillOpacityStdCore1);
+					else RemoveDrawObject("StdUpperCore_1");
 					if (ShowStdDev1 && ShowStdDev2) Draw.Region(this, "StdUpper1_2", stdStartBarsAgo, 0, Values[3], Values[4], null, FillColorStd12, FillOpacityStd12);
+					else RemoveDrawObject("StdUpper1_2");
 					if (ShowStdDev2 && ShowStdDev3) Draw.Region(this, "StdUpper2_3", stdStartBarsAgo, 0, Values[4], Values[5], null, FillColorStd23, FillOpacityStd23);
+					else RemoveDrawObject("StdUpper2_3");
 				}
 				else
 				{
@@ -176,8 +182,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (stdShowDn)
 				{
 					if (ShowStdDev1) Draw.Region(this, "StdLowerCore_1", stdStartBarsAgo, 0, Values[1], Values[6], null, FillColorStdCore1, FillOpacityStdCore1);
+					else RemoveDrawObject("StdLowerCore_1");
 					if (ShowStdDev1 && ShowStdDev2) Draw.Region(this, "StdLower1_2", stdStartBarsAgo, 0, Values[6], Values[7], null, FillColorStd12, FillOpacityStd12);
+					else RemoveDrawObject("StdLower1_2");
 					if (ShowStdDev2 && ShowStdDev3) Draw.Region(this, "StdLower2_3", stdStartBarsAgo, 0, Values[7], Values[8], null, FillColorStd23, FillOpacityStd23);
+					else RemoveDrawObject("StdLower2_3");
 				}
 				else
 				{
@@ -186,7 +195,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					RemoveDrawObject("StdLower2_3");
 				}
 			}
-			else if (!drawStd)
+			else
 			{
 				RemoveDrawObject("StdUpperCore_1");
 				RemoveDrawObject("StdLowerCore_1");
@@ -196,7 +205,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RemoveDrawObject("StdLower2_3");
 			}
 
-			if (ShowHtfBands && drawHtf && htfTracker.ActiveAnchorBar >= 0 && htfTracker.ActiveAnchorBar <= CurrentBar)
+			if (ShowVwap3Fills && ShowHtfBands && drawHtf && htfTracker.ActiveAnchorBar >= 0 && htfTracker.ActiveAnchorBar <= CurrentBar)
 			{
 				int htfStartBarsAgo = CurrentBar - htfTracker.ActiveAnchorBar;
 				bool htfShowUp = ShowAllBands || htfTracker.Direction == -1;
@@ -205,8 +214,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (htfShowUp)
 				{
 					if (ShowStdDev1) Draw.Region(this, "HtfUpperCore_1", htfStartBarsAgo, 0, Values[2], Values[9], null, FillColorHtfCore1, FillOpacityHtfCore1);
+					else RemoveDrawObject("HtfUpperCore_1");
 					if (ShowStdDev1 && ShowStdDev2) Draw.Region(this, "HtfUpper1_2", htfStartBarsAgo, 0, Values[9], Values[10], null, FillColorHtf12, FillOpacityHtf12);
+					else RemoveDrawObject("HtfUpper1_2");
 					if (ShowStdDev2 && ShowStdDev3) Draw.Region(this, "HtfUpper2_3", htfStartBarsAgo, 0, Values[10], Values[11], null, FillColorHtf23, FillOpacityHtf23);
+					else RemoveDrawObject("HtfUpper2_3");
 				}
 				else
 				{
@@ -218,8 +230,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (htfShowDn)
 				{
 					if (ShowStdDev1) Draw.Region(this, "HtfLowerCore_1", htfStartBarsAgo, 0, Values[2], Values[12], null, FillColorHtfCore1, FillOpacityHtfCore1);
+					else RemoveDrawObject("HtfLowerCore_1");
 					if (ShowStdDev1 && ShowStdDev2) Draw.Region(this, "HtfLower1_2", htfStartBarsAgo, 0, Values[12], Values[13], null, FillColorHtf12, FillOpacityHtf12);
+					else RemoveDrawObject("HtfLower1_2");
 					if (ShowStdDev2 && ShowStdDev3) Draw.Region(this, "HtfLower2_3", htfStartBarsAgo, 0, Values[13], Values[14], null, FillColorHtf23, FillOpacityHtf23);
+					else RemoveDrawObject("HtfLower2_3");
 				}
 				else
 				{
@@ -228,7 +243,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					RemoveDrawObject("HtfLower2_3");
 				}
 			}
-			else if (!drawHtf)
+			else
 			{
 				RemoveDrawObject("HtfUpperCore_1");
 				RemoveDrawObject("HtfLowerCore_1");
@@ -413,98 +428,112 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		#region Properties
 
-		[Display(Name="Show VWAP 1", Description="Show the developing anchored VWAP.", Order=1, GroupName="VWAP Visibility")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show VWAP 1", Description="Shows VWAP 1, the developing anchored VWAP.", Order=1, GroupName="1. VWAPs")]
 		public bool ShowVwap1 { get; set; }
 
-		[Display(Name="Show VWAP 2", Description="Show the standard anchored VWAP.", Order=2, GroupName="VWAP Visibility")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show VWAP 2", Description="Shows VWAP 2, the standard anchored VWAP.", Order=2, GroupName="1. VWAPs")]
 		public bool ShowVwap2 { get; set; }
 
-		[Display(Name="Show VWAP 3", Description="Show the higher timeframe anchored VWAP.", Order=3, GroupName="VWAP Visibility")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show VWAP 3", Description="Shows VWAP 3, the higher-timeframe anchored VWAP.", Order=3, GroupName="1. VWAPs")]
 		public bool ShowVwap3 { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, int.MaxValue)]
-		[Display(Name="VWAP 1 Reversal Ticks", Description="Tick threshold for the VWAP 1 pivot.", Order=1, GroupName="Parameters")]
+		[Display(Name="VWAP 1 Reversal Ticks", Description="Fixed tick threshold for the VWAP 1 pivot.", Order=10, GroupName="2. Anchor Detection")]
 		public int DevelopingTicks { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, int.MaxValue)]
-		[Display(Name="VWAP 2 Reversal Ticks", Description="Tick threshold for the VWAP 2 pivot.", Order=2, GroupName="Parameters")]
+		[Display(Name="VWAP 2 Reversal Ticks", Description="Fixed tick threshold for the VWAP 2 pivot.", Order=20, GroupName="2. Anchor Detection")]
 		public int StandardTicks { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, int.MaxValue)]
-		[Display(Name="VWAP 3 Reversal Ticks", Description="Tick threshold for the VWAP 3 pivot.", Order=3, GroupName="Parameters")]
+		[Display(Name="VWAP 3 Reversal Ticks", Description="Fixed tick threshold for the VWAP 3 pivot.", Order=30, GroupName="2. Anchor Detection")]
 		public int HtfTicks { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Use ATR Reversal", Description="Toggle ATR-based Reversal", Order=4, GroupName="Parameters")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Use ATR-Based Reversals", Description="Off uses fixed reversal ticks. On uses ATR period and multipliers.", Order=1, GroupName="2. Anchor Detection")]
 		public bool UseAtrReversal { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, int.MaxValue)]
-		[Display(Name="ATR Period", Description="Lookback period for ATR", Order=5, GroupName="Parameters")]
+		[Display(Name="ATR Period", Description="Lookback period used by ATR-based anchor detection.", Order=40, GroupName="2. Anchor Detection")]
 		public int AtrPeriod { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, double.MaxValue)]
-		[Display(Name="VWAP 1 ATR Multiplier", Description="ATR multiplier for VWAP 1.", Order=6, GroupName="Parameters")]
+		[Display(Name="VWAP 1 ATR Multiplier", Description="ATR reversal multiplier for VWAP 1.", Order=50, GroupName="2. Anchor Detection")]
 		public double DevAtrMultiplier { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, double.MaxValue)]
-		[Display(Name="VWAP 2 ATR Multiplier", Description="ATR multiplier for VWAP 2.", Order=7, GroupName="Parameters")]
+		[Display(Name="VWAP 2 ATR Multiplier", Description="ATR reversal multiplier for VWAP 2.", Order=60, GroupName="2. Anchor Detection")]
 		public double StdAtrMultiplier { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.1, double.MaxValue)]
-		[Display(Name="VWAP 3 ATR Multiplier", Description="ATR multiplier for VWAP 3.", Order=8, GroupName="Parameters")]
+		[Display(Name="VWAP 3 ATR Multiplier", Description="ATR reversal multiplier for VWAP 3.", Order=70, GroupName="2. Anchor Detection")]
 		public double HtfAtrMultiplier { get; set; }
 
-		[Display(Name="Show VWAP 1 Bands", Order=1, GroupName="Standard Deviation")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show VWAP 1 Bands", Description="Shows deviation bands for VWAP 1.", Order=11, GroupName="1. VWAPs")]
 		public bool ShowVwap1Bands { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show VWAP 2 Bands", Order=2, GroupName="Standard Deviation")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show VWAP 2 Bands", Description="Shows deviation bands for VWAP 2.", Order=12, GroupName="1. VWAPs")]
 		public bool ShowStdBands { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show VWAP 3 Bands", Order=3, GroupName="Standard Deviation")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show VWAP 3 Bands", Description="Shows deviation bands for VWAP 3.", Order=13, GroupName="1. VWAPs")]
 		public bool ShowHtfBands { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show All Bands (Override Filter)", Order=4, GroupName="Standard Deviation")]
+		[Display(Name="Show Both Band Sides", Description="Off shows only the directional support or resistance side. On shows upper and lower bands.", Order=1, GroupName="3. Deviation Bands")]
 		public bool ShowAllBands { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show Std Dev 1", Order=5, GroupName="Standard Deviation")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show Band 1", Description="Shows the first standard-deviation band.", Order=10, GroupName="3. Deviation Bands")]
 		public bool ShowStdDev1 { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show Std Dev 2", Order=6, GroupName="Standard Deviation")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show Band 2", Description="Shows the second standard-deviation band.", Order=20, GroupName="3. Deviation Bands")]
 		public bool ShowStdDev2 { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name="Show Std Dev 3", Order=7, GroupName="Standard Deviation")]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Show Band 3", Description="Shows the third standard-deviation band.", Order=30, GroupName="3. Deviation Bands")]
 		public bool ShowStdDev3 { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.01, double.MaxValue)]
-		[Display(Name="Std Dev Multiplier 1", Order=8, GroupName="Standard Deviation")]
+		[Display(Name="Band 1 Multiplier", Description="Standard-deviation multiplier for Band 1.", Order=11, GroupName="3. Deviation Bands")]
 		public double StdDevMultiplier1 { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.01, double.MaxValue)]
-		[Display(Name="Std Dev Multiplier 2", Order=9, GroupName="Standard Deviation")]
+		[Display(Name="Band 2 Multiplier", Description="Standard-deviation multiplier for Band 2.", Order=21, GroupName="3. Deviation Bands")]
 		public double StdDevMultiplier2 { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0.01, double.MaxValue)]
-		[Display(Name="Std Dev Multiplier 3", Order=10, GroupName="Standard Deviation")]
+		[Display(Name="Band 3 Multiplier", Description="Standard-deviation multiplier for Band 3.", Order=31, GroupName="3. Deviation Bands")]
 		public double StdDevMultiplier3 { get; set; }
 
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Enable VWAP 2 Fill", Description="Fills the selected deviation zones for VWAP 2.", Order=1, GroupName="4. VWAP 2 Fill")]
+		public bool ShowVwap2Fills { get; set; }
+
 		[XmlIgnore]
-		[Display(Name="Fill Color Core-1 (VWAP 2)", Order=7, GroupName="Standard Deviation Regions")]
+		[Display(Name="VWAP to Band 1 Color", Order=10, GroupName="4. VWAP 2 Fill")]
 		public Brush FillColorStdCore1 { get; set; }
 
 		[Browsable(false)]
@@ -516,11 +545,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Fill Opacity Core-1 (VWAP 2)", Order=8, GroupName="Standard Deviation Regions")]
+		[Display(Name="VWAP to Band 1 Opacity", Order=11, GroupName="4. VWAP 2 Fill")]
 		public int FillOpacityStdCore1 { get; set; }
 
 		[XmlIgnore]
-		[Display(Name="Fill Color 1-2 (VWAP 2)", Order=9, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 1 to Band 2 Color", Order=20, GroupName="4. VWAP 2 Fill")]
 		public Brush FillColorStd12 { get; set; }
 
 		[Browsable(false)]
@@ -532,12 +561,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Fill Opacity 1-2 (VWAP 2)", Order=10, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 1 to Band 2 Opacity", Order=21, GroupName="4. VWAP 2 Fill")]
 		public int FillOpacityStd12 { get; set; }
 
 
 		[XmlIgnore]
-		[Display(Name="Fill Color 2-3 (VWAP 2)", Order=11, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 2 to Band 3 Color", Order=30, GroupName="4. VWAP 2 Fill")]
 		public Brush FillColorStd23 { get; set; }
 
 		[Browsable(false)]
@@ -549,12 +578,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Fill Opacity 2-3 (VWAP 2)", Order=12, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 2 to Band 3 Opacity", Order=31, GroupName="4. VWAP 2 Fill")]
 		public int FillOpacityStd23 { get; set; }
+
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name="Enable VWAP 3 Fill", Description="Fills the selected deviation zones for VWAP 3.", Order=1, GroupName="5. VWAP 3 Fill")]
+		public bool ShowVwap3Fills { get; set; }
 
 
 		[XmlIgnore]
-		[Display(Name="Fill Color Core-1 (VWAP 3)", Order=13, GroupName="Standard Deviation Regions")]
+		[Display(Name="VWAP to Band 1 Color", Order=10, GroupName="5. VWAP 3 Fill")]
 		public Brush FillColorHtfCore1 { get; set; }
 
 		[Browsable(false)]
@@ -566,11 +599,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Fill Opacity Core-1 (VWAP 3)", Order=14, GroupName="Standard Deviation Regions")]
+		[Display(Name="VWAP to Band 1 Opacity", Order=11, GroupName="5. VWAP 3 Fill")]
 		public int FillOpacityHtfCore1 { get; set; }
 
 		[XmlIgnore]
-		[Display(Name="Fill Color 1-2 (VWAP 3)", Order=15, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 1 to Band 2 Color", Order=20, GroupName="5. VWAP 3 Fill")]
 		public Brush FillColorHtf12 { get; set; }
 
 		[Browsable(false)]
@@ -582,12 +615,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Fill Opacity 1-2 (VWAP 3)", Order=16, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 1 to Band 2 Opacity", Order=21, GroupName="5. VWAP 3 Fill")]
 		public int FillOpacityHtf12 { get; set; }
 
 
 		[XmlIgnore]
-		[Display(Name="Fill Color 2-3 (VWAP 3)", Order=17, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 2 to Band 3 Color", Order=30, GroupName="5. VWAP 3 Fill")]
 		public Brush FillColorHtf23 { get; set; }
 
 		[Browsable(false)]
@@ -599,7 +632,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name="Fill Opacity 2-3 (VWAP 3)", Order=18, GroupName="Standard Deviation Regions")]
+		[Display(Name="Band 2 to Band 3 Opacity", Order=31, GroupName="5. VWAP 3 Fill")]
 		public int FillOpacityHtf23 { get; set; }
 
 
@@ -616,6 +649,135 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public Series<double> HtfVWAP => Values[2];
 
 		#endregion
+	}
+
+	public class OrcaAnchoredVwapTypeConverter : IndicatorBaseConverter
+	{
+		public override bool GetPropertiesSupported(ITypeDescriptorContext context)
+		{
+			return true;
+		}
+
+		public override PropertyDescriptorCollection GetProperties(ITypeDescriptorContext context, object value, Attribute[] attributes)
+		{
+			PropertyDescriptorCollection properties = base.GetPropertiesSupported(context)
+				? base.GetProperties(context, value, attributes)
+				: TypeDescriptor.GetProperties(value, attributes);
+
+			OrcaAnchoredVWAPs indicator = value as OrcaAnchoredVWAPs;
+			if (indicator == null || properties == null)
+				return properties;
+
+			HashSet<string> hiddenProperties = new HashSet<string>();
+
+			if (indicator.UseAtrReversal)
+			{
+				hiddenProperties.Add(nameof(indicator.DevelopingTicks));
+				hiddenProperties.Add(nameof(indicator.StandardTicks));
+				hiddenProperties.Add(nameof(indicator.HtfTicks));
+			}
+			else
+			{
+				hiddenProperties.Add(nameof(indicator.AtrPeriod));
+				hiddenProperties.Add(nameof(indicator.DevAtrMultiplier));
+				hiddenProperties.Add(nameof(indicator.StdAtrMultiplier));
+				hiddenProperties.Add(nameof(indicator.HtfAtrMultiplier));
+			}
+
+			if (!indicator.ShowVwap1)
+				hiddenProperties.Add(nameof(indicator.ShowVwap1Bands));
+			if (!indicator.ShowVwap2)
+				hiddenProperties.Add(nameof(indicator.ShowStdBands));
+			if (!indicator.ShowVwap3)
+				hiddenProperties.Add(nameof(indicator.ShowHtfBands));
+
+			bool showAnyBands = (indicator.ShowVwap1 && indicator.ShowVwap1Bands)
+				|| (indicator.ShowVwap2 && indicator.ShowStdBands)
+				|| (indicator.ShowVwap3 && indicator.ShowHtfBands);
+
+			if (!showAnyBands)
+			{
+				hiddenProperties.Add(nameof(indicator.ShowAllBands));
+				hiddenProperties.Add(nameof(indicator.ShowStdDev1));
+				hiddenProperties.Add(nameof(indicator.ShowStdDev2));
+				hiddenProperties.Add(nameof(indicator.ShowStdDev3));
+				hiddenProperties.Add(nameof(indicator.StdDevMultiplier1));
+				hiddenProperties.Add(nameof(indicator.StdDevMultiplier2));
+				hiddenProperties.Add(nameof(indicator.StdDevMultiplier3));
+			}
+			else
+			{
+				if (!indicator.ShowStdDev1)
+					hiddenProperties.Add(nameof(indicator.StdDevMultiplier1));
+				if (!indicator.ShowStdDev2)
+					hiddenProperties.Add(nameof(indicator.StdDevMultiplier2));
+				if (!indicator.ShowStdDev3)
+					hiddenProperties.Add(nameof(indicator.StdDevMultiplier3));
+			}
+
+			AddHiddenVwap2FillProperties(indicator, hiddenProperties);
+			AddHiddenVwap3FillProperties(indicator, hiddenProperties);
+
+			PropertyDescriptorCollection adjusted = new PropertyDescriptorCollection(null);
+			foreach (PropertyDescriptor descriptor in properties)
+			{
+				adjusted.Add(hiddenProperties.Contains(descriptor.Name)
+					? new PropertyDescriptorExtended(descriptor, _ => value, null, new Attribute[] { new BrowsableAttribute(false) })
+					: descriptor);
+			}
+
+			return adjusted;
+		}
+
+		private static void AddHiddenVwap2FillProperties(OrcaAnchoredVWAPs indicator, HashSet<string> hiddenProperties)
+		{
+			bool canShowFill = indicator.ShowVwap2 && indicator.ShowStdBands;
+			if (!canShowFill)
+				hiddenProperties.Add(nameof(indicator.ShowVwap2Fills));
+
+			if (!canShowFill || !indicator.ShowVwap2Fills || !indicator.ShowStdDev1)
+			{
+				hiddenProperties.Add(nameof(indicator.FillColorStdCore1));
+				hiddenProperties.Add(nameof(indicator.FillOpacityStdCore1));
+			}
+
+			if (!canShowFill || !indicator.ShowVwap2Fills || !indicator.ShowStdDev1 || !indicator.ShowStdDev2)
+			{
+				hiddenProperties.Add(nameof(indicator.FillColorStd12));
+				hiddenProperties.Add(nameof(indicator.FillOpacityStd12));
+			}
+
+			if (!canShowFill || !indicator.ShowVwap2Fills || !indicator.ShowStdDev2 || !indicator.ShowStdDev3)
+			{
+				hiddenProperties.Add(nameof(indicator.FillColorStd23));
+				hiddenProperties.Add(nameof(indicator.FillOpacityStd23));
+			}
+		}
+
+		private static void AddHiddenVwap3FillProperties(OrcaAnchoredVWAPs indicator, HashSet<string> hiddenProperties)
+		{
+			bool canShowFill = indicator.ShowVwap3 && indicator.ShowHtfBands;
+			if (!canShowFill)
+				hiddenProperties.Add(nameof(indicator.ShowVwap3Fills));
+
+			if (!canShowFill || !indicator.ShowVwap3Fills || !indicator.ShowStdDev1)
+			{
+				hiddenProperties.Add(nameof(indicator.FillColorHtfCore1));
+				hiddenProperties.Add(nameof(indicator.FillOpacityHtfCore1));
+			}
+
+			if (!canShowFill || !indicator.ShowVwap3Fills || !indicator.ShowStdDev1 || !indicator.ShowStdDev2)
+			{
+				hiddenProperties.Add(nameof(indicator.FillColorHtf12));
+				hiddenProperties.Add(nameof(indicator.FillOpacityHtf12));
+			}
+
+			if (!canShowFill || !indicator.ShowVwap3Fills || !indicator.ShowStdDev2 || !indicator.ShowStdDev3)
+			{
+				hiddenProperties.Add(nameof(indicator.FillColorHtf23));
+				hiddenProperties.Add(nameof(indicator.FillOpacityHtf23));
+			}
+		}
 	}
 
 	public class VwapTracker
