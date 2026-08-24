@@ -28,6 +28,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		WeekSundaySixPmEastern
 	}
 
+	public enum OrcaTimeStatisticsFontWeight
+	{
+		Light = 0,
+		Regular = 1,
+		Medium = 2,
+		SemiBold = 3,
+		Bold = 4,
+		ExtraBold = 5
+	}
+
 	public class OrcaTimeStatisticsCumulativeDeltaStartModeConverter : EnumConverter
 	{
 		public OrcaTimeStatisticsCumulativeDeltaStartModeConverter() : base(typeof(OrcaTimeStatisticsCumulativeDeltaStartMode))
@@ -210,6 +220,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				CellSeparatorColor   = Brushes.Black;
 				BaseOpacity          = 0.25;
 				FontFamilyName       = "Segoe UI";
+				TextFontWeight       = OrcaTimeStatisticsFontWeight.Bold;
 				FontSize             = 11;
 				ShowCellSeparators   = true;
 				CellSeparatorThickness = 1f;
@@ -1228,7 +1239,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DateTime GetRthStart(DateTime barTime)
 		{
 			DateTime start = barTime.Date.AddHours(9).AddMinutes(30);
-			if (barTime >= start)
+			if (barTime > start)
 				return start;
 
 			DateTime previousDate = GetPreviousWeekday(barTime.Date.AddDays(-1));
@@ -1432,10 +1443,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			dxSeparatorBrush = CreateSolidBrush(CellSeparatorColor, 1.0f);
 			dxScaleMaskBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color4(0f, 0f, 0f, 1f));
 			dwFactory    = new SharpDX.DirectWrite.Factory();
+			SharpDX.DirectWrite.FontWeight textFontWeight = ResolveTextFontWeight();
 			try {
-				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, GetTextFontFamily(), SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
+				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, GetTextFontFamily(), textFontWeight, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
 			} catch {
-				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
+				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, "Segoe UI", textFontWeight, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
 			}
 			dxResourceRenderTarget = currentTarget;
 		}
@@ -1443,6 +1455,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string GetTextFontFamily()
 		{
 			return string.IsNullOrWhiteSpace(FontFamilyName) ? "Segoe UI" : FontFamilyName.Trim();
+		}
+
+		private SharpDX.DirectWrite.FontWeight ResolveTextFontWeight()
+		{
+			switch (TextFontWeight)
+			{
+				case OrcaTimeStatisticsFontWeight.Light:
+					return SharpDX.DirectWrite.FontWeight.Light;
+				case OrcaTimeStatisticsFontWeight.Regular:
+					return SharpDX.DirectWrite.FontWeight.Normal;
+				case OrcaTimeStatisticsFontWeight.Medium:
+					return SharpDX.DirectWrite.FontWeight.Medium;
+				case OrcaTimeStatisticsFontWeight.SemiBold:
+					return SharpDX.DirectWrite.FontWeight.SemiBold;
+				case OrcaTimeStatisticsFontWeight.ExtraBold:
+					return SharpDX.DirectWrite.FontWeight.ExtraBold;
+				default:
+					return SharpDX.DirectWrite.FontWeight.Bold;
+			}
 		}
 
 		private SharpDX.Direct2D1.Brush CreateSolidBrush(System.Windows.Media.Brush wpfBrush, float opacity)
@@ -1633,8 +1664,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "15. Font Family", Order = 15, GroupName = "Visual")]
 		public string FontFamilyName { get; set; }
 
+		[Display(Name = "16. Font Weight", Order = 16, GroupName = "Visual")]
+		public OrcaTimeStatisticsFontWeight TextFontWeight { get; set; }
+
 		[Range(6, 24)]
-		[Display(Name = "16. Font Size", Order = 16, GroupName = "Visual")]
+		[Display(Name = "17. Font Size", Order = 17, GroupName = "Visual")]
 		public int FontSize { get; set; }
 	}
 }
