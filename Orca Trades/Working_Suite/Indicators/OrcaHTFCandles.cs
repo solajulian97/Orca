@@ -129,6 +129,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DxBrush dxBorderBrush;
 		private DxBrush dxBullWickBrush;
 		private DxBrush dxBearWickBrush;
+		private DxBrush dxLabelBrush;
+		private SharpDX.DirectWrite.TextFormat dxLabelTextFormat;
 
 		protected override void OnStateChange()
 		{
@@ -910,6 +912,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RectangleF bodyRectangle = new RectangleF(leftX, bodyTop, rightX - leftX, bodyHeight);
 			RenderTarget.FillRectangle(bodyRectangle, bodyBrush);
 			RenderTarget.DrawRectangle(bodyRectangle, dxBorderBrush, BorderWidth);
+
+			RenderCandleLabel(candle, leftX, rightX, panelBounds);
+		}
+
+		private void RenderCandleLabel(HtfCandleSnapshot candle, float leftX, float rightX, RectangleF panelBounds)
+		{
+			if (dxLabelBrush == null || dxLabelTextFormat == null)
+				return;
+
+			string label = GetCandleLabel(candle);
+			if (string.IsNullOrEmpty(label))
+				return;
+
+			float centerX = (leftX + rightX) * 0.5f;
+			if (centerX < panelBounds.Left || centerX > panelBounds.Right)
+				return;
+
+			float labelWidth = Math.Max(24f, Math.Min(120f, rightX - leftX));
+			RectangleF labelRectangle = new RectangleF(centerX - labelWidth * 0.5f, panelBounds.Bottom - 24f, labelWidth, 20f);
+			RenderTarget.DrawText(label, dxLabelTextFormat, labelRectangle, dxLabelBrush);
+		}
+
+		private string GetCandleLabel(HtfCandleSnapshot candle)
+		{
+			if (Timeframe == OrcaHTFTimeframe.Day1)
+			{
+				DayOfWeek tradingDay = candle.EndTime.DayOfWeek;
+				return IsWeekday(tradingDay) ? tradingDay.ToString() : null;
+			}
+
+			if (Timeframe == OrcaHTFTimeframe.AsiaLondonNewYork)
+			{
+				TimeSpan easternStart = ConvertChartTimeToEastern(candle.StartTime).TimeOfDay;
+				if (easternStart == new TimeSpan(18, 0, 0)) return "Asia";
+				if (easternStart == new TimeSpan(3, 0, 0)) return "London";
+				if (easternStart == new TimeSpan(9, 30, 0)) return "RTH";
+			}
+
+			return null;
 		}
 
 		private bool TryResolveBoundaryX(ChartControl chartControl, DateTime boundary, int mappedIndex, out float x)
@@ -997,7 +1038,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 
 			if (dxBullBodyBrush != null && dxBearBodyBrush != null && dxBorderBrush != null
-				&& dxBullWickBrush != null && dxBearWickBrush != null)
+				&& dxBullWickBrush != null && dxBearWickBrush != null && dxLabelBrush != null && dxLabelTextFormat != null)
 				return;
 
 			DisposeDxResources();
@@ -1008,6 +1049,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				dxBorderBrush = ToDxBrush(Border);
 				dxBullWickBrush = ToDxBrush(BullWick);
 				dxBearWickBrush = ToDxBrush(BearWick);
+				dxLabelBrush = ToDxBrush(System.Windows.Media.Brushes.LightGray);
+				dxLabelTextFormat = new SharpDX.DirectWrite.TextFormat(
+					NinjaTrader.Core.Globals.DirectWriteFactory,
+					"Segoe UI",
+					SharpDX.DirectWrite.FontWeight.Bold,
+					SharpDX.DirectWrite.FontStyle.Normal,
+					SharpDX.DirectWrite.FontStretch.Normal,
+					12f)
+				{
+					TextAlignment = SharpDX.DirectWrite.TextAlignment.Center,
+					ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center
+				};
 
 				float bodyOpacity = Math.Max(0f, Math.Min(1f, (100f - Transparency) / 100f));
 				if (dxBullBodyBrush != null)
@@ -1033,6 +1086,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DisposeBrush(ref dxBorderBrush);
 			DisposeBrush(ref dxBullWickBrush);
 			DisposeBrush(ref dxBearWickBrush);
+			DisposeBrush(ref dxLabelBrush);
+			if (dxLabelTextFormat != null)
+			{
+				dxLabelTextFormat.Dispose();
+				dxLabelTextFormat = null;
+			}
 		}
 
 		private static void DisposeBrush(ref DxBrush brush)

@@ -1,6 +1,6 @@
 # Orca HTF Candles
 
-Last updated: 2026-08-22
+Last updated: 2026-08-25
 
 ## Component
 
@@ -89,6 +89,10 @@ On tick, volume, and range charts, the same rule maps each boundary to the first
 - The render pass clips to the chart panel, so partially visible bodies retain their true off-screen border geometry.
 - Completed candles use cached primary indices; only unresolved/current time boundaries require binary-search/time projection during rendering.
 - Direct2D brushes are cached per render target and disposed on render-target change and termination.
+- `1 Day` candles show their Monday-through-Friday trading-day name centered along the panel bottom.
+- `Asia / London / New York` candles show `Asia`, `London`, or `RTH` centered along the panel bottom.
+- Bottom labels use each candle's logical start/end coordinates and are omitted when that logical center is outside the viewport.
+- Label brush and DirectWrite format resources are cached per render target and disposed with the candle resources.
 - No LINQ, drawing objects, persistent tags, model mutation, cache access, or Output-window logging occurs in `OnRender`.
 
 ## Settings And Defaults
