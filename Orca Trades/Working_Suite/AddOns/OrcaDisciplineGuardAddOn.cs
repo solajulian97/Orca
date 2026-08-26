@@ -81,9 +81,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			try {
 				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu item clicked.");
-				Dispatcher dispatcher = Application.Current == null ? Dispatcher.CurrentDispatcher : Application.Current.Dispatcher;
-				OrcaDisciplineGuardEngine engine = GetOrCreateRuntime(dispatcher);
-				dispatcher.InvokeAsync(() => OrcaDisciplineGuardWindow.ShowOrActivate(engine));
+				Dispatcher requestDispatcher = guardMenuItem == null ? Dispatcher.CurrentDispatcher : guardMenuItem.Dispatcher;
+				OrcaDisciplineGuardEngine engine = GetOrCreateRuntime(requestDispatcher);
+				engine.InvokeOnDispatcher(() => OrcaDisciplineGuardWindow.ShowOrActivate(engine));
 			} catch (Exception ex) {
 				string message = "Orca Discipline Guard click handler failed: " + ex.Message;
 				OrcaDisciplineDiagnostics.Write(message + Environment.NewLine + ex);
@@ -134,6 +134,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private OrcaDisciplineGuardWindow(OrcaDisciplineGuardEngine engine)
 		{
+			if (engine == null)
+				throw new ArgumentNullException("engine");
+			if (!engine.CheckDispatcherAccess())
+				throw new InvalidOperationException("Orca Discipline Guard must be created on its runtime dispatcher.");
+
 			Caption = "Orca Discipline Guard";
 			Title = "Orca Discipline Guard";
 			Width = 1180;
@@ -1588,6 +1593,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public DateTime LastAccountEventTime { get { return lastAccountEventTime; } }
 		public DateTime LastHeartbeatTime { get { return lastHeartbeatTime; } }
 		public long AccountEventCount { get { return accountEventCount; } }
+		public bool CheckDispatcherAccess() { return dispatcher.CheckAccess(); }
+
+		public void InvokeOnDispatcher(Action action)
+		{
+			if (action == null || disposed)
+				return;
+			if (!dispatcher.CheckAccess())
+				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window request marshaled to the runtime dispatcher.");
+			RunOnUi(action);
+		}
 
 		public bool IsAccountConnected
 		{

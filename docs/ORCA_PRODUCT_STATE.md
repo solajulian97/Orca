@@ -1,6 +1,6 @@
 # Orca Product State
 
-Last updated: 2026-08-15
+Last updated: 2026-08-26
 
 ## Current Status
 
@@ -9,6 +9,12 @@ Orca is a commercial NinjaTrader 8 suite for futures/order-flow visualization, p
 Active development source is `Orca Trades/Working_Suite`. `Orca Trades/Full_Suite` is the validated promotion target and should not be changed until Julian confirms NinjaTrader compile and manual behavior.
 
 Current active development includes the live-tested first Phase 0 Discipline Guard monitoring slice. Other status entries remain evidence-specific snapshots and are not promoted to `Full_Suite` without Julian's validation.
+
+### 2026-08-26 Discipline Guard Dispatcher Ownership Fix
+
+The Discipline Guard window and its add-on-lifetime engine now share the engine's original Control Center dispatcher. This corrects a source-level dispatcher split where the engine mutated WPF-bound `Rules` and `Violations` collections on the Control Center dispatcher while the window could be created on `Application.Current.Dispatcher`, producing a `CollectionView` cross-thread exception during account-event processing.
+
+The NinjaTrader trace confirms repeated failures in `OrcaDisciplineSession.AddViolation` through execution and account-item callbacks on 2026-08-25. The fix remains in `Working_Suite` and has been targeted to the live AddOns folder. It changes no rules, scoring, account subscriptions, execution processing, persistence, secondary series, Tick Replay behavior, or rendering. Source checks and NinjaTrader F5 compile passed; active-session violation validation is recorded as pending in `docs/handoffs/2026-08-26_orca-discipline-guard_dispatcher-ownership.md`.
 
 ## Current Suite Inventory
 
