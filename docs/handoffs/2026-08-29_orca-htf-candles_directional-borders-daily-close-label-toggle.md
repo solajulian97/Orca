@@ -16,7 +16,7 @@ No `Full_Suite` file was changed.
 
 - Added `Use Directional Borders`. When enabled, bullish candles use `Bull Border` and bearish candles use `Bear Border`; when disabled, the existing common `Border` brush remains in use.
 - Added separate serialized `Bull Border` and `Bear Border` brushes with green/red defaults.
-- Changed `1 Day` candle boundary geometry so the close is registered at 17:00 Eastern. An ETH trading-day begin at 18:00 therefore closes the following day at 17:00.
+- Changed `1 Day` to aggregate the same-instrument 30-minute secondary bars into an explicit 18:00-17:00 Eastern window. This registers the close at 17:00 and includes the final close-stamped 16:00-17:00 source bar.
 - Kept the existing `Show Candle Labels` setting. It suppresses the bottom weekday/session labels without changing candle data or rendering.
 - Doji direction remains bullish (`close >= open`) for body, wick, and directional border selection.
 
@@ -32,7 +32,7 @@ Existing `Show Candle Labels` remains under `Display Controls` and defaults enab
 
 ## Secondary series added or changed
 
-No secondary series were added or changed. `1 Day` continues to use the native same-instrument Day 1 series; Weekly and the Eastern session modes continue to use their existing Minute 30 aggregation.
+`1 Day` now uses the same-instrument Minute 30 secondary series so the explicit 18:00-17:00 Eastern session can be honored. Weekly and the Eastern session modes continue to use Minute 30 aggregation.
 
 ## Tick Replay implications
 
@@ -40,7 +40,7 @@ No Tick Replay or market-data event path was added. The feature remains compatib
 
 ## Historical-load implications
 
-- Native Day 1 OHLC values remain provider/Trading Hours-template dependent.
+- Daily OHLC is aggregated from available 30-minute bars and remains provider/Trading Hours-template dependent.
 - Daily rendering boundaries now use the chart-timezone/Eastern conversion path and the 17:00 Eastern wall-clock close.
 - Historical candle availability and partial first windows are unchanged.
 
@@ -88,7 +88,7 @@ Pending validation of:
 
 ## Known issues, risks, and follow-up work
 
-- The native Day 1 OHLC still follows the provider and selected Trading Hours template; this change fixes the rendered daily boundary, not missing or incorrectly sessionized provider data.
+- Daily values are aggregated from available 30-minute bars; the selected Trading Hours template and provider history still determine whether the evening and final 16:00-17:00 bars are present.
 - `Show Candle Labels` currently gates both Day 1 weekday labels and Asia/London/RTH labels together.
 - Smart App Control/Code Integrity and NinjaTrader F5/load status remain separate runtime gates.
 

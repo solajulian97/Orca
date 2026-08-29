@@ -236,8 +236,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					AddDataSeries(BarsPeriodType.Minute, 240);
 					break;
 				case OrcaHTFTimeframe.Day1:
-					AddDataSeries(BarsPeriodType.Day, 1);
-					break;
 				case OrcaHTFTimeframe.Week1:
 				case OrcaHTFTimeframe.EthRth:
 				case OrcaHTFTimeframe.AsiaLondonNewYork:
@@ -442,7 +440,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private bool UsesCustomAggregation()
 		{
-			return Timeframe == OrcaHTFTimeframe.Week1
+			return Timeframe == OrcaHTFTimeframe.Day1
+				|| Timeframe == OrcaHTFTimeframe.Week1
 				|| Timeframe == OrcaHTFTimeframe.EthRth
 				|| Timeframe == OrcaHTFTimeframe.AsiaLondonNewYork;
 		}
@@ -457,6 +456,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			bool found;
 			switch (Timeframe)
 			{
+				case OrcaHTFTimeframe.Day1:
+					found = TryGetDailyEasternWindow(easternSourceStart, out easternStart, out easternEnd);
+					break;
 				case OrcaHTFTimeframe.Week1:
 					found = TryGetWeeklyEasternWindow(easternSourceStart, out easternStart, out easternEnd);
 					break;
@@ -476,6 +478,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 			window.StartTime = ConvertEasternTimeToChart(easternStart);
 			window.EndTime = ConvertEasternTimeToChart(easternEnd);
 			return window.EndTime > window.StartTime;
+		}
+
+		private static bool TryGetDailyEasternWindow(DateTime sourceStart, out DateTime startTime, out DateTime endTime)
+		{
+			DateTime date = sourceStart.Date;
+			TimeSpan time = sourceStart.TimeOfDay;
+			TimeSpan dailyStart = new TimeSpan(18, 0, 0);
+			TimeSpan dailyEnd = new TimeSpan(17, 0, 0);
+
+			if (time >= dailyStart)
+			{
+				startTime = date.Add(dailyStart);
+				endTime = date.AddDays(1).Add(dailyEnd);
+				return IsFuturesWeeknightStart(date.DayOfWeek);
+			}
+
+			if (time < dailyEnd)
+			{
+				DateTime priorDate = date.AddDays(-1);
+				startTime = priorDate.Add(dailyStart);
+				endTime = date.Add(dailyEnd);
+				return IsFuturesWeeknightStart(priorDate.DayOfWeek);
+			}
+
+			startTime = DateTime.MinValue;
+			endTime = DateTime.MinValue;
+			return false;
 		}
 
 		private static bool TryGetWeeklyEasternWindow(DateTime sourceStart, out DateTime startTime, out DateTime endTime)
@@ -689,9 +718,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			startTime = DateTime.MinValue;
 			endTime = DateTime.MinValue;
 
-			if (Timeframe == OrcaHTFTimeframe.Day1)
-				return TryGetDailyBounds(sourceTime, out startTime, out endTime);
-
 			endTime = sourceTime;
 			DateTime sessionBegin;
 			DateTime sessionEnd;
@@ -734,42 +760,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				sessionBegin = DateTime.MinValue;
 				sessionEnd = DateTime.MinValue;
-				return false;
-			}
-		}
-
-		private bool TryGetDailyBounds(DateTime barTime, out DateTime startTime, out DateTime endTime)
-		{
-			startTime = DateTime.MinValue;
-			endTime = DateTime.MinValue;
-
-			if (!TryGetTradingDayBegin(barTime.Date, out startTime))
-				startTime = barTime.Date;
-
-			DateTime easternStart = ConvertChartTimeToEastern(startTime);
-			DateTime easternCloseDate = easternStart.TimeOfDay >= new TimeSpan(17, 0, 0)
-				? easternStart.Date.AddDays(1)
-				: easternStart.Date;
-			DateTime easternEnd = easternCloseDate.AddHours(17);
-			endTime = ConvertEasternTimeToChart(easternEnd);
-
-			return endTime > startTime;
-		}
-
-		private bool TryGetTradingDayBegin(DateTime tradingDay, out DateTime beginTime)
-		{
-			beginTime = DateTime.MinValue;
-			if (htfSessionIterator == null)
-				return false;
-
-			try
-			{
-				beginTime = htfSessionIterator.GetTradingDayBeginLocal(tradingDay.Date);
-				return beginTime != DateTime.MinValue;
-			}
-			catch
-			{
-				beginTime = DateTime.MinValue;
 				return false;
 			}
 		}

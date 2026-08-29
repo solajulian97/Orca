@@ -42,7 +42,7 @@ The indicator adds exactly one same-instrument secondary series selected during 
 | 1 Hour | Minute 60 |
 | 2 Hours | Minute 120 |
 | 4 Hours | Minute 240 |
-| 1 Day | Day 1 |
+| 1 Day | Minute 30 (Eastern 18:00-17:00 aggregation) |
 | Weekly | Minute 30, aggregated Sunday 18:00 through Friday 17:00 Eastern |
 | ETH / RTH | Minute 30, aggregated into 18:00-09:30 and 09:30-17:00 Eastern candles |
 | Asia / London / New York | Minute 30, aggregated into 18:00-03:00, 03:00-09:30, and 09:30-17:00 Eastern candles |
@@ -62,7 +62,7 @@ NinjaTrader intraday time bars are close-stamped. For Minute-based HTF series:
 - The first HTF bar after a session break starts at `SessionIterator`'s trading-day begin, not at the prior session's close.
 - NinjaTrader's shortened final bar timestamp is retained, so an early-close candle stops at the actual native bar end rather than extending by a fixed number of minutes.
 
-Daily bars use the selected Trading Hours trading-day begin and an explicit 17:00 Eastern close. With an ETH trading-day begin at 18:00 Eastern, the candle spans the evening open through the following day's 17:00 close. The native Day 1 secondary OHLC remains the source of the candle values.
+Daily bars are aggregated from the same-instrument 30-minute secondary series using an explicit 18:00-17:00 Eastern window. This keeps the final 16:00-17:00 bar in the Wednesday candle instead of treating a close-stamped 16:00 bar as the session close.
 
 The three custom modes use Eastern market time with daylight-saving transitions (`Eastern Standard Time` is the Windows timezone identifier, not a fixed UTC-5 offset):
 
@@ -122,8 +122,8 @@ For split modes, Candle Lookback counts individual session candles rather than t
 ## TradingView Differences And Limitations
 
 - Intraday shortened bars stop at NinjaTrader's actual native close rather than Pine's unconditional nominal-duration right edge.
-- `1 Day` candle geometry now closes at 17:00 Eastern even when the chart's display timezone differs; the underlying native Day 1 OHLC still depends on the selected Trading Hours template and provider.
-- Daily OHLC availability can depend on the data provider and selected Trading Hours template.
+- `1 Day` aggregation closes at 17:00 Eastern even when the chart's display timezone differs; the aggregated values still depend on the available 30-minute history and selected Trading Hours template.
+- Daily OHLC availability can depend on the data provider and selected Trading Hours template; the 30-minute source bars must include the evening and final 16:00-17:00 segment.
 - Weekly and session-split modes can aggregate only the 30-minute bars made available by the chart's Trading Hours template. An RTH-only template cannot supply overnight/Asia/London OHLC, and missing provider history cannot be reconstructed.
 - Holiday and early-close windows retain the requested scheduled right edge even when the final available 30-minute source bar ends earlier.
 - A non-time chart has no deterministic future bar spacing. Active future projection is therefore limited by NinjaTrader's `GetXByTime()` behavior until new tick/range/volume bars exist.
