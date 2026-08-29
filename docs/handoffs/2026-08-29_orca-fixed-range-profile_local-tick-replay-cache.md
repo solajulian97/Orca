@@ -81,7 +81,10 @@ Make `OrcaFixedRangeProfile` independent of the master provider by default on Ti
 
 - `git diff --check` passed for the changed tracked source before handoff creation.
 - Structural brace checks passed for both source files.
-- NinjaTrader F5 compile: pending.
+- NinjaTrader F5 first reported four `CS0246` errors in `OrcaFixedRangeProfileDataCache.cs`: the generated NinjaScript wrappers could not resolve `FixedRangeProfileCacheTradeSourceMode`.
+- Cause: the enum was declared in `NinjaTrader.NinjaScript.Indicators`, while NinjaTrader generates indicator, strategy, and Market Analyzer wrappers in sibling namespaces that resolve script-facing enums from `NinjaTrader.NinjaScript`.
+- Fix deployed: moved only `FixedRangeProfileCacheTradeSourceMode` to `NinjaTrader.NinjaScript`, matching the suite's existing generated-wrapper convention.
+- Corrected NinjaTrader F5 compile: pending Julian validation.
 
 ## Manual-validation status
 

@@ -7,14 +7,17 @@ using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 #endregion
 
-namespace NinjaTrader.NinjaScript.Indicators
+namespace NinjaTrader.NinjaScript
 {
 	public enum FixedRangeProfileCacheTradeSourceMode
 	{
 		TickReplayLastEvents = 0,
 		SecondaryTickSeries = 1
 	}
+}
 
+namespace NinjaTrader.NinjaScript.Indicators
+{
 	public class OrcaFixedRangeProfileDataCache : Indicator
 	{
 		private readonly Guid sourceId = Guid.NewGuid();
