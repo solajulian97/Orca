@@ -44,6 +44,13 @@ namespace NinjaTrader.NinjaScript
 		EstimatedFromBars
 	}
 
+	public enum OrcaFixedRangeProfileDataSourcePreference
+	{
+		ChartLocalOnly,
+		ChartLocalThenMaster,
+		MasterThenChartLocal
+	}
+
 	public enum OrcaFixedRangeProfilePlacement
 	{
 		InsideSelectedBox,
@@ -138,6 +145,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private OrcaFixedRangeAggregationMode cachedAggregationMode = (OrcaFixedRangeAggregationMode)(-1);
 		private OrcaFixedRangeAggregationMode cachedDeltaAggregationMode = (OrcaFixedRangeAggregationMode)(-1);
 		private OrcaFixedRangeProfileDataMode cachedProfileDataMode = (OrcaFixedRangeProfileDataMode)(-1);
+		private OrcaFixedRangeProfileDataSourcePreference cachedDataSourcePreference = (OrcaFixedRangeProfileDataSourcePreference)(-1);
 		private bool cachedAllowEstimatedChartFallback;
 
 		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
@@ -479,6 +487,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				EndAnchor = new ChartAnchor { DisplayName = "End", IsEditing = true, DrawingTool = this };
 
 				ProfileDataMode = OrcaFixedRangeProfileDataMode.TrueVolumeAtPrice;
+				DataSourcePreference = OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly;
 				AllowEstimatedChartFallback = true;
 				ShowDataSourceLabel = true;
 				RowCount = 100;
@@ -695,16 +704,34 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			if (ProfileDataMode == OrcaFixedRangeProfileDataMode.TrueVolumeAtPrice)
 			{
-				int sharedBucketSeconds;
-				string sharedSourceName;
-				bool gotSharedSnapshot = OrcaProfileDataCache.TrySnapshotOrderFlowPriceMaps(instrumentKey, startTime, endTime, out trueDataSnapshot, out sharedBucketSeconds, out sharedSourceName);
-				if (gotSharedSnapshot)
+				int sharedBucketSeconds = -1;
+				string sharedSourceName = string.Empty;
+				bool tryChartFirst = DataSourcePreference != OrcaFixedRangeProfileDataSourcePreference.MasterThenChartLocal;
+				bool tryMaster = DataSourcePreference != OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly;
+
+				if (tryChartFirst)
 				{
-					effectiveDataKey = instrumentKey + "|orderflow|" + (sharedSourceName ?? string.Empty) + "|bucket0";
-					dataSourceLabel = "Source: master tick";
-					useTrueProfileData = true;
+					string matchedDataKey;
+					if (TrySnapshotChartProfile(chartDataKey, dataKey, firstBar, lastBar, out trueDataSnapshot, out matchedDataKey))
+					{
+						effectiveDataKey = matchedDataKey + "|chart|" + (trueDataSnapshot != null && trueDataSnapshot.SourceName != null ? trueDataSnapshot.SourceName : string.Empty);
+						dataSourceLabel = BuildChartTrueDataLabel(trueDataSnapshot);
+						useTrueProfileData = true;
+					}
 				}
-				else
+
+				if (!useTrueProfileData && tryMaster)
+				{
+					bool gotSharedSnapshot = OrcaProfileDataCache.TrySnapshotOrderFlowPriceMaps(instrumentKey, startTime, endTime, out trueDataSnapshot, out sharedBucketSeconds, out sharedSourceName);
+					if (gotSharedSnapshot)
+					{
+						effectiveDataKey = instrumentKey + "|orderflow|" + (sharedSourceName ?? string.Empty) + "|bucket0";
+						dataSourceLabel = "Source: master tick";
+						useTrueProfileData = true;
+					}
+				}
+
+				if (!useTrueProfileData && !tryChartFirst)
 				{
 					string matchedDataKey;
 					if (TrySnapshotChartProfile(chartDataKey, dataKey, firstBar, lastBar, out trueDataSnapshot, out matchedDataKey))
@@ -728,7 +755,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 						profileResult.Clear();
 						deltaResult.Clear();
 						dataSourceLabel = string.Empty;
-						if (sharedBucketSeconds > 0)
+						if (DataSourcePreference == OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly)
+							noDataLabel = "No local Tick Replay cache";
+						else if (sharedBucketSeconds > 0)
 							noDataLabel = "Set master provider bucket to 0";
 						else if (OrcaProfileDataCache.HasOrderFlowSource(instrumentKey))
 							noDataLabel = "Waiting for master provider data";
@@ -795,6 +824,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			cachedAggregationMode = VolumeAggregationMode;
 			cachedDeltaAggregationMode = DeltaAggregationMode;
 			cachedProfileDataMode = ProfileDataMode;
+			cachedDataSourcePreference = DataSourcePreference;
 			cachedAllowEstimatedChartFallback = AllowEstimatedChartFallback;
 			profileDirty = false;
 		}
@@ -830,6 +860,10 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		{
 			if (ProfileDataMode == OrcaFixedRangeProfileDataMode.EstimatedFromBars)
 				return "Source: chart estimate";
+			if (DataSourcePreference == OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly)
+				return HasChartProfileSource(chartDataKey, dataKey)
+					? "Source: chart estimate (waiting local cache)"
+					: "Source: chart estimate (no local cache)";
 
 			if (sharedBucketSeconds > 0)
 				return "Source: chart estimate (master bucket != 0)";
@@ -858,14 +892,18 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private string BuildChartTrueDataLabel(OrcaProfileDataSnapshot snapshot)
 		{
 			if (snapshot == null || string.IsNullOrEmpty(snapshot.SourceName))
-				return "Source: chart true VAP";
+				return "Source: local chart VAP";
 
+			if (snapshot.SourceName.IndexOf("FixedRangeProfileDataCache", StringComparison.OrdinalIgnoreCase) >= 0)
+				return snapshot.SourceName.IndexOf("SecondaryTick", StringComparison.OrdinalIgnoreCase) >= 0
+					? "Source: local secondary tick cache"
+					: "Source: local Tick Replay cache";
 			if (snapshot.SourceName.IndexOf("OrcaPrints", StringComparison.OrdinalIgnoreCase) >= 0)
 				return "Source: chart live prints";
 			if (snapshot.SourceName.IndexOf("Candle", StringComparison.OrdinalIgnoreCase) >= 0)
-				return "Source: chart candle VAP";
+				return "Source: local candle VAP";
 
-			return "Source: chart true VAP";
+			return "Source: local chart VAP";
 		}
 
 		private bool NeedsProfileRebuild(DateTime startTime, DateTime endTime, double lowPrice, double highPrice, int firstBar, int lastBar, int barsCount, DateTime lastRangeBarTime, double lastRangeBarVolume, string dataKey, int trueDataRevision, double tickSize, int resolvedTicksPerRow, int resolvedDeltaTicksPerRow)
@@ -893,6 +931,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (Math.Abs(cachedValueAreaPercent - ValueAreaPercent) > PriceEpsilon || Math.Abs(cachedDynamicAggregationMultiplier - DynamicAggregationMultiplier) > PriceEpsilon || Math.Abs(cachedDeltaDynamicAggregationMultiplier - DeltaDynamicAggregationMultiplier) > PriceEpsilon)
 				return true;
 			if (cachedAggregationMode != VolumeAggregationMode || cachedDeltaAggregationMode != DeltaAggregationMode || cachedProfileDataMode != ProfileDataMode)
+				return true;
+			if (cachedDataSourcePreference != DataSourcePreference)
 				return true;
 			if (cachedAllowEstimatedChartFallback != AllowEstimatedChartFallback)
 				return true;
@@ -1608,12 +1648,17 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		public OrcaFixedRangeProfileDataMode ProfileDataMode { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Fallback To Chart Estimate", Order = 2, GroupName = "1. Data",
+		[Display(Name = "True Data Source", Order = 2, GroupName = "1. Data",
+			Description = "Chart Local Only uses same-chart Tick Replay/local profile maps and never waits for a master provider. The other modes expose the master only as an explicit fallback.")]
+		public OrcaFixedRangeProfileDataSourcePreference DataSourcePreference { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Fallback To Chart Estimate", Order = 3, GroupName = "1. Data",
 			Description = "When true tick/provider data is unavailable, draw an estimated profile from the chart bars and label it as estimated.")]
 		public bool AllowEstimatedChartFallback { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Data Source Label", Order = 3, GroupName = "1. Data")]
+		[Display(Name = "Show Data Source Label", Order = 4, GroupName = "1. Data")]
 		public bool ShowDataSourceLabel { get; set; }
 
 		[NinjaScriptProperty]
