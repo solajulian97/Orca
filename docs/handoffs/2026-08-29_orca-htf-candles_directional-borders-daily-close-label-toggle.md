@@ -61,7 +61,7 @@ The normal render path adds one branch and one cached brush selection per visibl
 
 ## Tests performed in NinjaTrader
 
-None. The source has not been deployed for this change, and no NinjaTrader F5, chart, Market Replay, or live-session validation has been performed.
+Targeted file copy completed to `C:\Users\julia\Documents\NinjaTrader 8\bin\Custom\Indicators\OrcaHTFCandles.cs`; no NinjaTrader F5, chart, Market Replay, or live-session validation has been performed.
 
 ## Static tests performed
 
@@ -73,7 +73,7 @@ None. The source has not been deployed for this change, and no NinjaTrader F5, c
 ## Compile status
 
 - Isolated C# compile: passed.
-- NinjaTrader deployment: pending explicit deployment for this change.
+- NinjaTrader targeted file copy: complete; authored-region comparison against `Working_Suite` passed after line-ending normalization.
 - NinjaTrader F5 and Custom-assembly load: pending.
 
 ## Manual-validation status
