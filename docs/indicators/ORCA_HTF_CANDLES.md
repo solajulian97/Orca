@@ -62,7 +62,7 @@ NinjaTrader intraday time bars are close-stamped. For Minute-based HTF series:
 - The first HTF bar after a session break starts at `SessionIterator`'s trading-day begin, not at the prior session's close.
 - NinjaTrader's shortened final bar timestamp is retained, so an early-close candle stops at the actual native bar end rather than extending by a fixed number of minutes.
 
-Daily bars use the selected Trading Hours trading-day begin and a one-day scheduled interval.
+Daily bars use the selected Trading Hours trading-day begin and an explicit 17:00 Eastern close. With an ETH trading-day begin at 18:00 Eastern, the candle spans the evening open through the following day's 17:00 close. The native Day 1 secondary OHLC remains the source of the candle values.
 
 The three custom modes use Eastern market time with daylight-saving transitions (`Eastern Standard Time` is the Windows timezone identifier, not a fixed UTC-5 offset):
 
@@ -89,6 +89,7 @@ On tick, volume, and range charts, the same rule maps each boundary to the first
 - The render pass clips to the chart panel, so partially visible bodies retain their true off-screen border geometry.
 - Completed candles use cached primary indices; only unresolved/current time boundaries require binary-search/time projection during rendering.
 - Direct2D brushes are cached per render target and disposed on render-target change and termination.
+- When `Use Directional Borders` is enabled, bullish and bearish bodies use the separate `Bull Border` and `Bear Border` brushes; otherwise all bodies use the common `Border` brush.
 - `1 Day` candles show their Monday-through-Friday trading-day name centered along the panel bottom.
 - `Asia / London / New York` candles show `Asia`, `London`, or `RTH` centered along the panel bottom.
 - Bottom labels use each candle's logical start/end coordinates and are omitted when that logical center is outside the viewport.
@@ -105,6 +106,9 @@ Defaults match the supplied settings/appearance screenshot:
 - Bull Body: RGB `76,175,80` (`#4CAF50`)
 - Bear Body: RGB `255,82,82` (`#FF5252`)
 - Border: RGB `46,46,46` (`#2E2E2E`)
+- Use Directional Borders: disabled (backward-compatible common border behavior)
+- Bull Border: RGB `76,175,80` (`#4CAF50`)
+- Bear Border: RGB `255,82,82` (`#FF5252`)
 - Bull Wick: RGB `46,46,46` (`#2E2E2E`)
 - Bear Wick: RGB `46,46,46` (`#2E2E2E`)
 - Transparency: 85, converted to Direct2D opacity `0.15`
@@ -118,6 +122,7 @@ For split modes, Candle Lookback counts individual session candles rather than t
 ## TradingView Differences And Limitations
 
 - Intraday shortened bars stop at NinjaTrader's actual native close rather than Pine's unconditional nominal-duration right edge.
+- `1 Day` candle geometry now closes at 17:00 Eastern even when the chart's display timezone differs; the underlying native Day 1 OHLC still depends on the selected Trading Hours template and provider.
 - Daily OHLC availability can depend on the data provider and selected Trading Hours template.
 - Weekly and session-split modes can aggregate only the 30-minute bars made available by the chart's Trading Hours template. An RTH-only template cannot supply overnight/Asia/London OHLC, and missing provider history cannot be reconstructed.
 - Holiday and early-close windows retain the requested scheduled right edge even when the final available 30-minute source bar ends earlier.

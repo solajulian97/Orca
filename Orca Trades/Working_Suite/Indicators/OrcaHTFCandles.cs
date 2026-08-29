@@ -127,6 +127,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DxBrush dxBullBodyBrush;
 		private DxBrush dxBearBodyBrush;
 		private DxBrush dxBorderBrush;
+		private DxBrush dxBullBorderBrush;
+		private DxBrush dxBearBorderBrush;
 		private DxBrush dxBullWickBrush;
 		private DxBrush dxBearWickBrush;
 		private DxBrush dxLabelBrush;
@@ -153,11 +155,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				BullBody = CreateFrozenBrush(76, 175, 80);
 				BearBody = CreateFrozenBrush(255, 82, 82);
 				Border = CreateFrozenBrush(46, 46, 46);
+				UseDirectionalBorders = false;
+				BullBorder = CreateFrozenBrush(76, 175, 80);
+				BearBorder = CreateFrozenBrush(255, 82, 82);
 				BullWick = CreateFrozenBrush(46, 46, 46);
 				BearWick = CreateFrozenBrush(46, 46, 46);
 				Transparency = 85;
 				BorderWidth = 1;
 				WickWidth = 1;
+				ShowCandleLabels = true;
 			}
 			else if (State == State.Configure)
 			{
@@ -740,14 +746,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (!TryGetTradingDayBegin(barTime.Date, out startTime))
 				startTime = barTime.Date;
 
-			try
-			{
-				endTime = startTime.AddDays(1);
-			}
-			catch
-			{
-				return false;
-			}
+			DateTime easternStart = ConvertChartTimeToEastern(startTime);
+			DateTime easternCloseDate = easternStart.TimeOfDay >= new TimeSpan(17, 0, 0)
+				? easternStart.Date.AddDays(1)
+				: easternStart.Date;
+			DateTime easternEnd = easternCloseDate.AddHours(17);
+			endTime = ConvertEasternTimeToChart(easternEnd);
 
 			return endTime > startTime;
 		}
@@ -888,6 +892,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			bool isBull = candle.Close >= candle.Open;
 			DxBrush bodyBrush = isBull ? dxBullBodyBrush : dxBearBodyBrush;
 			DxBrush wickBrush = isBull ? dxBullWickBrush : dxBearWickBrush;
+			DxBrush borderBrush = UseDirectionalBorders
+				? (isBull ? dxBullBorderBrush : dxBearBorderBrush)
+				: dxBorderBrush;
+			if (borderBrush == null)
+				borderBrush = dxBorderBrush;
 
 			double bodyHigh = Math.Max(candle.Open, candle.Close);
 			double bodyLow = Math.Min(candle.Open, candle.Close);
@@ -911,14 +920,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			RectangleF bodyRectangle = new RectangleF(leftX, bodyTop, rightX - leftX, bodyHeight);
 			RenderTarget.FillRectangle(bodyRectangle, bodyBrush);
-			RenderTarget.DrawRectangle(bodyRectangle, dxBorderBrush, BorderWidth);
+			RenderTarget.DrawRectangle(bodyRectangle, borderBrush, BorderWidth);
 
 			RenderCandleLabel(candle, leftX, rightX, panelBounds);
 		}
 
 		private void RenderCandleLabel(HtfCandleSnapshot candle, float leftX, float rightX, RectangleF panelBounds)
 		{
-			if (dxLabelBrush == null || dxLabelTextFormat == null)
+			if (!ShowCandleLabels || dxLabelBrush == null || dxLabelTextFormat == null)
 				return;
 
 			string label = GetCandleLabel(candle);
@@ -1038,6 +1047,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 
 			if (dxBullBodyBrush != null && dxBearBodyBrush != null && dxBorderBrush != null
+				&& dxBullBorderBrush != null && dxBearBorderBrush != null
 				&& dxBullWickBrush != null && dxBearWickBrush != null && dxLabelBrush != null && dxLabelTextFormat != null)
 				return;
 
@@ -1047,6 +1057,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				dxBullBodyBrush = ToDxBrush(BullBody);
 				dxBearBodyBrush = ToDxBrush(BearBody);
 				dxBorderBrush = ToDxBrush(Border);
+				dxBullBorderBrush = ToDxBrush(BullBorder);
+				dxBearBorderBrush = ToDxBrush(BearBorder);
 				dxBullWickBrush = ToDxBrush(BullWick);
 				dxBearWickBrush = ToDxBrush(BearWick);
 				dxLabelBrush = ToDxBrush(System.Windows.Media.Brushes.LightGray);
@@ -1084,6 +1096,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DisposeBrush(ref dxBullBodyBrush);
 			DisposeBrush(ref dxBearBodyBrush);
 			DisposeBrush(ref dxBorderBrush);
+			DisposeBrush(ref dxBullBorderBrush);
+			DisposeBrush(ref dxBearBorderBrush);
 			DisposeBrush(ref dxBullWickBrush);
 			DisposeBrush(ref dxBearWickBrush);
 			DisposeBrush(ref dxLabelBrush);
@@ -1139,32 +1153,53 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Browsable(false)]
 		public string BorderSerializable { get { return Serialize.BrushToString(Border); } set { Border = Serialize.StringToBrush(value); } }
 
+		[NinjaScriptProperty]
+		[Display(Name = "Use Directional Borders", Description = "When enabled, bullish and bearish candles use separate border brushes; otherwise the common Border brush is used.", Order = 4, GroupName = "Appearance")]
+		public bool UseDirectionalBorders { get; set; }
+
 		[XmlIgnore]
-		[Display(Name = "Bull Wick", Description = "Wick color for higher-timeframe candles whose close is greater than or equal to their open.", Order = 4, GroupName = "Appearance")]
+		[Display(Name = "Bull Border", Description = "Outline color for bullish candles when directional borders are enabled.", Order = 5, GroupName = "Appearance")]
+		public WpfBrush BullBorder { get; set; }
+		[Browsable(false)]
+		public string BullBorderSerializable { get { return Serialize.BrushToString(BullBorder); } set { BullBorder = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bear Border", Description = "Outline color for bearish candles when directional borders are enabled.", Order = 6, GroupName = "Appearance")]
+		public WpfBrush BearBorder { get; set; }
+		[Browsable(false)]
+		public string BearBorderSerializable { get { return Serialize.BrushToString(BearBorder); } set { BearBorder = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Bull Wick", Description = "Wick color for higher-timeframe candles whose close is greater than or equal to their open.", Order = 7, GroupName = "Appearance")]
 		public WpfBrush BullWick { get; set; }
 		[Browsable(false)]
 		public string BullWickSerializable { get { return Serialize.BrushToString(BullWick); } set { BullWick = Serialize.StringToBrush(value); } }
 
 		[XmlIgnore]
-		[Display(Name = "Bear Wick", Description = "Wick color for higher-timeframe candles whose close is below their open.", Order = 5, GroupName = "Appearance")]
+		[Display(Name = "Bear Wick", Description = "Wick color for higher-timeframe candles whose close is below their open.", Order = 8, GroupName = "Appearance")]
 		public WpfBrush BearWick { get; set; }
 		[Browsable(false)]
 		public string BearWickSerializable { get { return Serialize.BrushToString(BearWick); } set { BearWick = Serialize.StringToBrush(value); } }
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "Transparency", Description = "Body transparency using TradingView semantics: 0 is opaque and 100 is invisible. Borders and wicks remain opaque.", Order = 6, GroupName = "Appearance")]
+		[Display(Name = "Transparency", Description = "Body transparency using TradingView semantics: 0 is opaque and 100 is invisible. Borders and wicks remain opaque.", Order = 9, GroupName = "Appearance")]
 		public int Transparency { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 5)]
-		[Display(Name = "Border Width", Description = "Width in pixels of the candle body border.", Order = 7, GroupName = "Appearance")]
+		[Display(Name = "Border Width", Description = "Width in pixels of the candle body border.", Order = 10, GroupName = "Appearance")]
 		public int BorderWidth { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 5)]
-		[Display(Name = "Wick Width", Description = "Width in pixels of the upper and lower candle wicks.", Order = 8, GroupName = "Appearance")]
+		[Display(Name = "Wick Width", Description = "Width in pixels of the upper and lower candle wicks.", Order = 11, GroupName = "Appearance")]
 		public int WickWidth { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Candle Labels", Description = "Shows weekday labels for 1 Day candles and Asia, London, or RTH labels for the three-session mode. Turn off to avoid overlap with other session labels.", Order = 0, GroupName = "Display Controls")]
+		public bool ShowCandleLabels { get; set; }
+
 		#endregion
 	}
 }
