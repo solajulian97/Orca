@@ -465,11 +465,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ShowVolumePerRangeTick) rows.Add(new KeyValuePair<string, int>("Volume / Tick", 10));
 			if (ShowDelta)       rows.Add(new KeyValuePair<string, int>("Delta",        1));
 			if (ShowDeltaPerSecond) rows.Add(new KeyValuePair<string, int>("Delta / Sec", 11));
-			if (ShowCumulativeDelta) rows.Add(new KeyValuePair<string, int>("Cumulative \u0394", 7));
 			if (ShowDeltaPercent) rows.Add(new KeyValuePair<string, int>("\u0394 %",        8));
 			if (ShowMaxDelta)    rows.Add(new KeyValuePair<string, int>("Max \u0394",       5));
 			if (ShowMinDelta)    rows.Add(new KeyValuePair<string, int>("Min \u0394",       6));
 			if (ShowFinishDelta) rows.Add(new KeyValuePair<string, int>("Finish \u0394",  2));
+			if (ShowCumulativeDelta) rows.Add(new KeyValuePair<string, int>("Cumulative \u0394", 7));
 			if (ShowRange)       rows.Add(new KeyValuePair<string, int>("Range",        3));
 			if (ShowBody)        rows.Add(new KeyValuePair<string, int>("Body",         12));
 			if (ShowBodyPercent) rows.Add(new KeyValuePair<string, int>("Body %",       13));
@@ -1526,27 +1526,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 			Description = "Shows signed bar delta divided by the bar's elapsed seconds.")]
 		public bool ShowDeltaPerSecond { get; set; }
 
-		[Display(Name = "Show Cumulative Delta", Order = 6, GroupName = "Rows",
+		[Display(Name = "Show Delta Percent", Order = 6, GroupName = "Rows",
+			Description = "Shows bar delta divided by bar volume as a signed percent.")]
+		public bool ShowDeltaPercent { get; set; }
+
+		[Display(Name = "Show Max Delta", Order = 7, GroupName = "Rows")]
+		public bool ShowMaxDelta { get; set; }
+
+		[Display(Name = "Show Min Delta", Order = 8, GroupName = "Rows")]
+		public bool ShowMinDelta { get; set; }
+
+		[Display(Name = "Show Finish Delta", Order = 9, GroupName = "Rows")]
+		public bool ShowFinishDelta { get; set; }
+
+		[Display(Name = "Show Cumulative Delta", Order = 10, GroupName = "Rows",
 			Description = "Shows running cumulative delta across the loaded chart bars.")]
 		public bool ShowCumulativeDelta { get; set; }
 
 		[TypeConverter(typeof(OrcaTimeStatisticsCumulativeDeltaStartModeConverter))]
-		[Display(Name = "Cumulative Delta Start", Order = 7, GroupName = "Rows",
+		[Display(Name = "Cumulative Delta Start", Order = 11, GroupName = "Rows",
 			Description = "Controls where the cumulative delta row resets.")]
 		public OrcaTimeStatisticsCumulativeDeltaStartMode CumulativeDeltaStartMode { get; set; }
-
-		[Display(Name = "Show Delta Percent", Order = 8, GroupName = "Rows",
-			Description = "Shows bar delta divided by bar volume as a signed percent.")]
-		public bool ShowDeltaPercent { get; set; }
-
-		[Display(Name = "Show Max Delta", Order = 9, GroupName = "Rows")]
-		public bool ShowMaxDelta { get; set; }
-
-		[Display(Name = "Show Min Delta", Order = 10, GroupName = "Rows")]
-		public bool ShowMinDelta { get; set; }
-
-		[Display(Name = "Show Finish Delta", Order = 11, GroupName = "Rows")]
-		public bool ShowFinishDelta { get; set; }
 
 		[Display(Name = "Show Range",            Order = 12, GroupName = "Rows")]
 		public bool ShowRange { get; set; }
