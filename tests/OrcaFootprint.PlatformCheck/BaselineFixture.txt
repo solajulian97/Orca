@@ -1,0 +1,46 @@
+using System;
+public class BaselineFixture
+{
+    private double lastBid = double.NaN, lastAsk = double.NaN, prevLast = double.NaN;
+    private int lastDirection;
+    private double TickSize = .25;
+    private StubBars[] BarsArray;
+    private sealed class StubBars
+    {
+        public int NativeIndex, Count;
+        public double[] High, Low;
+        public DateTime[] Time;
+        public int GetBar(DateTime time) { return NativeIndex; }
+        public double GetHigh(int i) { return High[i]; }
+        public double GetLow(int i) { return Low[i]; }
+        public DateTime GetTime(int i) { return Time[i]; }
+    }
+    /* BASELINE_METHODS */
+    private static int checks;
+    private static void Check(bool condition, string message) { checks++; if (!condition) throw new Exception(message); }
+    public static int Run()
+    {
+        var f = new BaselineFixture(); bool strict;
+        Check(f.ClassifySignedVolume(100, 1500, out strict) == 0 && !strict, "first unknown is not strict zero");
+        Check(f.ClassifySignedVolume(101, 2000, out strict) == 2000 && !strict, "inferred up is not strict ask");
+        Check(f.ClassifySignedVolume(101, 2000, out strict) == 2000 && !strict, "same-price inferred continuation");
+        f.lastBid = 100; f.lastAsk = 101;
+        Check(f.ClassifySignedVolume(101, 25000, out strict) == 25000 && strict, "large ask lot intact");
+        Check(f.ClassifySignedVolume(101, 25000, out strict) == 25000 && strict, "repeated identical lot retained");
+        Check(f.ClassifySignedVolume(100, 9000, out strict) == -9000 && strict, "large bid lot intact");
+        Check(f.ClassifySignedVolume(100.5, 100, out strict) == 100 && !strict, "inside spread remains inferred");
+        f.lastBid = 102; f.lastAsk = 101;
+        Check(f.ClassifySignedVolume(100, 100, out strict) == -100 && !strict, "crossed quotes not strict");
+        DateTime time = new DateTime(2026, 8, 28, 9, 30, 0);
+        f.BarsArray = new[] { new StubBars { NativeIndex = 0, Count = 2, High = new[] { 101.0, 104.0 },
+            Low = new[] { 100.0, 103.0 }, Time = new[] { time, time.AddMilliseconds(10) } } };
+        Check(f.ResolvePrimaryBarIndex(time, 100) == 0, "native price boundary");
+        Check(f.ResolvePrimaryBarIndex(time, 104) == 1, "characterization: existing fallback can select later index");
+        Check(f.ResolvePrimaryBarIndex(time, 200) == 0, "characterization: no price match returns native index");
+        f.BarsArray[0].Time[1] = time.AddSeconds(3);
+        Check(f.ResolvePrimaryBarIndex(time, 104) == 0, "fallback limited to two seconds");
+        Check(f.ResolvePrimaryBarIndex(DateTime.MinValue, 100) == -1, "missing time rejected");
+        // These characterize the host search, not NinjaTrader's native bar-building correctness.
+        return checks;
+    }
+}

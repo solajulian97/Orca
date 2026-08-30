@@ -176,7 +176,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 	}
 
-	public class OrcaCandleVolumeProfile : Indicator
+	[TypeConverter(typeof(OrcaFootprintSettingsConverter))]
+	public partial class OrcaCandleVolumeProfile : Indicator
 	{
 		#region Fields
 		private readonly Guid sharedSourceId = Guid.NewGuid();
@@ -279,6 +280,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				TradeSourceMode = CandleProfileTradeSourceMode.SecondaryTickSeries;
 				ProfileDisplayMode = CandleProfileDisplayMode.LegacyVisibility;
 				BidAskStyle = CandleProfileBidAskStyle.Cluster;
+				EnhancedFootprint = false;
+				FootprintSettingsVersion = 0;
+				FootprintAnalysisTicks = 0;
+				FootprintScale = FootprintScaleMode.PerBar;
+				FootprintFixedVolume = 0;
+				FootprintScaffold = FootprintScaffoldMode.OhlcSpine;
+				FootprintNumbers = FootprintNumberFormat.Auto;
+				FootprintValues = FootprintCellView.BidAsk;
+				FootprintGutterPx = 8;
+				FootprintShowHealth = true;
 
 				// Layout
 				CandleWidthPx       = 14;
@@ -361,6 +372,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else if (State == State.Configure)
 			{
 				ResolveLegacyProfileDisplayMode();
+				if (IsEnhancedFootprintActive && FootprintAnalysisTicks < 1)
+					FootprintAnalysisTicks = Math.Max(1, DeltaTickCompression);
+				FootprintSettingsVersion = 1;
 				if (TradeSourceMode == CandleProfileTradeSourceMode.SecondaryTickSeries)
 					AddDataSeries(BarsPeriodType.Tick, 1);
 			}
@@ -383,15 +397,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastDirection = 0;
 				sharedCoverageBarCount = 0;
 				RegisterSharedProfileSource(true);
+				InitializeEnhancedFootprint();
 			}
 			else if (State == State.Historical)
 			{
 				if (ChartControl != null)
 					SetZOrder(9000);
+				StartEnhancedFootprintObserver();
+			}
+			else if (State == State.Transition || State == State.Realtime)
+			{
+				FlushEnhancedFootprint();
 			}
 			else if (State == State.Terminated)
 			{
 				OrcaProfileDataCache.UnregisterSource(sharedSourceId);
+				StopEnhancedFootprint();
 				DisposeDx();
 			}
 		}
@@ -517,6 +538,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			DisposeDx();
 			base.OnRenderTargetChanged();
+			ResetEnhancedRenderTarget();
 		}
 		#endregion
 
@@ -525,6 +547,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (e == null)
 				return;
+			if (IsEnhancedFootprintActive)
+				ObserveEnhancedQuoteTime(e);
 
 			if (e.MarketDataType == MarketDataType.Bid)
 				lastBid = e.Price;
@@ -541,7 +565,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					long volume = NormalizeTradeVolume(e.Volume);
 					DateTime tradeTime = e.Time == DateTime.MinValue ? GetCurrentPrimaryTime() : e.Time;
-					ProcessTradeIntoPrimaryBar(tradeTime, e.Price, volume);
+					ProcessTradeIntoPrimaryBar(tradeTime, e.Price, volume,
+						e.Bid > 0 && e.Ask >= e.Bid && !double.IsInfinity(e.Ask)
+							? FootprintDataQuality.TradeQuoteUnverified : FootprintDataQuality.CachedQuote);
 				}
 			}
 		}
@@ -576,7 +602,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			while (barDeltaMaps.Count <= primaryBarIndex)
 				barDeltaMaps.Add(new Dictionary<double, long>());
 
-			if (ProfileDisplayMode == CandleProfileDisplayMode.BidAsk)
+			if (ProfileDisplayMode == CandleProfileDisplayMode.BidAsk && !IsEnhancedFootprintActive)
 			{
 				while (barAskVolumeMaps.Count <= primaryBarIndex)
 					barAskVolumeMaps.Add(new Dictionary<double, long>());
@@ -690,7 +716,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return volume;
 		}
 
-		private void ProcessTradeIntoPrimaryBar(DateTime tickTime, double last, long vol)
+		private void ProcessTradeIntoPrimaryBar(DateTime tickTime, double last, long vol,
+			FootprintDataQuality quoteQuality = FootprintDataQuality.SecondarySeries | FootprintDataQuality.CachedQuote)
 		{
 			if (BarsArray == null || BarsArray.Length < 1 || BarsArray[0] == null || tickTime == DateTime.MinValue)
 				return;
@@ -738,8 +765,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// --- DELTA + STRICT BID/ASK ---
 				bool usedBidAsk;
 				long signed = ClassifySignedVolume(last, vol, out usedBidAsk);
+				if (IsEnhancedFootprintActive)
+					ObserveEnhancedTrade(primaryIndex, tickTime, last, vol, usedBidAsk ? Math.Sign(signed) : 0, quoteQuality);
 
-				if (ProfileDisplayMode == CandleProfileDisplayMode.BidAsk)
+				if (ProfileDisplayMode == CandleProfileDisplayMode.BidAsk && !IsEnhancedFootprintActive)
 				{
 					if (usedBidAsk)
 					{
@@ -954,6 +983,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			try
 			{
 				base.OnRender(chartControl, chartScale);
+				if (IsEnhancedFootprintActive)
+				{
+					RenderEnhancedFootprint(chartControl, chartScale);
+					return;
+				}
 				RefreshSharedProfileRegistrationIfNeeded();
 
 				if (barVolumeMaps == null || ChartBars == null || BarsArray == null || BarsArray.Length == 0 || BarsArray[0] == null) return;
@@ -2181,14 +2215,55 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#endregion
 
 		#region Properties
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name = "Enhanced Footprint", Description = "Opt-in Bid x Ask renderer. Disable to restore the legacy appearance. Other display modes are unchanged.", GroupName = "Profile Setup", Order = 2)]
+		public bool EnhancedFootprint { get; set; }
+
+		[Browsable(false)]
+		public int FootprintSettingsVersion { get; set; }
+
+		[Range(0, 500)]
+		[Display(Name = "Analysis Row Size (ticks)", Description = "Independent of display zoom. Zero initializes from Order Flow Row Size on first enable.", GroupName = "Footprint Rows", Order = 0)]
+		public int FootprintAnalysisTicks { get; set; }
+
+		[RefreshProperties(RefreshProperties.All)]
+		[TypeConverter(typeof(FootprintScaleModeConverter))]
+		[Display(Name = "Normalization", GroupName = "Footprint Scale", Order = 0)]
+		public FootprintScaleMode FootprintScale { get; set; }
+
+		[Range(0, long.MaxValue)]
+		[RefreshProperties(RefreshProperties.All)]
+		[Display(Name = "Fixed Scale Volume (contracts)", Description = "Positive common bid/ask denominator; zero leaves Fixed unavailable. Cluster uses the same count for total-row intensity.", GroupName = "Footprint Scale", Order = 1)]
+		public long FootprintFixedVolume { get; set; }
+
+		[TypeConverter(typeof(FootprintScaffoldModeConverter))]
+		[Display(Name = "OHLC Scaffold", GroupName = "Footprint Scaffold / POC", Order = 0)]
+		public FootprintScaffoldMode FootprintScaffold { get; set; }
+
+		[TypeConverter(typeof(FootprintCellViewConverter))]
+		[Display(Name = "Cell Values", GroupName = "Text", Order = 30)]
+		public FootprintCellView FootprintValues { get; set; }
+
+		[Display(Name = "Number Format", GroupName = "Text", Order = 31)]
+		public FootprintNumberFormat FootprintNumbers { get; set; }
+
+		[Range(4, 40)]
+		[Display(Name = "Center Gutter (px)", GroupName = "Text", Order = 32)]
+		public int FootprintGutterPx { get; set; }
+
+		[Display(Name = "Show Data Health", Description = "Coverage, classification and scaling status. Exact quality remains available on hover.", GroupName = "Footprint Data Quality", Order = 0)]
+		public bool FootprintShowHealth { get; set; }
 
 		// --- Profile Setup ---
 		[NinjaScriptProperty]
 		[TypeConverter(typeof(CandleProfileDisplayModeConverter))]
+		[RefreshProperties(RefreshProperties.All)]
 		[Display(Name = "Profile Display", Description = "Choose Volume, Delta, both profiles, or the Bid x Ask footprint.", GroupName = "Profile Setup", Order = 0)]
 		public CandleProfileDisplayMode ProfileDisplayMode { get; set; }
 
 		[NinjaScriptProperty]
+		[TypeConverter(typeof(CandleProfileBidAskStyleConverter))]
+		[RefreshProperties(RefreshProperties.All)]
 		[Display(Name = "Bid/Ask Style", Description = "Cluster draws fixed-width Bid x Ask cells. Histogram draws executed sells left and buys right.", GroupName = "Profile Setup", Order = 1)]
 		public CandleProfileBidAskStyle BidAskStyle { get; set; }
 
@@ -2218,6 +2293,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public int DeltaTickCompression { get; set; }
 
 		[NinjaScriptProperty]
+		[RefreshProperties(RefreshProperties.All)]
 		[Display(Name = "Dynamic Order Flow Aggregation", Description = "Dynamically increases Delta and Bid x Ask row height as the visible price range expands.", GroupName = "Data", Order = 5)]
 		public bool UseDynamicDeltaAggregation { get; set; }
 
