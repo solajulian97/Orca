@@ -13,6 +13,7 @@ Keep Fixed Range delta numbers aligned to the delta histogram spine instead of p
 
 - Left-facing delta rows now place labels in a fixed-width text rectangle at the left edge of the delta track.
 - Right-facing delta rows now place labels in a fixed-width text rectangle at the right edge of the delta track.
+- Delta label text now uses leading alignment, so two-, three-, and four-digit values share the same left edge within that spine column.
 - Delta row geometry, normalization, colors, spacing, and profile calculations are unchanged.
 
 ## User-facing settings
@@ -38,6 +39,7 @@ None. No profile or data cache changed.
 ## Rendering implications
 
 - Delta labels are now anchored to the fixed track edge, which is the visual spine for the selected orientation.
+- DirectWrite leading alignment keeps every delta value left-aligned within that anchored column regardless of label length.
 - The existing minimum bar-width guard remains in place so labels are not forced into rows that cannot contain them.
 
 ## Performance implications

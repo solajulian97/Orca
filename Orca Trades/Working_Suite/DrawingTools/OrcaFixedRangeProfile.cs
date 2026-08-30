@@ -1449,7 +1449,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (deltaLabelTextFormatDx == null)
 			{
 				deltaLabelTextFormatDx = new TextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)Clamp(DeltaLabelFontSize, 6.0, 30.0));
-				deltaLabelTextFormatDx.TextAlignment = SharpDX.DirectWrite.TextAlignment.Trailing;
+				deltaLabelTextFormatDx.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
 				deltaLabelTextFormatDx.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center;
 			}
 
