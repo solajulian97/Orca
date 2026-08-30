@@ -1,0 +1,55 @@
+{
+  "CreatedAt": "2026-08-30T14:30:30.4637228-04:00",
+  "Purpose": "Exact CVP baseline before future bid/ask footprint changes",
+  "GitHead": "827fbac9cdf06fded1d5d3bb0d061f7f8c093203",
+  "CvpLastCommit": "c735f68",
+  "Archive": "CVP-current-version.zip",
+  "ArchiveSHA256": "8509552416BFB9235AC57AF3F2CD29D1C1B23C6319E5C9B102BF3475A9D4CD08",
+  "VerifiedEntries": 7,
+  "AuthoredCvpMatchesLive": true,
+  "Scope": "CVP plus its direct shared-profile and absorption-color source dependencies. No templates, workspace settings, market data, compiled binaries, or full dependency closure.",
+  "Files": [
+    {
+      "Entry": "Working_Suite/Indicators/OrcaCandleVolumeProfile.cs",
+      "OriginalPath": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaCandleVolumeProfile.cs",
+      "Bytes": 117922,
+      "SHA256": "3E3AC606E0BBF528C2DE544F86DA25A79B70B63FEB85DD370DB719CE83253C97"
+    },
+    {
+      "Entry": "NinjaTrader-live/Indicators/OrcaCandleVolumeProfile.cs",
+      "OriginalPath": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaCandleVolumeProfile.cs",
+      "Bytes": 123531,
+      "SHA256": "B874B9CF798B232F83955B184FAC9DE1A033328B12CFC5BAC764E4D1B8C605A3"
+    },
+    {
+      "Entry": "Working_Suite/Indicators/OrcaVolumeProfileCore.cs",
+      "OriginalPath": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaVolumeProfileCore.cs",
+      "Bytes": 50296,
+      "SHA256": "CA8A5DC968E53F63FDAF5573BDF820C0177C117DDC6248EC3B49CA55DE433E08"
+    },
+    {
+      "Entry": "NinjaTrader-live/Indicators/OrcaVolumeProfileCore.cs",
+      "OriginalPath": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaVolumeProfileCore.cs",
+      "Bytes": 50296,
+      "SHA256": "CA8A5DC968E53F63FDAF5573BDF820C0177C117DDC6248EC3B49CA55DE433E08"
+    },
+    {
+      "Entry": "Working_Suite/Indicators/OrcaAbsorptionCandles.cs",
+      "OriginalPath": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaAbsorptionCandles.cs",
+      "Bytes": 34678,
+      "SHA256": "BEDCFF36C446ED7843F6356DA0E5A4350912F6CA362E8FD6783408DB01B3908E"
+    },
+    {
+      "Entry": "NinjaTrader-live/Indicators/OrcaAbsorptionCandles.cs",
+      "OriginalPath": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaAbsorptionCandles.cs",
+      "Bytes": 34678,
+      "SHA256": "BEDCFF36C446ED7843F6356DA0E5A4350912F6CA362E8FD6783408DB01B3908E"
+    },
+    {
+      "Entry": "reference/2026-07-21_cvp_bid-ask-footprint.md",
+      "OriginalPath": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-07-21_cvp_bid-ask-footprint.md",
+      "Bytes": 7530,
+      "SHA256": "C09B689B4CEEEE599064F40E964C87EB6CDB246B0E4FD3E70BCA725009FF8817"
+    }
+  ]
+}
