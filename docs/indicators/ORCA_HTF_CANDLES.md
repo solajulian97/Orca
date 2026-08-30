@@ -90,6 +90,7 @@ On tick, volume, and range charts, the same rule maps each boundary to the first
 - Completed candles use cached primary indices; only unresolved/current time boundaries require binary-search/time projection during rendering.
 - Direct2D brushes are cached per render target and disposed on render-target change and termination.
 - When `Use Directional Borders` is enabled, bullish and bearish bodies use the separate `Bull Border` and `Bear Border` brushes; otherwise all bodies use the common `Border` brush.
+- `Open Lines Only` suppresses bodies, body borders, and wicks, then draws one horizontal line at each candle's open from its logical start through its logical end. The line uses `Border Width` and the same common/directional border-brush selection.
 - `1 Day` candles show their Monday-through-Friday trading-day name centered along the panel bottom.
 - `Asia / London / New York` candles show `Asia`, `London`, or `RTH` centered along the panel bottom.
 - Bottom labels use each candle's logical start/end coordinates and are omitted when that logical center is outside the viewport.

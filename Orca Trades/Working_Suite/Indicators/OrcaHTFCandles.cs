@@ -163,6 +163,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Transparency = 85;
 				BorderWidth = 1;
 				WickWidth = 1;
+				OpenLinesOnly = false;
 				ShowCandleLabels = true;
 			}
 			else if (State == State.Configure)
@@ -860,10 +861,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			float leftX;
 			float rightX;
-			float wickX;
 			if (!TryResolveBoundaryX(chartControl, candle.StartTime, candle.StartPrimaryIndex, out leftX)
-				|| !TryResolveBoundaryX(chartControl, candle.EndTime, candle.EndPrimaryIndex, out rightX)
-				|| !TryResolveBoundaryX(chartControl, candle.MidTime, candle.MidPrimaryIndex, out wickX))
+				|| !TryResolveBoundaryX(chartControl, candle.EndTime, candle.EndPrimaryIndex, out rightX))
 				return;
 
 			if (rightX < leftX)
@@ -887,6 +886,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				: dxBorderBrush;
 			if (borderBrush == null)
 				borderBrush = dxBorderBrush;
+
+			if (OpenLinesOnly)
+			{
+				float openY = chartScale.GetYByValue(candle.Open);
+				RenderTarget.DrawLine(new Vector2(leftX, openY), new Vector2(rightX, openY), borderBrush, BorderWidth);
+				RenderCandleLabel(candle, leftX, rightX, panelBounds);
+				return;
+			}
+
+			float wickX;
+			if (!TryResolveBoundaryX(chartControl, candle.MidTime, candle.MidPrimaryIndex, out wickX))
+				return;
 
 			double bodyHigh = Math.Max(candle.Open, candle.Close);
 			double bodyLow = Math.Min(candle.Open, candle.Close);
@@ -1185,6 +1196,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(1, 5)]
 		[Display(Name = "Wick Width", Description = "Width in pixels of the upper and lower candle wicks.", Order = 11, GroupName = "Appearance")]
 		public int WickWidth { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Open Lines Only", Description = "Draws only each higher-timeframe candle's open from its start through its scheduled end. The line uses the common or directional border brush and Border Width.", Order = 12, GroupName = "Appearance")]
+		public bool OpenLinesOnly { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Show Candle Labels", Description = "Shows weekday labels for 1 Day candles and Asia, London, or RTH labels for the three-session mode. Turn off to avoid overlap with other session labels.", Order = 0, GroupName = "Display Controls")]
