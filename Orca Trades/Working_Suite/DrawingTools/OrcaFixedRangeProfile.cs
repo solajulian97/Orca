@@ -1349,8 +1349,19 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (labelBrush == null)
 				return;
 
-			float textLeft = Math.Max(track.Left, drawX + 1f);
-			float textRight = Math.Min(track.Right, drawX + barWidth - 2f);
+			// Keep delta labels beside the fixed spine instead of following each bar endpoint.
+			float textLeft;
+			float textRight;
+			if (track.DrawFromRight)
+			{
+				textRight = track.Right - 1f;
+				textLeft = Math.Max(track.Left, textRight - labelWidth - 1f);
+			}
+			else
+			{
+				textLeft = track.Left + 1f;
+				textRight = Math.Min(track.Right, textLeft + labelWidth + 1f);
+			}
 			if (textRight <= textLeft)
 				return;
 
