@@ -4,8 +4,11 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Diagnostics;
 
 // Offline semantic check against installed platform metadata, not a NinjaScript F5 replacement.
-string root = args.Length > 0 ? Path.GetFullPath(args[0]) : Directory.GetCurrentDirectory();
-string source = Path.Combine(root, "Orca Trades", "Working_Suite", "Indicators");
+string root = Path.GetFullPath(args.FirstOrDefault(arg => !arg.StartsWith("--", StringComparison.Ordinal)) ?? Directory.GetCurrentDirectory());
+bool liveGenerated = args.Contains("--live-generated", StringComparer.Ordinal);
+string source = liveGenerated
+    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NinjaTrader 8", "bin", "Custom", "Indicators")
+    : Path.Combine(root, "Orca Trades", "Working_Suite", "Indicators");
 string framework = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Microsoft.NET", "Framework64", "v4.0.30319");
 string platform = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "NinjaTrader 8", "bin");
 string custom = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NinjaTrader 8", "bin", "Custom", "NinjaTrader.Custom.dll");
@@ -22,15 +25,32 @@ foreach (string name in new[] { "OrcaFootprintCore.cs", "OrcaCandleVolumeProfile
 {
     string file = Path.Combine(source, name), code = File.ReadAllText(file);
     int generated = code.IndexOf("#region NinjaScript generated code", StringComparison.Ordinal);
-    if (generated >= 0) code = code.Substring(0, generated);
+    if (generated >= 0 && !liveGenerated) code = code.Substring(0, generated);
     trees.Add(CSharpSyntaxTree.ParseText(code, new CSharpParseOptions(LanguageVersion.CSharp7_3), file));
+}
+if (liveGenerated)
+{
+    // These private fields normally come from other NinjaTrader-generated partials.
+    // Supply only that host scaffolding; compile the CVP wrappers exactly as generated.
+    const string hostPartials = @"
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns {
+    public partial class MarketAnalyzerColumn {
+        private NinjaTrader.NinjaScript.Indicators.Indicator indicator;
+    }
+}
+namespace NinjaTrader.NinjaScript.Strategies {
+    public partial class Strategy {
+        private NinjaTrader.NinjaScript.Indicators.Indicator indicator;
+    }
+}";
+    trees.Add(CSharpSyntaxTree.ParseText(hostPartials, new CSharpParseOptions(LanguageVersion.CSharp7_3), "GeneratedHostScaffolding.cs"));
 }
 var compilation = CSharpCompilation.Create("OrcaFootprintOfflineCheck", trees,
     paths.Select(path => MetadataReference.CreateFromFile(path)),
     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, warningLevel: 4));
 var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
 foreach (Diagnostic error in errors) Console.WriteLine(error);
-Console.WriteLine($"Offline platform semantic check: {errors.Length} errors. NinjaTrader F5 and runtime validation still required.");
+Console.WriteLine($"Offline platform semantic check ({(liveGenerated ? "live including generated code" : "authored source")}): {errors.Length} errors. NinjaTrader F5 and runtime validation still required.");
 if (errors.Length != 0) return 1;
 
 var git = new ProcessStartInfo("git") { WorkingDirectory = root, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
@@ -43,6 +63,16 @@ var oldRoot = CSharpSyntaxTree.ParseText(baseline).GetRoot();
 var newRoot = trees[1].GetRoot();
 string Tokens(SyntaxNode node) => string.Join(" ", node.DescendantTokens().Select(token => token.Text));
 MethodDeclarationSyntax Method(SyntaxNode node, string name) => node.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == name);
+bool HasStandaloneIndicatorConverter(SyntaxNode node)
+{
+    var classes = node.DescendantNodes().OfType<ClassDeclarationSyntax>().ToArray();
+    bool HasBase(ClassDeclarationSyntax c, string name) => c.BaseList?.Types.Any(b => b.Type.ToString().Split('.').Last() == name) == true;
+    return classes.Any(c => HasBase(c, "IndicatorBaseConverter")) && !classes.Any(c => HasBase(c, "Indicator"));
+}
+foreach (var tree in trees)
+    if (HasStandaloneIndicatorConverter(tree.GetRoot()))
+        throw new Exception("NinjaScript generation risk: IndicatorBaseConverter without the concrete Indicator declaration in " + tree.FilePath);
+Console.WriteLine("PASS: IndicatorBaseConverter stays with the concrete indicator, not a helper partial.");
 string[] preserved = { "ClassifySignedVolume", "ResolvePrimaryBarIndex", "IsPriceInsidePrimaryBar", "GetTimeDistanceTicks", "NormalizeTradeVolume",
     "ResolveLegacyProfileDisplayMode", "DrawBarBidAskProfile", "RegisterSharedProfileSourceForKey" };
 foreach (string name in preserved)
@@ -73,6 +103,14 @@ foreach (var call in enhancedRender.DescendantNodes().OfType<InvocationExpressio
         throw new Exception("Preparation/cache access in enhanced render: " + call);
 if (enhancedRender.DescendantNodes().OfType<LockStatementSyntax>().Any()) throw new Exception("Lock in enhanced render.");
 Console.WriteLine("PASS: enhanced render has no authored managed object allocations, locks, or preparation/cache calls.");
+
+// Match the invalid helper-as-indicator wrapper observed in the user's F5 output.
+string badWrapper = File.ReadAllText(Path.Combine(root, "tests", "OrcaFootprint.PlatformCheck", "InvalidConverterWrapper.txt"));
+var regression = compilation.AddSyntaxTrees(CSharpSyntaxTree.ParseText(badWrapper, new CSharpParseOptions(LanguageVersion.CSharp7_3)));
+var regressionCodes = regression.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.Id).ToHashSet();
+if (!regressionCodes.Contains("CS1061") || !regressionCodes.Contains("CS0311"))
+    throw new Exception("Generated-converter regression failed to reproduce the reported errors.");
+Console.WriteLine("PASS: invalid generated converter wrapper reproduces CS1061 and CS0311.");
 
 string fixture = File.ReadAllText(Path.Combine(root, "tests", "OrcaFootprint.PlatformCheck", "BaselineFixture.txt"));
 fixture = fixture.Replace("/* BASELINE_METHODS */", string.Join(Environment.NewLine,

@@ -1,14 +1,14 @@
 # Orca Candle Volume Profile
 
-Updated: 2026-08-30. Working_Suite development source only.
+Updated: 2026-08-31. Working_Suite development source only.
 
 ## Ownership
 
-- `Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.cs`: indicator, serialized settings, accepted trade processing, legacy drawing, shared publication.
+- `Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.cs`: indicator, serialized settings, contextual settings converter, accepted trade processing, legacy drawing, shared publication. Keep the `IndicatorBaseConverter` beside the concrete indicator declaration to avoid spurious NinjaScript indicator wrappers in a helper partial.
 - `Orca Trades/Working_Suite/Indicators/OrcaFootprintCore.cs`: platform-independent strict evidence, integer price buckets, immutable snapshots, POC and normalization.
-- `Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.Rendering.cs`: enhanced viewport observer, preparation worker, text fitting, drawing, inspection, contextual settings.
+- `Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.Rendering.cs`: enhanced viewport observer, preparation worker, text fitting, drawing, inspection, enum converters.
 - `tests/OrcaFootprint.Tests`: isolated executable fixtures, no NinjaTrader dependency.
-- `tests/OrcaFootprint.PlatformCheck`: installed-platform metadata check, backup parity assertions, extracted legacy classifier/attribution fixtures. Not a NinjaTrader compile replacement.
+- `tests/OrcaFootprint.PlatformCheck`: installed-platform metadata check, backup parity assertions, extracted legacy classifier/attribution fixtures, converter placement guard and invalid-generated-wrapper regression. `--live-generated` includes the deployed wrappers with test-only host partial fields; it does not run NinjaTrader's generator or replace F5.
 
 ## Opt-In Clarity Release (P0-A/P0-B)
 
@@ -59,5 +59,7 @@ RenderTarget resources are disposed/recreated on target change. Layouts are fram
 ## Validation Boundary
 
 See `docs/handoffs/2026-08-30_cvp_footprint-v1-foundation-clarity.md` for exact local results and deployment status. NinjaTrader F5, saved-template round trips, replay equivalence, visual acceptance, native memory and full performance budgets are pending Julian's validation. No Full_Suite promotion is authorized.
+
+The reported F5 failure generated `EqualsInput`/`CacheIndicator` calls for the settings converter, not CVP. The 2026-08-31 two-file corrective deployment removes that invalid wrapper and relocates the unchanged converter to the main indicator file. Authored and deployed-wrapper offline checks pass; fresh F5 generation and chart acceptance remain pending. See `docs/handoffs/2026-08-31_cvp_settings-converter-generation.md`.
 
 Later imbalances, auctions, statistics integration, semantic zoom states, observations, levels, reset anchors and interpretation formulas remain unimplemented approval gates.

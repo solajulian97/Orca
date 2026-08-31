@@ -1,0 +1,16 @@
+namespace NinjaTrader.NinjaScript.Indicators
+{
+    // Deliberately invalid fixture: NinjaTrader generated this shape for a settings helper.
+    public class InvalidConverterWrapper : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+    {
+        private OrcaFootprintSettingsConverter[] cacheOrcaFootprintSettingsConverter;
+        public OrcaFootprintSettingsConverter Create(NinjaTrader.NinjaScript.ISeries<double> input)
+        {
+            if (cacheOrcaFootprintSettingsConverter != null)
+                for (int idx = 0; idx < cacheOrcaFootprintSettingsConverter.Length; idx++)
+                    if (cacheOrcaFootprintSettingsConverter[idx] != null && cacheOrcaFootprintSettingsConverter[idx].EqualsInput(input))
+                        return cacheOrcaFootprintSettingsConverter[idx];
+            return CacheIndicator<OrcaFootprintSettingsConverter>(new OrcaFootprintSettingsConverter(), input, ref cacheOrcaFootprintSettingsConverter);
+        }
+    }
+}

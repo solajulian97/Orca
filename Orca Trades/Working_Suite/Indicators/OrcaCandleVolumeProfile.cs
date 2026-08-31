@@ -2668,6 +2668,60 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		#endregion
 	}
+
+    // Keep the IndicatorBaseConverter with the actual indicator, not in a helper partial file.
+    public class OrcaFootprintSettingsConverter : IndicatorBaseConverter
+    {
+        private static readonly HashSet<string> applicable = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "ProfileDisplayMode", "EnhancedFootprint", "BidAskStyle", "BidAskWidthPx", "TradeSourceMode", "PublishSharedProfileCache",
+            "DeltaTickCompression", "UseDynamicDeltaAggregation", "DeltaDynamicRowMinPixels", "DeltaDynamicMultiplier",
+            "DynamicDeltaMinCompression", "DynamicDeltaMaxCompression", "ProfileBarSpacingPx", "ShowPOC", "ShowBidAskText",
+            "BidAskTextMinThreshold", "BidAskTextFontSize", "BidAskTextBrush", "TextFontFamily", "TextFontWeight",
+            "UseDynamicTextSizing", "DynamicTextMaxFontSize", "BidAskPositiveBrush", "BidAskNegativeBrush", "BidAskNeutralBrush",
+            "BidAskMinOpacity", "BidAskMaxOpacity"
+        };
+        public override bool GetPropertiesSupported(ITypeDescriptorContext context) { return true; }
+        public override PropertyDescriptorCollection GetProperties(ITypeDescriptorContext context, object value, Attribute[] attributes)
+        {
+            PropertyDescriptorCollection properties = base.GetPropertiesSupported(context) ? base.GetProperties(context, value, attributes) : TypeDescriptor.GetProperties(value, attributes);
+            var indicator = value as OrcaCandleVolumeProfile;
+            if (indicator == null || properties == null) return properties;
+            var output = new List<PropertyDescriptor>();
+            bool enhanced = indicator.EnhancedFootprint && indicator.ProfileDisplayMode == CandleProfileDisplayMode.BidAsk;
+            foreach (PropertyDescriptor property in properties)
+            {
+                string name = property.Name;
+                if (!enhanced && name.StartsWith("Footprint", StringComparison.Ordinal)) continue;
+                if (enhanced)
+                {
+                    DisplayAttribute display = property.Attributes[typeof(DisplayAttribute)] as DisplayAttribute;
+                    var info = typeof(OrcaCandleVolumeProfile).GetProperty(name);
+                    bool owned = info != null && info.DeclaringType == typeof(OrcaCandleVolumeProfile);
+                    if (!owned || display == null) { output.Add(property); continue; }
+                    if (!name.StartsWith("Footprint", StringComparison.Ordinal) && !applicable.Contains(name)) continue;
+                    if (name == "BidAskMinOpacity" && indicator.BidAskStyle == CandleProfileBidAskStyle.Histogram) continue;
+                    if (!indicator.UseDynamicDeltaAggregation && (name.StartsWith("DynamicDelta", StringComparison.Ordinal) || name.StartsWith("DeltaDynamic", StringComparison.Ordinal))) continue;
+                    string group = "01 Profile", label = display.GetName();
+                    if (name == "TradeSourceMode" || name == "PublishSharedProfileCache" || name == "FootprintShowHealth") group = "02 Data Quality";
+                    else if (name == "FootprintAnalysisTicks" || name == "ProfileBarSpacingPx" || name == "DeltaTickCompression" || name == "UseDynamicDeltaAggregation"
+                        || name.StartsWith("DynamicDelta", StringComparison.Ordinal) || name.StartsWith("DeltaDynamic", StringComparison.Ordinal)) group = "03 Rows";
+                    else if (name == "FootprintScale" || name == "FootprintFixedVolume") group = "04 Scale";
+                    else if (name == "FootprintScaffold" || name == "ShowPOC") group = "05 Scaffold / POC";
+                    else if (name == "FootprintValues" || name == "FootprintNumbers" || name == "FootprintGutterPx" || display.GetGroupName() == "Text Labels") group = "06 Text";
+                    if (name == "ShowPOC") label = "POC Outline";
+                    if (name == "DeltaTickCompression") label = "Display Row Size (ticks)";
+                    if (name == "BidAskPositiveBrush") label = "Ask / Positive Delta Color";
+                    if (name == "BidAskNegativeBrush") label = "Bid / Negative Delta Color";
+                    if (name == "BidAskTextMinThreshold") label = "Minimum Total Row Volume For Text";
+                    output.Add(TypeDescriptor.CreateProperty(property.ComponentType, property,
+                        new DisplayAttribute { Name = label, Description = display.GetDescription(), GroupName = group, Order = display.GetOrder() ?? 0 }));
+                }
+                else output.Add(property);
+            }
+            return new PropertyDescriptorCollection(output.ToArray(), true);
+        }
+    }
 }
 
 #region NinjaScript generated code. Neither change nor remove.
