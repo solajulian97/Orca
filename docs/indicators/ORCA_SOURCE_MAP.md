@@ -14,6 +14,7 @@ This source map is based on `Orca Trades/Working_Suite` code inspection only.
 | `OrcaLegtoLegProfile` | Yes | 1 Tick | Bid, Ask, Last | Per-tick leg volume/delta aggregation | High | Internal maps/locks | Explicit SharpDX `OnRender` |
 | `OrcaProfileDataProvider` | Yes | 1 Tick | Bid, Ask, Last | Publishes order-flow buckets and optional chart profile maps | High but intended shared producer | Registers sources in `OrcaProfileDataCache`; optional persisted cache | `OnRender` refreshes registration only |
 | `OrcaRollingProfiles` | Conditional | 1 Tick when local cache enabled and shared provider disabled | Bid, Ask; Last via tick series | Rolling tick buckets and profile state | High in local mode; shared-provider mode may reduce duplicate series | Consumes `OrcaProfileDataCache` order-flow snapshots | Explicit SharpDX `OnRender` |
+| `OrcaPeriodicVWAP` | Yes | 1 Tick | Tick-series Last price and volume; no Bid/Ask processing | Incremental price-volume and population-deviation accumulation by aligned period or session | No Tick Replay requirement; accuracy depends on available historical Last ticks | No shared cache; shared one-second buckets cannot preserve exact price-volume when multiple prices share a bucket | NinjaTrader plots plus bounded per-window `Draw.Region` fills; no `OnRender` override |
 | `OrcaStepProfile` | Yes | 1 Tick | Bid, Ask; tick series price/volume | Step block tick aggregation | High | No shared provider found | Explicit SharpDX `OnRender` |
 | `OrcaTickDirectionIndex` | Yes | 1 Tick | Tick series direction; no `OnMarketData` found | Tick-direction delta per primary bar | High | No shared provider found | Explicit SharpDX `OnRender` |
 | `OrcaVisibleRangeVolumeProfile` | Conditional | 1 Tick when local tick cache enabled | Bid, Ask, Last | Visible-range true VAP local maps; can recalc visible model | High in local mode; shared-provider mode lowers duplicate series | Consumes shared provider, shared chart VAP, or local cache | Explicit SharpDX `OnRender`; profile recalculation can occur from render path |
@@ -34,6 +35,7 @@ Working_Suite files with explicit `AddDataSeries(BarsPeriodType.Tick, 1)`:
 - `OrcaLegtoLegProfile.cs`
 - `OrcaProfileDataProvider.cs`
 - `OrcaRollingProfiles.cs`
+- `OrcaPeriodicVWAP.cs`
 - `OrcaStepProfile.cs`
 - `OrcaTickDirectionIndex.cs`
 - `OrcaSessionContextMap.cs` when session volume profile is enabled
