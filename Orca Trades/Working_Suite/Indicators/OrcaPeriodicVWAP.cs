@@ -152,6 +152,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private List<int> publishIndexes;
 		private List<WindowRecord> completedRegionRedrawQueue;
 		private List<WindowRecord> regionRemovalQueue;
+		private Stroke vwapLineStyle;
+		private Stroke deviation1UpperLineStyle;
+		private Stroke deviation1LowerLineStyle;
+		private Stroke deviation2UpperLineStyle;
+		private Stroke deviation2LowerLineStyle;
+		private Stroke deviation3UpperLineStyle;
+		private Stroke deviation3LowerLineStyle;
 		private long nextWindowSequence;
 		private int lastActiveRegionEndBar;
 
@@ -171,6 +178,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ScaleJustification = ScaleJustification.Right;
 				IsSuspendedWhileInactive = true;
 				BarsRequiredToPlot = 0;
+				ArePlotsConfigurable = false;
 
 				WindowBasis = OrcaPeriodicVwapWindowBasis.Periodic;
 				PeriodicInterval = OrcaPeriodicVwapInterval.Minutes30;
@@ -195,16 +203,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowHistoricalWindows = true;
 				MaxHistoricalWindows = 100;
 
-				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Solid, 2), PlotStyle.Line, "VWAP");
-				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1), PlotStyle.Line, "Deviation 1 Upper");
-				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1), PlotStyle.Line, "Deviation 1 Lower");
-				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dot, 1), PlotStyle.Line, "Deviation 2 Upper");
-				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dot, 1), PlotStyle.Line, "Deviation 2 Lower");
-				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Deviation 3 Upper");
-				AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.DashDot, 1), PlotStyle.Line, "Deviation 3 Lower");
+				vwapLineStyle = new Stroke(Brushes.DodgerBlue, DashStyleHelper.Solid, 2);
+				deviation1UpperLineStyle = new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1);
+				deviation1LowerLineStyle = new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1);
+				deviation2UpperLineStyle = new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dot, 1);
+				deviation2LowerLineStyle = new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dot, 1);
+				deviation3UpperLineStyle = new Stroke(Brushes.DodgerBlue, DashStyleHelper.DashDot, 1);
+				deviation3LowerLineStyle = new Stroke(Brushes.DodgerBlue, DashStyleHelper.DashDot, 1);
+
+				AddPlot(new Stroke(vwapLineStyle), PlotStyle.Line, "VWAP");
+				AddPlot(new Stroke(deviation1UpperLineStyle), PlotStyle.Line, "Deviation 1 Upper");
+				AddPlot(new Stroke(deviation1LowerLineStyle), PlotStyle.Line, "Deviation 1 Lower");
+				AddPlot(new Stroke(deviation2UpperLineStyle), PlotStyle.Line, "Deviation 2 Upper");
+				AddPlot(new Stroke(deviation2LowerLineStyle), PlotStyle.Line, "Deviation 2 Lower");
+				AddPlot(new Stroke(deviation3UpperLineStyle), PlotStyle.Line, "Deviation 3 Upper");
+				AddPlot(new Stroke(deviation3LowerLineStyle), PlotStyle.Line, "Deviation 3 Lower");
 			}
 			else if (State == State.Configure)
 			{
+				ApplyConfiguredPlotStyles();
 				AddDataSeries(BarsPeriodType.Tick, 1);
 			}
 			else if (State == State.DataLoaded)
@@ -495,6 +512,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Values[plotIndex].Reset(barsAgo);
 		}
 
+		private void ApplyConfiguredPlotStyles()
+		{
+			ApplyPlotStyle(VwapPlot, vwapLineStyle);
+			ApplyPlotStyle(Dev1UpperPlot, deviation1UpperLineStyle);
+			ApplyPlotStyle(Dev1LowerPlot, deviation1LowerLineStyle);
+			ApplyPlotStyle(Dev2UpperPlot, deviation2UpperLineStyle);
+			ApplyPlotStyle(Dev2LowerPlot, deviation2LowerLineStyle);
+			ApplyPlotStyle(Dev3UpperPlot, deviation3UpperLineStyle);
+			ApplyPlotStyle(Dev3LowerPlot, deviation3LowerLineStyle);
+		}
+
+		private void ApplyPlotStyle(int plotIndex, Stroke style)
+		{
+			if (style == null || Plots == null || plotIndex < 0 || plotIndex >= Plots.Length)
+				return;
+
+			Plots[plotIndex].Brush = style.Brush;
+			Plots[plotIndex].DashStyleHelper = style.DashStyleHelper;
+			Plots[plotIndex].Width = style.Width;
+			Plots[plotIndex].Opacity = style.Opacity;
+		}
+
 		private bool TryResolveWindow(DateTime time, out DateTime startTime, out DateTime endTime)
 		{
 			if (WindowBasis == OrcaPeriodicVwapWindowBasis.Session)
@@ -712,8 +751,57 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Deviation 3 Multiplier", GroupName = "2. VWAP and Bands", Order = 7)]
 		public double Deviation3Multiplier { get; set; }
 
+		[Display(Name = "VWAP Line", Description = "Color, dash style, and width of the VWAP line.", GroupName = "3. Plot Styling", Order = 0)]
+		public Stroke VwapLineStyle
+		{
+			get { return vwapLineStyle; }
+			set { vwapLineStyle = value; ApplyPlotStyle(VwapPlot, value); }
+		}
+
+		[Display(Name = "Deviation 1 Upper", Description = "Color, dash style, and width of the upper first-deviation line.", GroupName = "3. Plot Styling", Order = 1)]
+		public Stroke Deviation1UpperLineStyle
+		{
+			get { return deviation1UpperLineStyle; }
+			set { deviation1UpperLineStyle = value; ApplyPlotStyle(Dev1UpperPlot, value); }
+		}
+
+		[Display(Name = "Deviation 1 Lower", Description = "Color, dash style, and width of the lower first-deviation line.", GroupName = "3. Plot Styling", Order = 2)]
+		public Stroke Deviation1LowerLineStyle
+		{
+			get { return deviation1LowerLineStyle; }
+			set { deviation1LowerLineStyle = value; ApplyPlotStyle(Dev1LowerPlot, value); }
+		}
+
+		[Display(Name = "Deviation 2 Upper", Description = "Color, dash style, and width of the upper second-deviation line.", GroupName = "3. Plot Styling", Order = 3)]
+		public Stroke Deviation2UpperLineStyle
+		{
+			get { return deviation2UpperLineStyle; }
+			set { deviation2UpperLineStyle = value; ApplyPlotStyle(Dev2UpperPlot, value); }
+		}
+
+		[Display(Name = "Deviation 2 Lower", Description = "Color, dash style, and width of the lower second-deviation line.", GroupName = "3. Plot Styling", Order = 4)]
+		public Stroke Deviation2LowerLineStyle
+		{
+			get { return deviation2LowerLineStyle; }
+			set { deviation2LowerLineStyle = value; ApplyPlotStyle(Dev2LowerPlot, value); }
+		}
+
+		[Display(Name = "Deviation 3 Upper", Description = "Color, dash style, and width of the upper third-deviation line.", GroupName = "3. Plot Styling", Order = 5)]
+		public Stroke Deviation3UpperLineStyle
+		{
+			get { return deviation3UpperLineStyle; }
+			set { deviation3UpperLineStyle = value; ApplyPlotStyle(Dev3UpperPlot, value); }
+		}
+
+		[Display(Name = "Deviation 3 Lower", Description = "Color, dash style, and width of the lower third-deviation line.", GroupName = "3. Plot Styling", Order = 6)]
+		public Stroke Deviation3LowerLineStyle
+		{
+			get { return deviation3LowerLineStyle; }
+			set { deviation3LowerLineStyle = value; ApplyPlotStyle(Dev3LowerPlot, value); }
+		}
+
 		[XmlIgnore]
-		[Display(Name = "VWAP to Deviation 1 Fill", GroupName = "3. Region Fills", Order = 0)]
+		[Display(Name = "VWAP to Deviation 1 Fill", GroupName = "4. Region Fills", Order = 0)]
 		public Brush VwapToDeviation1FillBrush { get; set; }
 
 		[Browsable(false)]
@@ -725,11 +813,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "VWAP to Deviation 1 Opacity", Description = "Zero disables this fill.", GroupName = "3. Region Fills", Order = 1)]
+		[Display(Name = "VWAP to Deviation 1 Opacity", Description = "Zero disables this fill.", GroupName = "4. Region Fills", Order = 1)]
 		public int VwapToDeviation1FillOpacity { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "Deviation 1 to 2 Fill", GroupName = "3. Region Fills", Order = 2)]
+		[Display(Name = "Deviation 1 to 2 Fill", GroupName = "4. Region Fills", Order = 2)]
 		public Brush Deviation1To2FillBrush { get; set; }
 
 		[Browsable(false)]
@@ -741,11 +829,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "Deviation 1 to 2 Opacity", Description = "Zero disables this fill.", GroupName = "3. Region Fills", Order = 3)]
+		[Display(Name = "Deviation 1 to 2 Opacity", Description = "Zero disables this fill.", GroupName = "4. Region Fills", Order = 3)]
 		public int Deviation1To2FillOpacity { get; set; }
 
 		[XmlIgnore]
-		[Display(Name = "Deviation 2 to 3 Fill", GroupName = "3. Region Fills", Order = 4)]
+		[Display(Name = "Deviation 2 to 3 Fill", GroupName = "4. Region Fills", Order = 4)]
 		public Brush Deviation2To3FillBrush { get; set; }
 
 		[Browsable(false)]
@@ -757,17 +845,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[Range(0, 100)]
-		[Display(Name = "Deviation 2 to 3 Opacity", Description = "Zero disables this fill.", GroupName = "3. Region Fills", Order = 5)]
+		[Display(Name = "Deviation 2 to 3 Opacity", Description = "Zero disables this fill.", GroupName = "4. Region Fills", Order = 5)]
 		public int Deviation2To3FillOpacity { get; set; }
 
 		[NinjaScriptProperty]
 		[RefreshProperties(RefreshProperties.All)]
-		[Display(Name = "Show Historical Windows", GroupName = "4. Display", Order = 0)]
+		[Display(Name = "Show Historical Windows", GroupName = "5. Display", Order = 0)]
 		public bool ShowHistoricalWindows { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 1000)]
-		[Display(Name = "Max Historical Windows", Description = "Completed windows retained and pruned only when a new boundary is processed.", GroupName = "4. Display", Order = 1)]
+		[Display(Name = "Max Historical Windows", Description = "Completed windows retained and pruned only when a new boundary is processed.", GroupName = "5. Display", Order = 1)]
 		public int MaxHistoricalWindows { get; set; }
 
 		[Browsable(false)]
@@ -818,10 +906,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return properties;
 
 			HashSet<string> hidden = new HashSet<string>();
+			hidden.Add("BarsPeriod");
+			hidden.Add("InputPlot");
+			hidden.Add("Plots");
+			hidden.Add("SelectedValueSeries");
+
 			if (indicator.WindowBasis == OrcaPeriodicVwapWindowBasis.Periodic)
 				hidden.Add(nameof(indicator.SessionConfiguration));
 			else
 				hidden.Add(nameof(indicator.PeriodicInterval));
+
+			if (!indicator.ShowVwap)
+				hidden.Add(nameof(indicator.VwapLineStyle));
 
 			if (!indicator.ShowDeviationBands)
 			{
@@ -831,6 +927,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				hidden.Add(nameof(indicator.Deviation2Multiplier));
 				hidden.Add(nameof(indicator.ShowDeviation3));
 				hidden.Add(nameof(indicator.Deviation3Multiplier));
+				hidden.Add(nameof(indicator.Deviation1UpperLineStyle));
+				hidden.Add(nameof(indicator.Deviation1LowerLineStyle));
+				hidden.Add(nameof(indicator.Deviation2UpperLineStyle));
+				hidden.Add(nameof(indicator.Deviation2LowerLineStyle));
+				hidden.Add(nameof(indicator.Deviation3UpperLineStyle));
+				hidden.Add(nameof(indicator.Deviation3LowerLineStyle));
 				HideCoreFill(indicator, hidden);
 				HideDeviation12Fill(indicator, hidden);
 				HideDeviation23Fill(indicator, hidden);
@@ -838,11 +940,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else
 			{
 				if (!indicator.ShowDeviation1)
+				{
 					hidden.Add(nameof(indicator.Deviation1Multiplier));
+					hidden.Add(nameof(indicator.Deviation1UpperLineStyle));
+					hidden.Add(nameof(indicator.Deviation1LowerLineStyle));
+				}
 				if (!indicator.ShowDeviation2)
+				{
 					hidden.Add(nameof(indicator.Deviation2Multiplier));
+					hidden.Add(nameof(indicator.Deviation2UpperLineStyle));
+					hidden.Add(nameof(indicator.Deviation2LowerLineStyle));
+				}
 				if (!indicator.ShowDeviation3)
+				{
 					hidden.Add(nameof(indicator.Deviation3Multiplier));
+					hidden.Add(nameof(indicator.Deviation3UpperLineStyle));
+					hidden.Add(nameof(indicator.Deviation3LowerLineStyle));
+				}
 
 				if (!indicator.ShowVwap || !indicator.ShowDeviation1)
 					HideCoreFill(indicator, hidden);

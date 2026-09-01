@@ -64,6 +64,8 @@ Each boundary invalidates a separating primary-bar sample. A range or volume bar
 
 Fills are separate upper and lower regions for VWAP-to-Dev1, Dev1-to-Dev2, and Dev2-to-Dev3. Every region tag contains the indicator-instance ID and window start. Regions are bounded to one window, and expired objects are removed only during boundary processing. All fill opacities default to zero.
 
+Plot styling is exposed as seven clearly named `Stroke` settings rather than NinjaTrader's anonymous `[0]` through `[6]` plot-array entries. `VWAP Line` and each independent upper/lower deviation line retain the normal color, dash-style, and width editor. The raw `Plots`, `BarsPeriod`, `InputPlot`, and `SelectedValueSeries` descriptors are hidden from this indicator's settings grid. This is a presentation change only: plot order, plot names, calculations, and `Values` indexes remain unchanged.
+
 `Show Historical Windows` defaults on. `Max Historical Windows` defaults to 100 and is enforced only when a new boundary is processed. Plot cleanup checks window ownership so pruning an old window cannot erase a newer sample that shares a non-time primary bar.
 
 The indicator has no `OnRender` override. Calculation, collection mutation, pruning, and drawing-object maintenance occur in data callbacks rather than SharpDX rendering.
@@ -72,8 +74,11 @@ The indicator has no `OnRender` override. Calculation, collection mutation, prun
 
 - `1. Window Configuration`: Window Basis, conditional Periodic Interval, conditional Session Configuration.
 - `2. VWAP and Bands`: Show VWAP, Show Deviation Bands, independent Dev1/2/3 toggles and multipliers.
-- `3. Region Fills`: three XML-serializable brushes and opacity controls.
-- `4. Display`: Show Historical Windows and conditional Max Historical Windows.
+- `3. Plot Styling`: named VWAP and independent upper/lower deviation `Stroke` controls.
+- `4. Region Fills`: three XML-serializable brushes and opacity controls.
+- `5. Display`: Show Historical Windows and conditional Max Historical Windows.
+
+Plot-style controls are hidden when their corresponding VWAP or deviation line is disabled. The custom strokes persist with chart templates and workspaces and are reapplied to the same seven native plots during indicator configuration.
 
 Defaults are Periodic, 30 Minutes, Overnight/RTH, VWAP and all three deviations visible, deviation multipliers 1.0/2.0/3.0, fill opacities zero, historical windows visible, and a 100-window limit.
 
