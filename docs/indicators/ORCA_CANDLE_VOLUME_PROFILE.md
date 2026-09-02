@@ -1,6 +1,6 @@
 # Orca Candle Volume Profile
 
-Updated: 2026-08-31. Working_Suite development source only.
+Updated: 2026-09-01. Working_Suite development source only.
 
 ## Ownership
 
@@ -29,10 +29,14 @@ Enhanced controls are contextual and ordered into Profile, Data Quality, Rows, S
 | Number Format | Full, Compact, Auto. Auto tries full then compact, otherwise hides text that cannot fit. |
 | Center Gutter | Separates bid and ask number columns. |
 | Show Data Health | Coverage, source limitations, clipping and failure status; hover retains detailed evidence. |
+| Emphasize Row Winner | Uses a heavier font weight for the same-row Bid or Ask that meets Winner Ratio. |
+| Winner Ratio | Dominant side divided by opposing side; default 1.5. An unopposed positive side qualifies, while 0 x 0 does not. |
 
 Histogram uses a common denominator for both sides, with bid left/red and ask right/blue by default. Existing custom colors are respected. Cluster is explicitly labeled **Cluster - Delta Heatmap**, with fixed-width cells, total-volume intensity and strict delta hue. Histogram uses maximum opacity; Cluster uses its opacity range. Unclassified activity has a neutral mark. Known zeros render as `0`; entirely unclassified sides display `N/A`, with observed zero classified quantities and the unclassified total disclosed on hover. Missing accepted rows are never manufactured into zero-volume rows.
 
-Fonts retain the selected family/weight. DirectWrite tabular figures are requested and digit widths checked outside rendering. Missing/non-tabular numeral fonts fall back to Consolas with disclosure; Figtree remains selectable. Measured width and height govern text visibility, including dynamic sizing. Single-value views use the right text column to keep the central OHLC spine clear of digits. Exact row bounds, values, quote-quality flags/age, scale denominator, POC/ties, session coverage, event time, sequence and revision remain available on hover.
+Fonts retain the selected family/weight. DirectWrite tabular figures are requested and digit widths checked outside rendering. Missing/non-tabular numeral fonts fall back to Consolas with disclosure; Figtree remains selectable. Measured width governs text visibility; row height receives the same two-pixel vertical allowance as the established Bid x Ask renderer so practical 8-point labels do not disappear just before the next zoom step. Single-value views use the right text column to keep the central OHLC spine clear of digits.
+
+The row hover is intentionally concise: bar/price bounds, Bid x Ask, total, strict delta and delta percentage, POC, and a qualifying winner. It adds only actionable exceptions for unclassified volume, unavailable sides, clipping or preparation failure. Session identity, font fallback, event/sequence/revision, quality enums, quote age and hidden-text narration remain retained in prepared evidence where applicable but are not repeated in every row tooltip. `Show Data Health` now defaults off for new instances; existing saved values remain intact.
 
 ## Numerical And Data Contracts
 

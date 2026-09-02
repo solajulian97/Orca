@@ -52,6 +52,12 @@ internal static class Program
         Equal("0.0%", FootprintFormatting.Value(new FootprintRow(0, 0, 0, 0), FootprintCellView.DeltaPercent, false), "zero denominator display");
         Equal(false, FootprintFormatting.Fits(30, 12, 29, 14), "width suppresses text");
         Equal(false, FootprintFormatting.Fits(20, 15, 30, 14), "height suppresses text");
+        Equal(true, FootprintFormatting.IsWinner(150, 100, 1.5), "winner exact ratio qualifies");
+        Equal(false, FootprintFormatting.IsWinner(149, 100, 1.5), "winner below ratio rejected");
+        Equal(true, FootprintFormatting.IsWinner(1, 0, 2), "unopposed volume qualifies");
+        Equal(false, FootprintFormatting.IsWinner(0, 0, 1.5), "empty row is not a winner");
+        Equal(false, FootprintFormatting.IsWinner(100, 100, 1), "equal sides are not a winner");
+        Equal(false, FootprintFormatting.IsWinner(200, 100, double.NaN), "invalid ratio rejected");
         Equal(0L, new FootprintRow(1, 123, 123, 0).Delta, "known zero delta has traded volume");
         Equal(0.0, new FootprintRow(1, 123, 123, 0).DeltaPercent, "known zero percentage");
         Equal(50.0, new FootprintRow(1, 0, 100, 100).DeltaPercent, "unknown included in percent denominator");

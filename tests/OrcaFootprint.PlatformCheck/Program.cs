@@ -93,6 +93,9 @@ foreach (var assignment in oldDefaults.DescendantNodes().OfType<AssignmentExpres
     if (!assignments.TryGetValue(assignment.Left.ToString(), out var actual) || actual != Tokens(assignment.Right))
         throw new Exception("Legacy default changed: " + assignment.Left);
 if (assignments["EnhancedFootprint"] != "false") throw new Exception("Enhancement must default off.");
+if (assignments["FootprintShowHealth"] != "false") throw new Exception("Technical status must default hidden.");
+if (assignments["FootprintEmphasizeWinner"] != "true" || assignments["FootprintWinnerRatio"] != "1.5")
+    throw new Exception("Winner emphasis defaults changed.");
 Console.WriteLine("PASS: backup classifier, attribution, migration, enums, defaults, shared publication, and legacy render token parity.");
 var enhancedRender = Method(trees[2].GetRoot(), "RenderEnhancedFootprint");
 var semantics = compilation.GetSemanticModel(trees[2]);

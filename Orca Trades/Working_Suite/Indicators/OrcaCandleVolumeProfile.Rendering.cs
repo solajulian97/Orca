@@ -313,6 +313,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 frame.FontNote = tabular ? "Numerals: " + family + " (tabular)" : "Numerals: Consolas fallback; selected " + family;
                 var cache = new Dictionary<string, TextLayout>();
                 var formats = new Dictionary<float, TextFormat>();
+                var winnerFormats = new Dictionary<float, TextFormat>();
                 formats[size] = format;
                 var bars = new List<FootprintPaintBar>();
                 bool partial = false, unknown = false, attribution = false, clipped = false;
@@ -349,6 +350,16 @@ namespace NinjaTrader.NinjaScript.Indicators
                             { WordWrapping = WordWrapping.NoWrap, ParagraphAlignment = ParagraphAlignment.Center };
                             formats.Add(cellSize, cellFormat); frame.Resources.Add(cellFormat);
                         }
+                        TextFormat winnerFormat = cellFormat;
+                        if (FootprintEmphasizeWinner && FootprintValues == FootprintCellView.BidAsk)
+                        {
+                            if (!winnerFormats.TryGetValue(cellSize, out winnerFormat))
+                            {
+                                winnerFormat = new TextFormat(Core.Globals.DirectWriteFactory, footprintNumeralFamily, ResolveFootprintWinnerWeight(), FontStyle.Normal, cellSize)
+                                { WordWrapping = WordWrapping.NoWrap, ParagraphAlignment = ParagraphAlignment.Center };
+                                winnerFormats.Add(cellSize, winnerFormat); frame.Resources.Add(winnerFormat);
+                            }
+                        }
                         clipped |= BidAskStyle == CandleProfileBidAskStyle.Histogram ? Math.Max(row.Ask, row.Bid) > bar.SideDenominator : row.Total > bar.TotalDenominator;
                         if (ShowBidAskText && row.Total >= BidAskTextMinThreshold)
                         {
@@ -356,16 +367,18 @@ namespace NinjaTrader.NinjaScript.Indicators
                             {
                                 // No classified evidence means N/A, not invented zero-side certainty.
                                 bool unavailable = row.Bid == 0 && row.Ask == 0 && row.Unclassified > 0;
-                                paint.Left = PrepareFootprintText(frame, cache, cellFormat, typography, unavailable ? "N/A" : FootprintFormatting.Number(row.Bid, false),
-                                    unavailable ? "N/A" : FootprintFormatting.Number(row.Bid, true), available, cellHeight, TextAlignment.Trailing);
-                                paint.Right = PrepareFootprintText(frame, cache, cellFormat, typography, unavailable ? "N/A" : FootprintFormatting.Number(row.Ask, false),
-                                    unavailable ? "N/A" : FootprintFormatting.Number(row.Ask, true), available, cellHeight, TextAlignment.Leading);
+                                TextFormat bidFormat = FootprintEmphasizeWinner && FootprintFormatting.IsWinner(row.Bid, row.Ask, FootprintWinnerRatio) ? winnerFormat : cellFormat;
+                                TextFormat askFormat = FootprintEmphasizeWinner && FootprintFormatting.IsWinner(row.Ask, row.Bid, FootprintWinnerRatio) ? winnerFormat : cellFormat;
+                                paint.Left = PrepareFootprintText(frame, cache, bidFormat, typography, unavailable ? "N/A" : FootprintFormatting.Number(row.Bid, false),
+                                    unavailable ? "N/A" : FootprintFormatting.Number(row.Bid, true), available, cellHeight + 2, TextAlignment.Trailing);
+                                paint.Right = PrepareFootprintText(frame, cache, askFormat, typography, unavailable ? "N/A" : FootprintFormatting.Number(row.Ask, false),
+                                    unavailable ? "N/A" : FootprintFormatting.Number(row.Ask, true), available, cellHeight + 2, TextAlignment.Leading);
                             }
                             else
                             {
                                 bool unavailable = row.Bid == 0 && row.Ask == 0 && row.Unclassified > 0 && FootprintValues != FootprintCellView.Total;
                                 paint.Center = PrepareFootprintText(frame, cache, cellFormat, typography, unavailable ? "N/A" : FootprintFormatting.Value(row, FootprintValues, false),
-                                    unavailable ? "N/A" : FootprintFormatting.Value(row, FootprintValues, true), available, cellHeight, TextAlignment.Leading);
+                                    unavailable ? "N/A" : FootprintFormatting.Value(row, FootprintValues, true), available, cellHeight + 2, TextAlignment.Leading);
                             }
                         }
                         rows.Add(paint);
@@ -432,7 +445,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             string text = FootprintNumbers == FootprintNumberFormat.Compact ? compact : full;
             for (int attempt = 0; attempt < 2; attempt++)
             {
-                string key = string.Join(":", text, (int)alignment, width, height, format.FontSize);
+                string key = string.Join(":", text, (int)alignment, width, height, format.FontSize, (int)format.FontWeight);
                 TextLayout layout;
                 if (cache.TryGetValue(key, out layout)) return layout;
                 layout = new TextLayout(Core.Globals.DirectWriteFactory, text, format, width, height);
@@ -445,6 +458,13 @@ namespace NinjaTrader.NinjaScript.Indicators
                 text = compact;
             }
             return null;
+        }
+
+        private FontWeight ResolveFootprintWinnerWeight()
+        {
+            FontWeight current = ResolveProfileTextFontWeight();
+            if (current >= FontWeight.ExtraBold) return FontWeight.ExtraBlack;
+            return current >= FontWeight.SemiBold ? FontWeight.ExtraBold : FontWeight.Bold;
         }
 
         private void ResetEnhancedRenderTarget()
@@ -519,9 +539,9 @@ namespace NinjaTrader.NinjaScript.Indicators
                             if ((cluster && row.Total > bar.TotalDenominator) || (!cluster && row.Ask > bar.SideDenominator))
                                 RenderTarget.DrawLine(new Vector2(x + width / 2 - 3, top + 3), new Vector2(x + width / 2, top), footprintNeutralDx);
                         }
-                        if (paint.Left != null) RenderTarget.DrawTextLayout(new Vector2(x - width / 2 + 1, top), paint.Left, footprintTextDx, DrawTextOptions.Clip);
-                        if (paint.Right != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top), paint.Right, footprintTextDx, DrawTextOptions.Clip);
-                        if (paint.Center != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top), paint.Center, footprintTextDx, DrawTextOptions.Clip);
+                        if (paint.Left != null) RenderTarget.DrawTextLayout(new Vector2(x - width / 2 + 1, top - 1), paint.Left, footprintTextDx, DrawTextOptions.Clip);
+                        if (paint.Right != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top - 1), paint.Right, footprintTextDx, DrawTextOptions.Clip);
+                        if (paint.Center != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top - 1), paint.Center, footprintTextDx, DrawTextOptions.Clip);
                     }
                     if (ShowPOC)
                     {
@@ -574,19 +594,20 @@ namespace NinjaTrader.NinjaScript.Indicators
                     FootprintRow row = paint.Evidence;
                     if (row.Tick != bucket) continue;
                     string details = string.Format(CultureInfo.InvariantCulture,
-                        "Bar {0}{1} | {2} to {3}\nBid {4:N0} x Ask {5:N0} | Unclassified {6:N0}\nTotal {7:N0} | Strict delta {8:+#,0;-#,0;0} | {9:0.00}%\n{10} denominator {11:N0} | row {12} ticks\nPOC {13}; analysis {14} ticks; ties {15} (lowest price){16}\nQuality: {17}\nSession {18:yyyy-MM-dd}: {19}\n{20}\nEvent {21:O}; sequence {22}; revision {23}",
+                        "Bar {0}{1} | {2} to {3}\nBid {4:N0} x Ask {5:N0}\nTotal {6:N0} | Strict delta {7:+#,0;-#,0;0} | {8:0.00}%\nPOC {9}{10}",
                         bar.Evidence.BarIndex, bar.Developing ? " (developing)" : "", row.Tick * TickSize,
-                        (row.Tick + frame.Request.Display - 1) * TickSize, row.Bid, row.Ask, row.Unclassified,
-                        row.Total, row.Delta, row.DeltaPercent, FootprintScale,
-                        BidAskStyle == CandleProfileBidAskStyle.Cluster ? bar.TotalDenominator : bar.SideDenominator,
-                        frame.Request.Display, bar.Evidence.PocTick * TickSize, bar.Evidence.AnalysisTicks, bar.Evidence.PocTies,
-                        bar.Developing ? "; provisional" : "", row.Quality,
-                        new DateTime(bar.Evidence.SessionId), bar.Evidence.PartialSession ? "partial/coverage unverified" : "available event prefix",
-                        frame.FontNote, bar.Evidence.LastEventTime, bar.Evidence.Sequence, bar.Evidence.Revision);
-                    if (row.Unclassified > 0) details += "\nClassification incomplete; strict delta excludes unclassified volume.";
-                    details += "\nBar quality: " + bar.Evidence.Quality;
-                    details += row.MaxQuoteAgeTicks < 0 ? "\nQuote age: unknown" : "\nMaximum observed quote age: " + TimeSpan.FromTicks(row.MaxQuoteAgeTicks).TotalMilliseconds.ToString("0.###", CultureInfo.InvariantCulture) + " ms (not proof of native provenance)";
-                    if (paint.Left == null && paint.Right == null && paint.Center == null) details += "\nCell text hidden: fit or text setting; evidence is retained.";
+                        (row.Tick + frame.Request.Display - 1) * TickSize, row.Bid, row.Ask,
+                        row.Total, row.Delta, row.DeltaPercent, bar.Evidence.PocTick * TickSize,
+                        bar.Developing ? " (developing)" : bar.Evidence.PocTies > 1 ? " (" + bar.Evidence.PocTies + " tied rows)" : "");
+                    bool bidWinner = FootprintFormatting.IsWinner(row.Bid, row.Ask, FootprintWinnerRatio);
+                    bool askWinner = FootprintFormatting.IsWinner(row.Ask, row.Bid, FootprintWinnerRatio);
+                    if (FootprintEmphasizeWinner && (bidWinner || askWinner))
+                    {
+                        long winner = bidWinner ? row.Bid : row.Ask, loser = bidWinner ? row.Ask : row.Bid;
+                        string multiple = loser == 0 ? "unopposed" : (winner / (double)loser).ToString("0.00", CultureInfo.InvariantCulture) + "x";
+                        details += "\nWinner: " + (bidWinner ? "Bid" : "Ask") + " (" + multiple + "; threshold " + FootprintWinnerRatio.ToString("0.##", CultureInfo.InvariantCulture) + "x)";
+                    }
+                    if (row.Unclassified > 0) details += "\nUnclassified " + row.Unclassified.ToString("N0", CultureInfo.InvariantCulture) + "; strict delta excludes it.";
                     if (row.Bid == 0 && row.Ask == 0 && row.Unclassified > 0) details += "\nSides unavailable, not evidence of no trading.";
                     if (row.Total > bar.TotalDenominator || Math.Max(row.Ask, row.Bid) > bar.SideDenominator) details += "\nScale saturated; exact values shown above.";
                     if (footprintFailure != null) details += "\nPreparation error: " + footprintFailure;

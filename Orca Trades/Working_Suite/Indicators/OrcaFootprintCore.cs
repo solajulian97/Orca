@@ -341,5 +341,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
         public static bool Fits(float measuredWidth, float measuredHeight, float width, float height)
         { return measuredWidth <= width && measuredHeight <= height && width > 0 && height > 0; }
+        public static bool IsWinner(long dominant, long opposing, double ratio)
+        {
+            if (dominant <= 0 || opposing < 0 || ratio < 1 || double.IsNaN(ratio) || double.IsInfinity(ratio)) return false;
+            return dominant > opposing && (opposing == 0 || dominant >= opposing * ratio);
+        }
     }
 }

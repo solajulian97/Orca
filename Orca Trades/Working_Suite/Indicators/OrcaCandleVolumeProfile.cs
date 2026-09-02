@@ -289,7 +289,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				FootprintNumbers = FootprintNumberFormat.Auto;
 				FootprintValues = FootprintCellView.BidAsk;
 				FootprintGutterPx = 8;
-				FootprintShowHealth = true;
+				FootprintShowHealth = false;
+				FootprintEmphasizeWinner = true;
+				FootprintWinnerRatio = 1.5;
 
 				// Layout
 				CandleWidthPx       = 14;
@@ -374,7 +376,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ResolveLegacyProfileDisplayMode();
 				if (IsEnhancedFootprintActive && FootprintAnalysisTicks < 1)
 					FootprintAnalysisTicks = Math.Max(1, DeltaTickCompression);
-				FootprintSettingsVersion = 1;
+				FootprintSettingsVersion = 2;
 				if (TradeSourceMode == CandleProfileTradeSourceMode.SecondaryTickSeries)
 					AddDataSeries(BarsPeriodType.Tick, 1);
 			}
@@ -2254,6 +2256,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Show Data Health", Description = "Coverage, classification and scaling status. Exact quality remains available on hover.", GroupName = "Footprint Data Quality", Order = 0)]
 		public bool FootprintShowHealth { get; set; }
 
+		[Display(Name = "Emphasize Row Winner", Description = "Uses a heavier weight for the dominant Bid or Ask when it meets the Winner Ratio.", GroupName = "Text", Order = 33)]
+		public bool FootprintEmphasizeWinner { get; set; }
+
+		[Range(1.0, 10.0)]
+		[Display(Name = "Winner Ratio", Description = "Same-row Bid/Ask ratio required to emphasize the dominant side. Example: 1.5 means 150% of the opposing side.", GroupName = "Text", Order = 34)]
+		public double FootprintWinnerRatio { get; set; }
+
 		// --- Profile Setup ---
 		[NinjaScriptProperty]
 		[TypeConverter(typeof(CandleProfileDisplayModeConverter))]
@@ -2679,7 +2688,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             "DynamicDeltaMinCompression", "DynamicDeltaMaxCompression", "ProfileBarSpacingPx", "ShowPOC", "ShowBidAskText",
             "BidAskTextMinThreshold", "BidAskTextFontSize", "BidAskTextBrush", "TextFontFamily", "TextFontWeight",
             "UseDynamicTextSizing", "DynamicTextMaxFontSize", "BidAskPositiveBrush", "BidAskNegativeBrush", "BidAskNeutralBrush",
-            "BidAskMinOpacity", "BidAskMaxOpacity"
+            "BidAskMinOpacity", "BidAskMaxOpacity", "FootprintEmphasizeWinner", "FootprintWinnerRatio"
         };
         public override bool GetPropertiesSupported(ITypeDescriptorContext context) { return true; }
         public override PropertyDescriptorCollection GetProperties(ITypeDescriptorContext context, object value, Attribute[] attributes)
@@ -2708,7 +2717,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                         || name.StartsWith("DynamicDelta", StringComparison.Ordinal) || name.StartsWith("DeltaDynamic", StringComparison.Ordinal)) group = "03 Rows";
                     else if (name == "FootprintScale" || name == "FootprintFixedVolume") group = "04 Scale";
                     else if (name == "FootprintScaffold" || name == "ShowPOC") group = "05 Scaffold / POC";
-                    else if (name == "FootprintValues" || name == "FootprintNumbers" || name == "FootprintGutterPx" || display.GetGroupName() == "Text Labels") group = "06 Text";
+                    else if (name == "FootprintValues" || name == "FootprintNumbers" || name == "FootprintGutterPx" || name == "FootprintEmphasizeWinner"
+                        || name == "FootprintWinnerRatio" || display.GetGroupName() == "Text Labels") group = "06 Text";
                     if (name == "ShowPOC") label = "POC Outline";
                     if (name == "DeltaTickCompression") label = "Display Row Size (ticks)";
                     if (name == "BidAskPositiveBrush") label = "Ask / Positive Delta Color";
