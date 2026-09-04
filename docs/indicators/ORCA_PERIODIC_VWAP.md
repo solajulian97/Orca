@@ -12,6 +12,7 @@ Source: `Orca Trades/Working_Suite/Indicators/OrcaPeriodicVWAP.cs`.
 
 - 5, 15, and 30 minutes and 1 hour align to ordinary clock boundaries.
 - Four-hour windows use the trading-day anchor at 6:00 PM: `[6:00 PM, 10:00 PM)`, `[10:00 PM, 2:00 AM)`, `[2:00 AM, 6:00 AM)`, `[6:00 AM, 10:00 AM)`, `[10:00 AM, 2:00 PM)`, and `[2:00 PM, 6:00 PM)`.
+- Daily windows use the same trading-day anchor and run `[6:00 PM, 6:00 PM)` on the following calendar day.
 - Missing periods, weekends, and maintenance gaps do not create placeholder volume. The next valid trade maps directly to its currently aligned window.
 
 ### Session
@@ -80,7 +81,7 @@ The indicator has no `OnRender` override. Calculation, collection mutation, prun
 
 Plot-style controls are hidden when their corresponding VWAP or deviation line is disabled. The custom strokes persist with chart templates and workspaces and are reapplied to the same seven native plots during indicator configuration.
 
-Defaults are Periodic, 30 Minutes, Overnight/RTH, VWAP and all three deviations visible, deviation multipliers 1.0/2.0/3.0, fill opacities zero, historical windows visible, and a 100-window limit.
+Periodic interval choices are 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, and Daily. Defaults remain Periodic, 30 Minutes, Overnight/RTH, VWAP and all three deviations visible, deviation multipliers 1.0/2.0/3.0, fill opacities zero, historical windows visible, and a 100-window limit.
 
 ## Validation Status
 

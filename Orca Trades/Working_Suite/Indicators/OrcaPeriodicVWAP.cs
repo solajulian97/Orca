@@ -28,7 +28,8 @@ namespace NinjaTrader.NinjaScript
 		Minutes15 = 15,
 		Minutes30 = 30,
 		Hour1 = 60,
-		Hours4 = 240
+		Hours4 = 240,
+		Daily = 1440
 	}
 
 	public enum OrcaPeriodicVwapSessionConfiguration
@@ -52,6 +53,7 @@ namespace NinjaTrader.NinjaScript
 					case OrcaPeriodicVwapInterval.Minutes30: return "30 Minutes";
 					case OrcaPeriodicVwapInterval.Hour1: return "1 Hour";
 					case OrcaPeriodicVwapInterval.Hours4: return "4 Hours";
+					case OrcaPeriodicVwapInterval.Daily: return "Daily";
 				}
 			}
 
@@ -540,7 +542,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return TryResolveSessionWindow(time, out startTime, out endTime);
 
 			int intervalMinutes = (int)PeriodicInterval;
-			if (intervalMinutes == 240)
+			if (intervalMinutes == 240 || intervalMinutes == 1440)
 			{
 				DateTime tradingDayStart = GetTradingDayStart(time);
 				int elapsedMinutes = (int)(time - tradingDayStart).TotalMinutes;
@@ -703,7 +705,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty]
 		[TypeConverter(typeof(OrcaPeriodicVwapIntervalConverter))]
-		[Display(Name = "Periodic Interval", Description = "Clock-aligned period. Four-hour windows are anchored to 6:00 PM.", GroupName = "1. Window Configuration", Order = 1)]
+		[Display(Name = "Periodic Interval", Description = "Clock-aligned period. Four-hour and Daily windows are anchored to 6:00 PM.", GroupName = "1. Window Configuration", Order = 1)]
 		public OrcaPeriodicVwapInterval PeriodicInterval { get; set; }
 
 		[NinjaScriptProperty]
