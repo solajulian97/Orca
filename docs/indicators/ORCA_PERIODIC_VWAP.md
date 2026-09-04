@@ -61,7 +61,7 @@ Stable plot order:
 6. Deviation 3 Upper
 7. Deviation 3 Lower
 
-Each boundary invalidates a separating primary-bar sample. A range or volume bar that contains trades from both sides of a boundary belongs visually to the new window, while the latest older-window sample is cleared to prevent a diagonal connection.
+At each boundary, the completed window retains its final owned primary-bar sample and the first segment entering the new window is painted transparent. This prevents a diagonal connection without dropping the last close-stamped time bar. A range or volume bar that contains trades from both sides of a boundary still belongs visually to the new window because a native plot has only one sample per primary bar; the completed window stops at the preceding bar in that shared-bar case.
 
 Fills are separate upper and lower regions for VWAP-to-Dev1, Dev1-to-Dev2, and Dev2-to-Dev3. Every region tag contains the indicator-instance ID and window start. Regions are bounded to one window, and expired objects are removed only during boundary processing. All fill opacities default to zero.
 

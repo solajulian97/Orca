@@ -134,6 +134,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public int StartBarIndex;
 			public int EndBarIndex;
 			public bool HasVolume;
+			public bool SuppressIncomingSegment;
 			public string TagBase;
 		}
 
@@ -143,6 +144,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public double Vwap;
 			public double StandardDeviation;
 			public bool IsValid;
+			public bool SuppressIncomingSegment;
 		}
 
 		private readonly string instanceTagPrefix = "OPVWAP-" + Guid.NewGuid().ToString("N") + "-";
@@ -173,6 +175,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Calculate = Calculate.OnEachTick;
 				IsOverlay = true;
 				DisplayInDataBox = true;
+				ShowTransparentPlotsInDataBox = true;
 				DrawOnPricePanel = true;
 				DrawHorizontalGridLines = true;
 				DrawVerticalGridLines = true;
@@ -290,10 +293,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (activeWindow == null || activeWindow.StartTime != windowStart || activeWindow.EndTime != windowEnd)
 			{
+				bool followsCompletedWindow = activeWindow != null;
 				if (activeWindow != null)
 					FinalizeActiveWindow(primaryBarIndex);
 
-				StartWindow(windowStart, windowEnd, primaryBarIndex);
+				StartWindow(windowStart, windowEnd, primaryBarIndex, followsCompletedWindow);
 			}
 
 			accumulator.Add(price, volume);
@@ -303,10 +307,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (primaryBarIndex > activeWindow.EndBarIndex)
 				activeWindow.EndBarIndex = primaryBarIndex;
 
-			SetValidSample(primaryBarIndex, activeWindow.Sequence, accumulator.Vwap, accumulator.StandardDeviation);
+			SetValidSample(primaryBarIndex, activeWindow.Sequence, accumulator.Vwap, accumulator.StandardDeviation,
+				activeWindow.SuppressIncomingSegment && primaryBarIndex == activeWindow.StartBarIndex);
 		}
 
-		private void StartWindow(DateTime startTime, DateTime endTime, int primaryBarIndex)
+		private void StartWindow(DateTime startTime, DateTime endTime, int primaryBarIndex, bool suppressIncomingSegment)
 		{
 			accumulator.Reset();
 			activeWindow = new WindowRecord
@@ -316,6 +321,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				EndTime = endTime,
 				StartBarIndex = primaryBarIndex,
 				EndBarIndex = primaryBarIndex,
+				SuppressIncomingSegment = suppressIncomingSegment,
 				TagBase = instanceTagPrefix + startTime.Ticks.ToString(CultureInfo.InvariantCulture)
 			};
 			lastActiveRegionEndBar = -1;
@@ -329,7 +335,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (completed == null)
 				return;
 
-			InsertBoundaryGap(completed, incomingPrimaryBarIndex);
+			CloseCompletedWindowAtBoundary(completed, incomingPrimaryBarIndex);
 			if (!completed.HasVolume || completed.EndBarIndex < completed.StartBarIndex)
 			{
 				QueueRegionRemoval(completed);
@@ -350,28 +356,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void InsertBoundaryGap(WindowRecord completed, int incomingPrimaryBarIndex)
+		private void CloseCompletedWindowAtBoundary(WindowRecord completed, int incomingPrimaryBarIndex)
 		{
-			if (completed == null || samplesByPrimaryBar == null)
+			if (completed == null)
 				return;
 
-			int gapBarIndex = completed.EndBarIndex;
+			// A close-stamped time bar at the logical boundary belongs to the completed
+			// window. Preserve it and suppress only the incoming plot segment. If a
+			// non-time bar contains trades from both windows, its single plot sample is
+			// owned by the new window and the completed record stops at the prior bar.
 			if (incomingPrimaryBarIndex <= completed.EndBarIndex)
-				gapBarIndex--;
-			BarSample ownedSample;
-			while (gapBarIndex >= completed.StartBarIndex)
-			{
-				if (samplesByPrimaryBar.TryGetValue(gapBarIndex, out ownedSample)
-					&& ownedSample != null
-					&& ownedSample.WindowSequence == completed.Sequence)
-				{
-					SetInvalidSample(gapBarIndex);
-					completed.EndBarIndex = gapBarIndex - 1;
-					return;
-				}
-
-				gapBarIndex--;
-			}
+				completed.EndBarIndex = incomingPrimaryBarIndex - 1;
 		}
 
 		private void PruneCompletedWindowsAtBoundary()
@@ -414,7 +409,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void SetValidSample(int primaryBarIndex, long windowSequence, double vwap, double standardDeviation)
+		private void SetValidSample(int primaryBarIndex, long windowSequence, double vwap, double standardDeviation,
+			bool suppressIncomingSegment)
 		{
 			BarSample sample;
 			if (!samplesByPrimaryBar.TryGetValue(primaryBarIndex, out sample) || sample == null)
@@ -427,6 +423,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			sample.Vwap = vwap;
 			sample.StandardDeviation = standardDeviation;
 			sample.IsValid = true;
+			sample.SuppressIncomingSegment = suppressIncomingSegment;
 			dirtyPrimaryBars.Add(primaryBarIndex);
 		}
 
@@ -444,6 +441,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			sample.WindowSequence = 0;
 			sample.IsValid = false;
+			sample.SuppressIncomingSegment = false;
 			dirtyPrimaryBars.Add(primaryBarIndex);
 		}
 
@@ -473,6 +471,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void WritePlots(BarSample sample, int barsAgo)
 		{
+			SetPlotSegmentBrushes(sample.SuppressIncomingSegment, barsAgo);
+
 			if (ShowVwap)
 				Values[VwapPlot][barsAgo] = sample.Vwap;
 			else
@@ -505,7 +505,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void ResetPlots(int barsAgo)
 		{
 			for (int plotIndex = 0; plotIndex < Values.Length; plotIndex++)
+			{
 				Values[plotIndex].Reset(barsAgo);
+				PlotBrushes[plotIndex][barsAgo] = null;
+			}
+		}
+
+		private void SetPlotSegmentBrushes(bool suppressIncomingSegment, int barsAgo)
+		{
+			for (int plotIndex = 0; plotIndex < PlotBrushes.Length; plotIndex++)
+			{
+				if (suppressIncomingSegment)
+					PlotBrushes[plotIndex][barsAgo] = Brushes.Transparent;
+				else
+					PlotBrushes[plotIndex][barsAgo] = null;
+			}
 		}
 
 		private void ResetDeviationPlots(int barsAgo)
