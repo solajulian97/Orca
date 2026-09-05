@@ -1,6 +1,6 @@
 # Orca Journal identity and reconciliation v1 foundation
 
-Date: 2026-09-05. Source/build verified offline; NinjaTrader runtime validation pending Julian. No deployment in this slice.
+Date: 2026-09-05. Updated for shared producer identity. Source/build verified offline; NinjaTrader runtime validation pending Julian. Staged, not deployed.
 
 ## Ownership
 
@@ -23,7 +23,11 @@ UID encoding: SHA-256 over .NET BinaryWriter UTF-8 strings (7-bit byte-length pr
 
 Independent Python/C# golden vector: account `Sim`, contract `MNQ SEP26`, allocations `e0:+2,e1:-2` produces `orca.trade.v1:65428ff6137f4582a84ef92b2747bf6ed061344f0b87aff81a7efdab697e1e3a`.
 
-**Current live capture deliberately does not assert complete history.** It stores observed allocations with `Live history continuity unverified`, and leaves UID null. The existing account subscription/SOD path lacks enough evidence to certify reconnect completeness. This foundation provides durable storage and a tested contract, not a claim that all producers now publish trusted UIDs.
+The canonical implementation now lives in `Orca Trades/Working_Suite/AddOns/OrcaTradeIdentity.cs`. Journal compiles this file through an explicit source link; chart and recorder compile it in Custom. Internal types avoid a runtime dependency between the two assemblies. Override the external project's `OrcaSuiteRoot` build property if the coordination checkout moves.
+
+**Live producers now require an observed flat boundary before issuing a UID.** The initial cycle after observer creation is unverified. An execution whose reported account-position quantity is zero, with matching observed fill arithmetic, establishes the boundary for the following cycle. Subsequent fills must have IDs, nondecreasing timestamps and account-position magnitudes consistent with the signed fill sum. A reversal's virtual flat boundary inherits trust only from a trusted closing cycle. Missing/invalid evidence invalidates the cycle; historical fills without execution-position evidence do not certify a boundary. This checks observable delivery consistency, not a guarantee against an upstream provider silently losing offsetting executions.
+
+Connection-status events invalidate active identity tracking. Journal and chart also invalidate on start-of-day/reconnect deliveries; recorder retains its stricter pre-existing uncertainty/re-arm policy. A fresh observed flat boundary is needed for recovery. Opening an observer mid-position can leave its arithmetic incomplete; do not infer missing fills or produce confident IDs. Account-reset execution-ID reuse still requires a future namespace contract. Runtime/provider behavior remains unvalidated.
 
 ## Additive persistence and compatibility
 
@@ -35,7 +39,7 @@ Legacy `TRADE`, `TAG`, and `HIDDEN_TAG` TSV lines remain compatible. Optional ne
 
 `IDENTITY_V1<TAB>base64(legacy trade key)<TAB>base64(UTF-8 provenance JSON)`
 
-These store evidence only. They never apply notes/tags/grades by a proposed UID match. The complete provenance must agree with the key's account, contract, direction and quantity. Current Execution Lines still writes legacy records; no producer-side TSV changes were made.
+These store evidence only. They never apply notes/tags/grades by a proposed UID match. The complete provenance must agree with the key's account, contract, direction and quantity. Execution Lines now appends these records when annotations are explicitly saved, retaining the existing TRADE/TAG/HIDDEN_TAG records and other chart instances' identity evidence. It performs no new execution-callback disk write. Conflicting complete identities for one composite key persist as ambiguous instead of selecting the last writer; weaker historical evidence cannot replace an existing trusted UID. The pre-existing annotation writer's broader multi-chart writeback/concurrency design is unchanged.
 
 ## Read-only reconciliation
 
@@ -50,7 +54,9 @@ Annotation proposals do not replace the pre-existing exact-key annotation import
 
 Schema 2 is read per constituent trade: account/full contract/direction/entry quantity, ordered execution IDs, completeness and interval. It never falls back to the capture-wide account/instrument Cartesian combinations. Existing schema-2 IDs lack per-fill allocated quantities, so they **cannot produce a version-1 UID**. Matching ordered IDs is shown as legacy evidence; conflicting IDs remain ambiguous. Legacy candidates without comparable IDs use both entry and exit within five seconds, not broad capture overlap. Unspecified trade times use the explicit local zone; ambiguous/nonexistent DST times are flagged. UTC times need no conversion.
 
-New schema-2 attachment creation is held for read-only review in this slice. Existing schema-2 links are untouched. Schema-1 auto-import compatibility remains, including its prior capture-overlap behavior and idempotent trade/path guard. The new report is stricter than that older importer and reports multiple schema-1 candidates as unproven pairings; legitimate many-trade clips remain supported as multiple proposals.
+New recorder manifests finalize as schema 3, adding each constituent trade's `IdentityJson` envelope and nullable `TradeUid`. The report recomputes the UID and checks ledger IDs, quantity, account/contract/direction, and history completeness. Exactly one consistent Journal candidate is an Exact proposal; duplicates are Ambiguous; incomplete or inconsistent schema-3 evidence is Unmatched without a time-based fallback.
+
+New schema-2/3 attachment creation is held for read-only review in this slice. Existing links are untouched. Schema-1 auto-import compatibility remains, including its prior capture-overlap behavior and idempotent trade/path guard. The new report is stricter than that older importer and reports multiple schema-1 candidates as unproven pairings; legitimate many-trade clips remain supported as multiple proposals.
 
 Future schemas, missing ledger entries, missing files and incomplete finalization fail closed in the report. No media files are moved, copied or renamed. A schema-2 clip can contain multiple ledger trades; there is no one-clip/one-trade restriction.
 
@@ -62,4 +68,8 @@ Coverage: schema-5 migration and repeat initialization; notes/grades/tags/hidden
 
 Report cost grows with trade/annotation/manifest count, approximately O(trades × evidence rows); no live benchmark is claimed. A very large recording tree may need indexing/pagination later. Account execution capture and its existing persistence callback remain synchronous; this slice adds no market-data series, Tick Replay processing, provider/cache access or indicator rendering work.
 
-Next steps: collect the deployed build's runtime results and address reported defects; validate this source build separately before deployment; establish trustworthy initial-flat/reconnect/order evidence; implement the same contract in chart/recorder producers with allocated quantities; then consider explicit association acceptance and UID-aware insert/navigation. Journal-side editing/conflict resolution and image viewer remain separate work.
+Shared-identity checks: 85 identity/migration/reconciliation assertions, 18 recorder ledger assertions, full Recorder and Journal reference builds, and the chart preservation/semantic check pass. `tests/OrcaJournal.PlatformCheck/Verify.ps1` reconstructs the pre-edit chart snapshot from the focused patch in a disposable folder and verifies that only two identity statements were added to its calculation path; settings and renderer methods are unchanged. The shared observer caps allocations at 100,000 per cycle and invalidates identity on overflow; no trading calculation is capped.
+
+Next steps: collect the deployed build's runtime results and address reported defects; close NinjaTrader for the staged DLL/source deployment, then restart/F5 and validate observed-boundary/reconnect behavior in SIM. After that, consider explicit association acceptance and UID-aware insert/navigation. Journal-side editing/conflict resolution and image viewer remain separate work.
+
+Platform evidence: NinjaTrader documents the execution's [account-position quantity](https://ninjatrader.com/support/helpguides/nt8/execution.htm) and [post-execution position display](https://ninjatrader.com/support/helpguides/nt8/executions_tab.htm), and provides [connection-status subscriptions](https://ninjatrader.com/support/helpguides/nt8/connectionstatusupdate.htm). Installed NinjaTrader.Core XML documentation agrees; these contracts still require runtime validation with Julian's provider.

@@ -49,8 +49,10 @@ public static class RecorderTests {
  }
 }
 '@
-Add-Type -TypeDefinition ("using System; using System.Collections.Generic; using System.Linq; using System.IO; using System.Globalization;" + $ledger + $checks)
-Write-Output ('Passed {0} ledger assertions' -f [RecorderTests]::Run())
+$identityPath = Join-Path $PSScriptRoot '../../Orca Trades/Working_Suite/AddOns/OrcaTradeIdentity.cs'
+$identity = [IO.File]::ReadAllText($identityPath)
+Add-Type -TypeDefinition ($identity + " namespace RecorderFixtureCheck { using System; using System.Collections.Generic; using System.Linq; using System.IO; using System.Globalization;" + $ledger + $checks + '}')
+Write-Output ('Passed {0} ledger assertions' -f [RecorderFixtureCheck.RecorderTests]::Run())
 
 # Compile the entire AddOn against the installed NinjaTrader and WPF assemblies.
 $compileDirectory = Join-Path ([IO.Path]::GetTempPath()) ('orca-recorder-check-' + [Guid]::NewGuid().ToString('N'))
@@ -60,7 +62,7 @@ $nt = 'C:\Program Files\NinjaTrader 8\bin'
 $arguments = @('/nologo','/target:library',('/out:' + (Join-Path $compileDirectory 'Recorder.dll')),
  ('/r:' + $nt + '\NinjaTrader.Core.dll'),('/r:' + $nt + '\NinjaTrader.Gui.dll'),
  ('/r:' + $framework + '\WPF\PresentationCore.dll'),('/r:' + $framework + '\WPF\PresentationFramework.dll'),
- ('/r:' + $framework + '\WPF\WindowsBase.dll'),'/r:System.Xaml.dll','/r:System.Web.Extensions.dll','/r:System.ComponentModel.DataAnnotations.dll', $source)
+ ('/r:' + $framework + '\WPF\WindowsBase.dll'),'/r:System.Xaml.dll','/r:System.Web.Extensions.dll','/r:System.ComponentModel.DataAnnotations.dll', $source, $identityPath)
 & (Join-Path $framework 'csc.exe') @arguments
 if ($LASTEXITCODE -ne 0) { throw 'NinjaTrader reference compilation failed' }
 Write-Output 'Full AddOn semantic compile passed (not NinjaTrader F5/load validation).'

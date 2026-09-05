@@ -6,7 +6,13 @@ namespace NinjaTrader.Cbi
     public class Order { public OrderAction OrderAction; }
     public class MasterInstrument { public string Name; }
     public class Instrument { public string FullName; public MasterInstrument MasterInstrument; }
-    public class Execution { public Instrument Instrument; public Order Order; public string ExecutionId; public int Quantity; public double Price; public DateTime Time; public MarketPosition MarketPosition; }
+    public class Execution { public Instrument Instrument; public Order Order; public string ExecutionId; public int Quantity; public int Position; public double Price; public DateTime Time; public MarketPosition MarketPosition; }
+    public class ConnectionStatusEventArgs : EventArgs {}
+    public class Connection
+    {
+        public static event EventHandler<ConnectionStatusEventArgs> ConnectionStatusUpdate;
+        public static void Changed() { ConnectionStatusUpdate?.Invoke(null,new ConnectionStatusEventArgs()); }
+    }
     public class ExecutionEventArgs : EventArgs { public bool IsSod; public Execution Execution; }
     public class Account
     {

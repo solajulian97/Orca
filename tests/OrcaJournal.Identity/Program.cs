@@ -38,7 +38,7 @@ class Program
     {
         string root = Path.Combine(Path.GetTempPath(), "orca-identity-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        try { Run(root); Console.WriteLine("PASS: " + assertions + " assertions; disposable artifacts: " + root); return 0; }
+        try { Run(root); assertions += SharedIdentityTests.Run(root); Console.WriteLine("PASS: " + assertions + " assertions; disposable artifacts: " + root); return 0; }
         catch (Exception ex) { Console.Error.WriteLine(ex); Console.Error.WriteLine("Fixtures: " + root); return 1; }
     }
     static void Run(string root)
@@ -169,7 +169,7 @@ class Program
             Check(TradeReconciliation.EvaluateManifest(manifest,candidates,"moved",zone).Single().Status=="Unmatched", "missing video fails closed");
             var bad=P(2,-2); bad.Account="Other";
             annotations.SaveIdentity(key,ExecutionIdentity.Serialize(bad));
-            Check(Scalar(db,"SELECT trade_uid FROM annotation_identity WHERE trade_key='"+key+"'") == DBNull.Value, "mismatched annotation scope cannot claim UID");
+            Check((string)Scalar(db,"SELECT trade_uid FROM annotation_identity WHERE trade_key='"+key+"'") == ExecutionIdentity.Build(P(2,-2)), "mismatched weaker annotation scope cannot overwrite trusted UID");
             annotations.SaveIdentity(key,ExecutionIdentity.Serialize(P(2,-2)));
             var dup=T(null,P(2,-2)); repo.Insert(dup);
             Check(TradeReconciliation.Read(db,root).Any(r=>r.Source=="Annotation" && r.Reference==key && r.Status=="Ambiguous"), "duplicate UID candidates not silently chosen");

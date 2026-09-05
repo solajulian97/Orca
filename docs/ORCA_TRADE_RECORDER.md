@@ -67,6 +67,12 @@ Existing-position entries, unclosed ledger positions, missing execution IDs, rec
 
 The ledger uses a short runtime lock during execution callbacks, with no filesystem, OBS, market-data subscription, chart dependency, or historical database work. It sums signed fill cash flow and splits reversal quantities; FIFO lot allocation is unnecessary for the fully closed gross total. No settings or outcome-based quality grades are introduced. Test recordings retain their existing timestamp filenames.
 
+### Shared identity (2026-09-05, staged only)
+
+New finalized captures now use schema 3. Each ledger trade adds `IdentityJson` and a nullable `TradeUid` from the shared `AddOns/OrcaTradeIdentity.cs` contract; schema-2 common fields and P&L/naming behavior remain. The initial observed cycle has no trusted UID. A correctly observed execution ending flat enables the following cycle, with each later fill checked against execution-position quantity and ID/order evidence. Crossing-flat fills carry distinct closing/opening allocations with the same execution ID in adjacent trades. Connection changes invalidate identity, and existing recorder uncertainty/re-arm rules remain stricter where history is incomplete.
+
+Journal verifies schema-3 envelopes and displays exact/ambiguous/unmatched proposals. Media linking remains read-only for schema 2/3; existing recordings/links are not renamed or rewritten. The helper must deploy with this recorder source and the coordinated Journal build. No new settings, data series, market-data cache access, callback disk writes or chart rendering were introduced. See `docs/handoffs/2026-09-05_orca-journal_shared-identity.md` for offline checks and pending deployment/runtime gates.
+
 ## Performance And Safety Boundaries
 
 - No secondary chart series, Tick Replay, `OnMarketData`, `OnBarUpdate`, SharpDX rendering, or historical chart processing is used.

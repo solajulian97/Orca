@@ -1,0 +1,116 @@
+--- a/Orca Trades/Working_Suite/Indicators/OrcaExecutionLines.cs
++++ b/Orca Trades/Working_Suite/Indicators/OrcaExecutionLines.cs
+@@ -72,6 +72,7 @@
+ 
+ 		private class RoundTrip
+ 		{
++            public string IdentityJson;
+ 			public int Number;
+ 			public bool IsLong;
+ 			public bool IsComplete;
+@@ -113,6 +114,7 @@
+ 
+ 		private class AccountState
+ 		{
++            public readonly Orca.SharedIdentity.Tracker Identity = new Orca.SharedIdentity.Tracker();
+ 			public string AccountName;
+ 			public List<PendingEntry> OpenFills  = new List<PendingEntry>();
+ 			public List<RoundTrip>   RoundTrips  = new List<RoundTrip>();
+@@ -701,16 +703,29 @@
+ 			catch { return false; }
+ 		}
+ 
++        protected override void OnConnectionStatusUpdate(ConnectionStatusEventArgs e)
++        {
++            lock (tradeLock)
++                if (accountStates != null) foreach (var state in accountStates.Values)
++                    state.Identity.Invalidate("Connection status changed; await observed flat boundary");
++        }
++
+ 		private void OnExecutionUpdate(object sender, ExecutionEventArgs e)
+ 		{
+ 			try
+ 			{
+-				if (e.Execution == null || e.Execution.Instrument == null || Instrument == null) return;
++				if (e == null || e.Execution == null || e.Execution.Instrument == null || Instrument == null) return;
++                if (e.IsSod) {
++                    lock (tradeLock) foreach (var state in accountStates.Values) state.Identity.Invalidate("Start-of-day/reconnect execution");
++                }
+ 				if (!IsExecutionInstrument(e.Execution.Instrument)) return;
+-				if (e.Execution.Order == null) return;
++				if (e.Execution.Order == null) {
++                    lock (tradeLock) if (accountStates != null) foreach (var state in accountStates.Values) state.Identity.Invalidate("Execution side unavailable");
++                    return;
++                }
+ 				string acct = e.Execution.Account != null ? e.Execution.Account.Name : "Unknown";
+ 				bool isBuy  = e.Execution.Order.OrderAction == OrderAction.Buy || e.Execution.Order.OrderAction == OrderAction.BuyToCover;
+-				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct, e.Execution.Account, e.Execution.ExecutionId);
++				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct, e.Execution.Account, e.Execution.ExecutionId, e.IsSod ? (int?)null : e.Execution.Position);
+ 			}
+ 			catch (Exception ex) { Print("OrcaExecLines OnExec: " + ex.Message); }
+ 		}
+@@ -772,7 +787,7 @@
+ 			ProcessExecution(isBuy, price, quantity, time, accountName, executionAccount, null);
+ 		}
+ 
+-		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName, Account executionAccount, string executionId)
++		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName, Account executionAccount, string executionId, int? identityPositionAfter = null)
+ 		{
+ 			long diagnosticsExecutionStart = OrcaDiagnosticsCore.IsEnabled ? Stopwatch.GetTimestamp() : 0;
+ 			lock (tradeLock)
+@@ -780,6 +795,8 @@
+ 				AccountState st  = GetOrCreateState(accountName);
+ 				if (!string.IsNullOrWhiteSpace(executionId) && !st.ProcessedExecutionIds.Add(executionId))
+ 					return;
++                var identity = st.Identity.Fill(accountName, GetExecutionInstrumentFullName(), executionId,
++                    isBuy ? quantity : -quantity, time, identityPositionAfter);
+ 				int prev = st.NetPosition;
+ 				int next = st.NetPosition + (isBuy ? quantity : -quantity);
+ 
+@@ -832,6 +849,7 @@
+ 						UpdateRoundTripPnl(st.CurrentRT, price, time);
+ 						ArmAccountDayPnlRefresh(st, st.CurrentRT, executionAccount);
+ 						CaptureAccountDayPnl(st.CurrentRT, executionAccount);
++                        st.CurrentRT.IdentityJson = Orca.SharedIdentity.Contract.Json(identity);
+ 						st.CurrentRT.IsComplete = true;
+ 						st.CurrentRT.MAEMFECalculated = true;
+ 						ApplyNoteToRoundTrip(st.CurrentRT);
+@@ -1484,6 +1502,8 @@
+ 		private string Fmt(double d) { return (d >= 0 ? "+$" : "-$") + Math.Abs(d).ToString("N2"); }
+ 		private string FmtAbs(double d) { return "$" + Math.Abs(d).ToString("N2"); }
+ 
++        private readonly HashSet<string> identityRecords = new HashSet<string>(StringComparer.Ordinal);
++
+ 		private string NotesFilePath
+ 		{
+ 			get
+@@ -1513,7 +1533,11 @@
+ 				{
+ 					if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#")) continue;
+ 					string[] parts = line.Split('\t');
+-					if (parts.Length >= 2 && parts[0] == "TAG")
++                    if (parts.Length >= 3 && parts[0] == "IDENTITY_V1")
++                    {
++                        identityRecords.Add(line);
++                    }
++					else if (parts.Length >= 2 && parts[0] == "TAG")
+ 					{
+ 						string tag = NormalizeTagName(DecodeText(parts[1]));
+ 						if (!string.IsNullOrEmpty(tag)) knownTags.Add(tag);
+@@ -1586,6 +1610,16 @@
+ 					lines.Add("TRADE\t" + EncodeText(key) + "\t" + EncodeText(note ?? "") + "\t" + EncodeTags(tags) + "\t" + EncodeText(grade ?? ""));
+ 				}
+ 
++                // Preserve other chart instances' identity evidence; write only during explicit note saving.
++                if (File.Exists(NotesFilePath))
++                    foreach (string existing in File.ReadAllLines(NotesFilePath))
++                        if (existing.StartsWith("IDENTITY_V1\t", StringComparison.Ordinal)) identityRecords.Add(existing);
++                lock (tradeLock)
++                    foreach (var state in accountStates.Values)
++                        foreach (var trade in state.RoundTrips)
++                            if (trade.IsComplete && !string.IsNullOrEmpty(trade.IdentityJson) && keys.Contains(BuildTradeKey(trade)))
++                                identityRecords.Add("IDENTITY_V1\t" + EncodeText(BuildTradeKey(trade)) + "\t" + EncodeText(trade.IdentityJson));
++                lines.AddRange(identityRecords.OrderBy(record => record, StringComparer.Ordinal));
+ 				System.IO.File.WriteAllLines(NotesFilePath, lines.ToArray(), new UTF8Encoding(false));
+ 			}
+ 			catch (Exception ex) { Print("OrcaExecLines SaveNotes: " + ex.Message); }

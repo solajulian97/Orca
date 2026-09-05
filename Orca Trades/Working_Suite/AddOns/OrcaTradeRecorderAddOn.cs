@@ -483,12 +483,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public decimal GrossPnl { get; set; }
 		public bool IsCompleteHistory { get; set; }
 		public List<string> ExecutionIds { get; set; }
+        public string IdentityJson { get; set; }
+        public string TradeUid { get; set; }
 	}
 
 	internal sealed class OrcaRecorderTradeLedger
 	{
 		private sealed class Bucket
 		{
+            public readonly Orca.SharedIdentity.Tracker Identity = new Orca.SharedIdentity.Tracker();
 			public int Net;
 			public decimal Cash;
 			public decimal PointValue;
@@ -510,9 +513,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public bool HasOpenTrades { get { return uncertain || buckets.Values.Any(b => b.Net != 0 || b.Uncertain); } }
 		public void MarkUncertain(string account, string instrument)
 		{
+            InvalidateIdentity("Recorder continuity uncertain");
 			Get(account, instrument).Uncertain = true;
 			uncertain = true;
 		}
+        public void InvalidateIdentity(string reason)
+        {
+            foreach (Bucket bucket in buckets.Values) bucket.Identity.Invalidate(reason);
+        }
 		public void Seed(string account, string instrument, int quantity)
 		{
 			Bucket b = Get(account, instrument);
@@ -520,7 +528,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			b.Net = quantity;
 			b.Uncertain = true;
 		}
-		public void Fill(string account, string instrument, string id, bool buy, int quantity, double price, double pointValue, DateTime time)
+		public void Fill(string account, string instrument, string id, bool buy, int quantity, double price, double pointValue, DateTime time, int? positionAfter = null)
 		{
 			if (quantity <= 0 || double.IsNaN(price) || double.IsInfinity(price) || pointValue <= 0 || double.IsNaN(pointValue) || double.IsInfinity(pointValue)) {
 				MarkUncertain(account, instrument);
@@ -531,6 +539,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			else if (!seen.Add(Key(account, id))) return;
 			Bucket b = Get(account, instrument);
 			int sign = buy ? 1 : -1;
+            var identity = b.Identity.Fill(account, instrument, id, sign * quantity, time, positionAfter);
 			int closing = b.Net != 0 && Math.Sign(b.Net) != sign ? Math.Min(Math.Abs(b.Net), quantity) : 0;
 			if (closing > 0) {
 				b.Cash -= sign * (decimal)price * closing;
@@ -542,6 +551,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 					trade.ExitTime = time;
 					trade.GrossPnl = b.Cash * (decimal)pointValue;
 					trade.IsCompleteHistory = b.Trade != null && !b.Uncertain;
+                    if (identity != null) {
+                        if (!trade.IsCompleteHistory || uncertain) { identity.CompleteHistory = false; identity.Reason = "Recorder history incomplete"; }
+                        trade.IdentityJson = Orca.SharedIdentity.Contract.Json(identity);
+                        trade.TradeUid = identity.Uid;
+                    }
 					completed.Add(trade);
 					b.Trade = null;
 					b.Cash = 0;
@@ -657,6 +671,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public OrcaTradeRecorderRuntime(Dispatcher dispatcher)
 		{
 			this.dispatcher = dispatcher ?? Dispatcher.CurrentDispatcher;
+            Connection.ConnectionStatusUpdate += OnIdentityConnectionStatus;
 			settings = OrcaTradeRecorderSettingsStore.Load();
 			try { pendingCaptures.AddRange(LoadPendingManifests(settings.OutputDirectory)); } catch { }
 			timer = new DispatcherTimer(DispatcherPriority.Background, this.dispatcher) { Interval = TimeSpan.FromSeconds(1) };
@@ -1202,7 +1217,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 					capture.Trades = tradeLedger.DrainCompleted();
 					capture.HasIncompleteTrades = tradeLedger.HasOpenTrades || capture.StartedWithOpenPosition;
 				}
-				capture.SchemaVersion = 2;
+				capture.SchemaVersion = 3;
 				capture.PnlBasis = "GrossBeforeCommissions";
 				capture.ResultTitle = OrcaRecorderTradeLedger.BuildTitle(capture.Trades, capture.HasIncompleteTrades);
 			}
@@ -1468,6 +1483,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 			PublishSnapshot();
 		}
 
+        private void OnIdentityConnectionStatus(object sender, ConnectionStatusEventArgs e)
+        {
+            lock (sync) tradeLedger.InvalidateIdentity("Connection status changed; await observed flat boundary");
+        }
 		private void OnPositionUpdate(object sender, PositionEventArgs e)
 		{
 			RequestReconcile();
@@ -1486,7 +1505,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 							else
 								tradeLedger.Fill(account, fill.Instrument.FullName, fill.ExecutionId,
 									fill.Order.OrderAction == OrderAction.Buy || fill.Order.OrderAction == OrderAction.BuyToCover,
-									fill.Quantity, fill.Price, fill.Instrument.MasterInstrument.PointValue, fill.Time);
+									fill.Quantity, fill.Price, fill.Instrument.MasterInstrument.PointValue, fill.Time, fill.Position);
 						}
 					}
 				}
@@ -1631,6 +1650,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (disposed)
 				return;
 			disposed = true;
+            Connection.ConnectionStatusUpdate -= OnIdentityConnectionStatus;
 			try {
 				if (dispatcher.CheckAccess()) {
 					timer.Stop();
