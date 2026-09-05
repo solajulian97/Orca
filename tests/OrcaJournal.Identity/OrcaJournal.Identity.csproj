@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType>
+    <LangVersion>7.3</LangVersion><PlatformTarget>x64</PlatformTarget>
+    <JournalRoot Condition="'$(JournalRoot)' == ''">C:\Users\julia\projects\OrcaTrading\OrcaJournal\OrcaJournal</JournalRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(JournalRoot)\Core\*.cs" Link="Core\%(Filename)%(Extension)" />
+    <Compile Include="$(JournalRoot)\Data\*.cs" Link="Data\%(Filename)%(Extension)" />
+    <Compile Include="$(JournalRoot)\Data\Models\*.cs" Link="Models\%(Filename)%(Extension)" />
+    <Reference Include="System.Data.SQLite"><HintPath>$(ProgramW6432)\NinjaTrader 8\bin\System.Data.SQLite.dll</HintPath></Reference>
+    <Reference Include="System.Runtime.Serialization"/><Reference Include="System.Web.Extensions"/>
+    <None Include="$(ProgramW6432)\NinjaTrader 8\bin\e_sqlite3.dll" Link="e_sqlite3.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
