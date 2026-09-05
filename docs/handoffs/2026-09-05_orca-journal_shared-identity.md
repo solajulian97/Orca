@@ -65,3 +65,13 @@ Per-file hashes are in the sibling `stage-hashes.json`. Before copying: recheck 
 Recorder/helper/tests/docs are committed in the coordination repository; external changes are committed in its own repository. The chart file already contains substantial unrelated uncommitted changes, including execution-ID/routed-contract prerequisites absent from HEAD. **Its new edits remain in the working file; the exact focused patch is committed instead of whole-file staging unrelated work.** The platform runner reverses that patch only in a disposable copy to reconstruct the pre-edit snapshot. Normalized authored pre-edit SHA256: `cf0bc7940e901cddf0cc0ccf690e72ce310065d00e8bc659d37e95b66a7cd6fa`.
 
 Provider delivery/position semantics require SIM/runtime validation; consistent callbacks cannot prove an upstream provider never lost offsetting fills. Starting mid-position may remain unverified until restart/re-arm with complete observation. Execution-ID reuse across account resets still needs a namespace contract. The shared source link means both repositories are build inputs; preserve the recorded coordination state. Full_Suite is untouched and no promotion is eligible without Julian's validation.
+
+## Deployment completed 2026-09-05 18:03 local
+
+Julian confirmed NinjaTrader was closed; process checks before backup, before copy and after deployment found no NinjaTrader process. All four staged/source hashes matched, both pre-edit/live authored baselines matched, and the prior live Journal DLL matched the recorded baseline before replacement.
+
+Deployed the exact four-file set listed above. All four live/staged SHA-256 comparisons passed. Live Journal DLL is now `F0B0D73DE50BF758604710D01B3E4F40069B7DA953625654A448414F289C104E`.
+
+Backup: `C:\Users\julia\Documents\New project\.codex-backups\journal-deploy-20260905-180342`. Prior existing DLL/sources and Journal database/annotation TSV were copied; WAL/SHM sidecars were included if present. Data backup hashes were verified. No live database migration or annotation/media edits were performed by the deployment; schema initialization remains a startup action.
+
+Source/build checks remain as recorded above. Deployment is now complete; NinjaTrader restart, F5/Custom load, Journal UI and SIM/runtime validation remain pending. No runtime or performance success is claimed. Full_Suite remains untouched and unapproved.
