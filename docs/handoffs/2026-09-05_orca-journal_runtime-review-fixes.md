@@ -24,3 +24,9 @@ NinjaTrader is running; no deployment performed. Live DLL remains E9E88E716DEE73
 ## Implications and pending validation
 No persistent settings, schemas, secondary series, AddDataSeries, OnMarketData, Calculate modes, Tick Replay, historical-load, cache, trade calculations, or indicator changes. Rendering changes are ordinary WPF layout/text and window ownership only. No per-tick work added. No performance benchmark claimed. Existing annotations/media and unrelated dirty work preserved. Full_Suite untouched and not eligible for promotion.
 NinjaTrader compile/load and runtime validation of this fix remain pending. Retry the existing pasted image, test zoom/pan and videos, inspect long hold duration and numeric sorting, run the summarized reconciliation and expand technical details. Prior shared identity/SIM validation remains pending. Journal-side editing deferred until this runtime defect is resolved.
+
+## Deployment completed — 2026-09-05 19:34 local
+Julian confirmed platform closure and authorized proceeding. NinjaTrader was absent before backup, immediately before copying, and after deployment. Source and stage matched the recorded tested SHA256, and the live prior DLL matched its expected baseline. SQLite metadata verified as 2.0.2.0.
+Deployed only Custom\OrcaJournal.dll; live hash matches 6379428AE1E96D52A982A8D53259D1279C58283B134CDE67C34BE1F0C4E0E8D2.
+Backup: C:\Users\julia\Documents\New project\.codex-backups\journal-runtime-fixes-deploy-20260905-193452. Prior DLL and existing database/sidecars/annotation TSV backed up; data backup hashes verified. Live database and annotation-file hashes remained unchanged. No media edits or unrelated source changes.
+Deployment is complete. NinjaTrader restart/F5/load and screenshot-opening runtime confirmation remain pending; the 24 passing checks are offline evidence only.
