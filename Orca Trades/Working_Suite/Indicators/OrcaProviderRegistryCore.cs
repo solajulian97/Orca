@@ -67,6 +67,10 @@ namespace NinjaTrader.NinjaScript.Indicators
             OrcaProviderStreamKey key, OrcaProviderStreamBuffer buffer)
         { this.registry = registry; Key = key; Buffer = buffer; }
         public long Append(OrcaStreamTick tick) { return Buffer.Append(tick); }
+        public void BeginHistory(DateTime fromUtc, DateTime toUtcExclusive) { Buffer.BeginHistory(fromUtc, toUtcExclusive); }
+        public void ConfirmHistory() { Buffer.ConfirmHistory(); }
+        public void BeginLive() { Buffer.BeginLive(); }
+        public void MarkFault(OrcaStreamFault reason) { Buffer.MarkFault(reason); }
         public void Dispose()
         {
             // Keep the reference until Release completes so every concurrent Dispose

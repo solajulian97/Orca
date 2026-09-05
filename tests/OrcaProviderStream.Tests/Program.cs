@@ -58,7 +58,95 @@ class Program
             Check(rejected, "default event rejected");
         }
         TestRegistry();
-        Console.WriteLine("PASS: " + checks + " checks. Storage/ownership contracts only; no NinjaTrader runtime validation.");
+        TestCoverage();
+        Console.WriteLine("PASS: " + checks + " checks. Storage/ownership/coverage contracts only; no NinjaTrader runtime validation.");
+    }
+
+    static void Reject(Action action, string name)
+    {
+        bool rejected = false;
+        try { action(); } catch (ArgumentException) { rejected = true; }
+        catch (InvalidOperationException) { rejected = true; }
+        Check(rejected, name);
+    }
+
+    static void TestCoverage()
+    {
+        DateTime start = Tick(1).Time;
+        DateTime boundary = start.AddSeconds(1);
+        var liveTick = new OrcaStreamTick(boundary, 100, 1, 1, OrcaStreamClassification.BidAsk);
+        using (var registry = new OrcaProviderStreamRegistry(1, 3, 3))
+        {
+            OrcaProviderPublisherLease lease;
+            registry.TryAcquire(Key(), out lease);
+            OrcaProviderStreamReader reader;
+            registry.TryOpenReader(Key(), out reader);
+            var cursor = reader.FirstAvailable;
+            var empty = reader.Read(cursor, 3);
+            Check(empty.Coverage.Phase == OrcaStreamPhase.Unverified && !empty.Coverage.ProducerConfirmedHistory,
+                "empty registration is not complete history");
+            Reject(() => lease.BeginLive(), "cannot become live before history confirmation");
+            Reject(() => lease.BeginHistory(DateTime.SpecifyKind(start, DateTimeKind.Unspecified), boundary), "UTC required");
+            Reject(() => lease.BeginHistory(start, start), "empty requested interval rejected");
+            lease.BeginHistory(start, boundary);
+            Reject(() => lease.BeginHistory(start, boundary), "cannot restart history in-place");
+            Reject(() => lease.Append(liveTick), "exclusive history boundary enforced");
+            lease.Append(Tick(1)); lease.Append(Tick(1));
+            var loading = reader.Read(cursor, 3);
+            Check(loading.Events.Count == 2 && !loading.Coverage.ProducerConfirmedHistory, "observed events do not prove completeness");
+            lease.ConfirmHistory();
+            var confirmed = reader.Read(cursor, 3);
+            Check(confirmed.Coverage.ProducerConfirmedHistory && confirmed.Coverage.FullConfirmedHistoryRetained
+                && confirmed.Coverage.HistoryEndSequenceExclusive == 2, "confirmed range has atomic sequence boundary");
+            Check(!loading.Coverage.ProducerConfirmedHistory, "prior snapshot coverage immutable");
+            Reject(() => lease.Append(Tick(1)), "handoff barrier rejects unassigned events");
+            lease.BeginLive();
+            Reject(() => lease.Append(Tick(1)), "overlapping historical event rejected in live phase");
+            lease.Append(liveTick); lease.Append(liveTick);
+            var live = reader.Read(confirmed.Next, 3);
+            Check(live.Events.Count == 2 && live.Events[0].Time == boundary && live.Events[1].Time == boundary,
+                "same-time live trades retained without timestamp deduplication");
+            Check(live.Coverage.Phase == OrcaStreamPhase.Live && live.Coverage.ProducerConfirmedHistory
+                && !live.Coverage.FullConfirmedHistoryRetained, "retention loss is separate from producer confirmation");
+            lease.MarkFault(OrcaStreamFault.SourceDisconnected);
+            lease.MarkFault(OrcaStreamFault.IngestionFailed);
+            var failed = reader.Read(live.Next, 3);
+            Check(failed.Status == OrcaStreamReadStatus.SourceFaulted && failed.Events.Count == 0
+                && failed.Coverage.Fault == OrcaStreamFault.SourceDisconnected, "fault fails closed and preserves first cause");
+            Reject(() => lease.BeginLive(), "fault cannot resume same generation");
+            Reject(() => lease.Append(liveTick), "fault blocks publication");
+            lease.Dispose();
+            Check(reader.Read(cursor, 3).Coverage.Phase == OrcaStreamPhase.Closed, "closed coverage state");
+        }
+        using (var buffer = new OrcaProviderStreamBuffer(2, 2))
+        {
+            buffer.BeginHistory(start, boundary);
+            buffer.ConfirmHistory(); buffer.BeginLive();
+            buffer.Append(liveTick); buffer.Append(liveTick); buffer.Append(liveTick);
+            var batch = buffer.Read(buffer.FirstAvailable, 2);
+            Check(batch.Coverage.HistoryEndSequenceExclusive == 0 && batch.Coverage.FullConfirmedHistoryRetained,
+                "producer-confirmed empty history remains valid after live-only eviction");
+        }
+        using (var buffer = new OrcaProviderStreamBuffer(2, 2))
+        {
+            buffer.Append(Tick(1));
+            Reject(() => buffer.BeginHistory(start, boundary), "cannot retroactively certify unverified payload");
+            buffer.MarkFault(OrcaStreamFault.HistoricalGap);
+            Check(!buffer.Read(buffer.FirstAvailable, 1).Coverage.FullConfirmedHistoryRetained, "unverified fault never complete");
+        }
+        for (int i = 0; i < 20; i++)
+        {
+            using (var buffer = new OrcaProviderStreamBuffer(2, 2))
+            {
+                buffer.BeginHistory(start, boundary);
+                Parallel.Invoke(() => { try { buffer.Append(Tick(1)); } catch (InvalidOperationException) { } },
+                    () => buffer.ConfirmHistory());
+                var batch = buffer.Read(buffer.FirstAvailable, 2);
+                Check(batch.Coverage.HistoryEndSequenceExclusive == batch.PublishedThroughExclusive
+                    && batch.Events.Count == batch.PublishedThroughExclusive,
+                    "confirmation atomically seals the accepted historical prefix");
+            }
+        }
     }
 
     static OrcaProviderStreamKey Key(string contract = "ES SEP26", string environment = "historical-live:feedA",

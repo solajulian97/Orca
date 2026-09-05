@@ -4,8 +4,29 @@ using System.Collections.ObjectModel;
 namespace NinjaTrader.NinjaScript.Indicators
 {
     // Platform-independent exact-event storage. No chart, account or subscription ownership.
-    public enum OrcaStreamReadStatus { Ready, Evicted, WrongGeneration, Ahead, Closed }
+    public enum OrcaStreamReadStatus { Ready, Evicted, WrongGeneration, Ahead, Closed, SourceFaulted }
     public enum OrcaStreamClassification { Unknown, TickDirection, BidAsk }
+    public enum OrcaStreamPhase { Unverified, Historical, HistoryConfirmed, Live, Faulted, Closed }
+    public enum OrcaStreamFault { None, HistoricalGap, SourceDisconnected, InvalidEvent, IngestionFailed }
+
+    public sealed class OrcaStreamCoverage
+    {
+        public readonly OrcaStreamPhase Phase;
+        public readonly OrcaStreamFault Fault;
+        public readonly DateTime HistoryFromUtc;
+        public readonly DateTime HistoryToUtcExclusive;
+        public readonly bool ProducerConfirmedHistory;
+        public readonly bool FullConfirmedHistoryRetained;
+        public readonly long HistoryEndSequenceExclusive;
+        internal OrcaStreamCoverage(OrcaStreamPhase phase, OrcaStreamFault fault, DateTime from, DateTime to,
+            bool confirmed, long historyEnd, long firstSequence)
+        {
+            Phase = phase; Fault = fault; HistoryFromUtc = from; HistoryToUtcExclusive = to;
+            ProducerConfirmedHistory = confirmed; HistoryEndSequenceExclusive = historyEnd;
+            FullConfirmedHistoryRetained = confirmed && (historyEnd == 0 || firstSequence == 0)
+                && phase != OrcaStreamPhase.Closed && phase != OrcaStreamPhase.Faulted;
+        }
+    }
 
     public struct OrcaStreamTick
     {
@@ -42,11 +63,13 @@ namespace NinjaTrader.NinjaScript.Indicators
         public readonly OrcaStreamCursor Next;
         public readonly long PublishedThroughExclusive;
         public readonly ReadOnlyCollection<OrcaStreamTick> Events;
+        public readonly OrcaStreamCoverage Coverage;
         internal OrcaStreamBatch(OrcaStreamReadStatus status, OrcaStreamCursor first,
-            OrcaStreamCursor next, long published, OrcaStreamTick[] events)
+            OrcaStreamCursor next, long published, OrcaStreamTick[] events, OrcaStreamCoverage coverage)
         {
             Status = status; FirstAvailable = first; Next = next;
             PublishedThroughExclusive = published; Events = Array.AsReadOnly(events);
+            Coverage = coverage;
         }
     }
 
@@ -62,6 +85,12 @@ namespace NinjaTrader.NinjaScript.Indicators
         private long firstSequence;
         private long nextSequence;
         private bool closed;
+        private OrcaStreamPhase phase;
+        private OrcaStreamFault fault;
+        private DateTime historyFromUtc;
+        private DateTime historyToUtc;
+        private bool historyConfirmed;
+        private long historyEndSequence = -1;
 
         public OrcaProviderStreamBuffer(int capacity, int maxReadEvents)
         {
@@ -84,6 +113,13 @@ namespace NinjaTrader.NinjaScript.Indicators
             lock (sync)
             {
                 if (closed) throw new ObjectDisposedException("OrcaProviderStreamBuffer");
+                if (phase == OrcaStreamPhase.Faulted || phase == OrcaStreamPhase.HistoryConfirmed)
+                    throw new InvalidOperationException("Stream is not accepting events in this phase.");
+                if (phase == OrcaStreamPhase.Historical && (tick.Time.Kind != DateTimeKind.Utc
+                    || tick.Time < historyFromUtc || tick.Time >= historyToUtc))
+                    throw new ArgumentException("Historical event is outside the declared UTC half-open interval.");
+                if (phase == OrcaStreamPhase.Live && (tick.Time.Kind != DateTimeKind.Utc || tick.Time < historyToUtc))
+                    throw new ArgumentException("Live event precedes the declared handoff boundary.");
                 if (nextSequence == long.MaxValue) throw new InvalidOperationException("Sequence exhausted; replace generation.");
                 long sequence = nextSequence;
                 ring[(int)(sequence % ring.Length)] = tick;
@@ -93,26 +129,82 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
         }
 
+        public void BeginHistory(DateTime fromUtc, DateTime toUtcExclusive)
+        {
+            if (fromUtc.Kind != DateTimeKind.Utc || toUtcExclusive.Kind != DateTimeKind.Utc
+                || fromUtc == DateTime.MinValue || toUtcExclusive <= fromUtc)
+                throw new ArgumentException("History requires a nonempty UTC half-open interval.");
+            lock (sync)
+            {
+                RequirePhase(OrcaStreamPhase.Unverified);
+                if (nextSequence != 0) throw new InvalidOperationException("Cannot certify preexisting unverified events.");
+                historyFromUtc = fromUtc; historyToUtc = toUtcExclusive;
+                phase = OrcaStreamPhase.Historical;
+            }
+        }
+
+        // This is a producer assertion, never inferred from event counts or timestamps.
+        // The platform adapter must establish complete source coverage before calling it.
+        public void ConfirmHistory()
+        {
+            lock (sync)
+            {
+                RequirePhase(OrcaStreamPhase.Historical);
+                historyEndSequence = nextSequence; historyConfirmed = true;
+                phase = OrcaStreamPhase.HistoryConfirmed;
+            }
+        }
+
+        public void BeginLive()
+        {
+            lock (sync)
+            {
+                RequirePhase(OrcaStreamPhase.HistoryConfirmed);
+                phase = OrcaStreamPhase.Live;
+            }
+        }
+
+        public void MarkFault(OrcaStreamFault reason)
+        {
+            if (reason <= OrcaStreamFault.None || reason > OrcaStreamFault.IngestionFailed)
+                throw new ArgumentOutOfRangeException("reason");
+            lock (sync)
+            {
+                if (closed) throw new ObjectDisposedException("OrcaProviderStreamBuffer");
+                if (phase == OrcaStreamPhase.Faulted) return; // retain the first cause
+                fault = reason; phase = OrcaStreamPhase.Faulted;
+            }
+        }
+
+        private void RequirePhase(OrcaStreamPhase expected)
+        {
+            if (closed) throw new ObjectDisposedException("OrcaProviderStreamBuffer");
+            if (phase != expected) throw new InvalidOperationException("Invalid stream phase transition.");
+        }
+
         public OrcaStreamBatch Read(OrcaStreamCursor cursor, int requestedEvents)
         {
             if (requestedEvents <= 0) throw new ArgumentOutOfRangeException("requestedEvents");
             lock (sync)
             {
                 var first = new OrcaStreamCursor(generation, firstSequence);
+                var coverage = new OrcaStreamCoverage(phase, fault, historyFromUtc, historyToUtc,
+                    historyConfirmed, historyEndSequence, firstSequence);
                 OrcaStreamReadStatus status = closed ? OrcaStreamReadStatus.Closed
                     : cursor.Generation != generation ? OrcaStreamReadStatus.WrongGeneration
+                    : phase == OrcaStreamPhase.Faulted ? OrcaStreamReadStatus.SourceFaulted
                     : cursor.Sequence < firstSequence ? OrcaStreamReadStatus.Evicted
                     : cursor.Sequence > nextSequence ? OrcaStreamReadStatus.Ahead
                     : OrcaStreamReadStatus.Ready;
                 // Fail closed. Recovery must be an explicit consumer decision, never silent skipping.
                 if (status != OrcaStreamReadStatus.Ready)
-                    return new OrcaStreamBatch(status, first, cursor, nextSequence, Empty);
+                    return new OrcaStreamBatch(status, first, cursor, nextSequence, Empty, coverage);
                 int count = (int)Math.Min(nextSequence - cursor.Sequence, Math.Min(requestedEvents, maxReadEvents));
                 var events = new OrcaStreamTick[count];
                 for (int i = 0; i < count; i++)
                     events[i] = ring[(int)((cursor.Sequence + i) % ring.Length)];
                 return new OrcaStreamBatch(status, first,
-                    new OrcaStreamCursor(generation, cursor.Sequence + count), nextSequence, events);
+                    new OrcaStreamCursor(generation, cursor.Sequence + count), nextSequence, events, coverage);
             }
         }
 
@@ -122,6 +214,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 if (closed) return;
                 closed = true;
+                phase = OrcaStreamPhase.Closed;
                 // Closed reader handles must not retain the large payload allocation.
                 ring = null;
                 firstSequence = nextSequence;
