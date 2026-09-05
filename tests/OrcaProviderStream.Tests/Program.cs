@@ -59,7 +59,63 @@ class Program
         }
         TestRegistry();
         TestCoverage();
+        TestReadBudgets();
         Console.WriteLine("PASS: " + checks + " checks. Storage/ownership/coverage contracts only; no NinjaTrader runtime validation.");
+    }
+
+    static void TestReadBudgets()
+    {
+        using (var registry = new OrcaProviderStreamRegistry(1, 4, 2, 1, 1))
+        {
+            OrcaProviderPublisherLease owner;
+            registry.TryAcquire(Key(), out owner);
+            owner.Append(Tick(1)); owner.Append(Tick(2));
+            OrcaProviderStreamReader reader, denied;
+            Check(registry.OpenReader(Key(), out reader) == OrcaProviderReaderStatus.Opened, "budgeted reader acquired");
+            Check(registry.OpenReader(Key(), out denied) == OrcaProviderReaderStatus.CapacityReached && denied == null,
+                "reader capacity refusal distinct from missing source");
+            var cursor = reader.FirstAvailable;
+            var held = reader.Read(cursor, int.MaxValue);
+            var retainedView = held.Events;
+            bool refused = false;
+            try { reader.Read(cursor, 1); } catch (OrcaProviderBudgetExceededException) { refused = true; }
+            Check(refused && held.Events.Count == 2, "outstanding batch budget enforced before another copy");
+            held.Dispose(); held.Dispose();
+            Reject(() => { var ignored = retainedView[0]; }, "retained view cannot expose disposed payload");
+            using (var released = reader.Read(cursor, 1))
+                Check(released.Events.Count == 1, "batch disposal releases budget exactly once");
+            Reject(() => reader.Read(cursor, 0), "invalid read does not consume budget");
+            using (var valid = reader.Read(cursor, 1)) Check(valid.Events.Count == 1, "budget intact after invalid request");
+            var inFlight = reader.Read(cursor, 1);
+            reader.Dispose(); reader.Dispose();
+            Check(registry.OpenReader(Key(), out denied) == OrcaProviderReaderStatus.Opened, "reader slot reusable");
+            bool stillReserved = false;
+            try { denied.Read(cursor, 1); } catch (OrcaProviderBudgetExceededException) { stillReserved = true; }
+            Check(stillReserved, "reader disposal does not release outstanding batch reservation");
+            registry.Dispose();
+            Check(inFlight.Events[0].Volume == 1, "consumer-owned batch survives source shutdown");
+            inFlight.Dispose();
+            using (var closed = denied.Read(cursor, 1)) Check(closed.Status == OrcaStreamReadStatus.Closed, "closed generation readable as status");
+            denied.Dispose();
+            Reject(() => reader.Read(cursor, 1), "disposed reader rejected");
+        }
+        using (var registry = new OrcaProviderStreamRegistry(1, 4, 1, 64, 1))
+        {
+            OrcaProviderPublisherLease owner;
+            registry.TryAcquire(Key(), out owner); owner.Append(Tick(1));
+            var readers = new OrcaProviderStreamReader[32];
+            var batches = new OrcaProviderBatchLease[32];
+            for (int i = 0; i < readers.Length; i++) registry.TryOpenReader(Key(), out readers[i]);
+            Parallel.For(0, 32, i =>
+            {
+                try { batches[i] = readers[i].Read(readers[i].FirstAvailable, 1); }
+                catch (OrcaProviderBudgetExceededException) { }
+            });
+            int winners = 0;
+            foreach (var batch in batches) if (batch != null) { winners++; batch.Dispose(); }
+            Check(winners == 1, "one outstanding batch winner across concurrent readers");
+            foreach (var reader in readers) reader.Dispose();
+        }
     }
 
     static void Reject(Action action, string name)

@@ -47,15 +47,33 @@ namespace NinjaTrader.NinjaScript.Indicators
     }
 
     public enum OrcaProviderAcquireStatus { Acquired, Occupied, CapacityReached, Closed }
+    public enum OrcaProviderReaderStatus { Opened, SourceUnavailable, CapacityReached, Closed }
 
     // A pinned reader cannot publish, close a producer, or silently attach to its successor.
-    public sealed class OrcaProviderStreamReader
+    public sealed class OrcaProviderStreamReader : IDisposable
     {
+        private readonly object sync = new object();
         private readonly OrcaProviderStreamBuffer buffer;
-        internal OrcaProviderStreamReader(OrcaProviderStreamBuffer buffer) { this.buffer = buffer; }
-        public OrcaStreamCursor FirstAvailable { get { return buffer.FirstAvailable; } }
-        public OrcaStreamBatch Read(OrcaStreamCursor cursor, int requestedEvents)
-        { return buffer.Read(cursor, requestedEvents); }
+        private readonly OrcaProviderReadBudget budget;
+        private bool closed;
+        internal OrcaProviderStreamReader(OrcaProviderStreamBuffer buffer, OrcaProviderReadBudget budget)
+        { this.buffer = buffer; this.budget = budget; }
+        public OrcaStreamCursor FirstAvailable
+        { get { lock (sync) { RequireOpen(); return buffer.FirstAvailable; } } }
+        public OrcaProviderBatchLease Read(OrcaStreamCursor cursor, int requestedEvents)
+        {
+            lock (sync)
+            {
+                RequireOpen();
+                if (requestedEvents <= 0) throw new ArgumentOutOfRangeException("requestedEvents");
+                if (!budget.TryBatch()) throw new OrcaProviderBudgetExceededException();
+                try { return new OrcaProviderBatchLease(buffer.Read(cursor, requestedEvents), budget); }
+                catch { budget.ReleaseBatch(); throw; }
+            }
+        }
+        private void RequireOpen() { if (closed) throw new ObjectDisposedException("OrcaProviderStreamReader"); }
+        public void Dispose()
+        { lock (sync) { if (closed) return; closed = true; budget.ReleaseReader(); } }
     }
 
     public sealed class OrcaProviderPublisherLease : IDisposable
@@ -93,13 +111,20 @@ namespace NinjaTrader.NinjaScript.Indicators
         private readonly int maxStreams;
         private readonly int eventsPerStream;
         private readonly int maxReadEvents;
+        private readonly OrcaProviderReadBudget readBudget;
         private bool closed;
 
         public OrcaProviderStreamRegistry(int maxStreams, int eventsPerStream, int maxReadEvents)
+            : this(maxStreams, eventsPerStream, maxReadEvents, 128, 256) { }
+
+        public OrcaProviderStreamRegistry(int maxStreams, int eventsPerStream, int maxReadEvents,
+            int maxReaders, int maxOutstandingBatches)
         {
-            if (maxStreams <= 0 || eventsPerStream <= 0 || maxReadEvents <= 0 || maxReadEvents > eventsPerStream)
+            if (maxStreams <= 0 || eventsPerStream <= 0 || maxReadEvents <= 0 || maxReadEvents > eventsPerStream
+                || maxReaders <= 0 || maxOutstandingBatches <= 0)
                 throw new ArgumentOutOfRangeException("maxStreams", "Require positive bounds and read limit <= stream capacity.");
             this.maxStreams = maxStreams; this.eventsPerStream = eventsPerStream; this.maxReadEvents = maxReadEvents;
+            readBudget = new OrcaProviderReadBudget(maxReaders, maxOutstandingBatches);
         }
         public int ActiveStreams { get { lock (sync) return publishers.Count; } }
 
@@ -119,15 +144,21 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
 
         public bool TryOpenReader(OrcaProviderStreamKey key, out OrcaProviderStreamReader reader)
+        { return OpenReader(key, out reader) == OrcaProviderReaderStatus.Opened; }
+
+        public OrcaProviderReaderStatus OpenReader(OrcaProviderStreamKey key, out OrcaProviderStreamReader reader)
         {
             if (key == null) throw new ArgumentNullException("key");
             lock (sync)
             {
                 reader = null;
                 OrcaProviderPublisherLease lease;
-                if (closed || !publishers.TryGetValue(key, out lease)) return false;
-                reader = new OrcaProviderStreamReader(lease.Buffer);
-                return true;
+                if (closed) return OrcaProviderReaderStatus.Closed;
+                if (!publishers.TryGetValue(key, out lease)) return OrcaProviderReaderStatus.SourceUnavailable;
+                if (!readBudget.TryReader()) return OrcaProviderReaderStatus.CapacityReached;
+                try { reader = new OrcaProviderStreamReader(lease.Buffer, readBudget); }
+                catch { readBudget.ReleaseReader(); throw; }
+                return OrcaProviderReaderStatus.Opened;
             }
         }
 
