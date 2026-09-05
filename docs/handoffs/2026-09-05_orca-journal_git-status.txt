@@ -1,0 +1,135 @@
+Snapshot before handoff creation, 2026-09-05; main at a8fe8f0; index empty.
+ M "Orca Trades/Scripts/deploy_orca.ps1"
+ M "Orca Trades/Working_Suite/AddOns/OrcaExecutionRouterAddOn.cs"
+ M "Orca Trades/Working_Suite/AddOns/OrcaRiskManagerAddOn.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaAbsorptionCandles.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaAnchoredVWAPs.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.Rendering.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaCumulativeDelta.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaExecutionLines.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaFootprintCore.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaHTFCandles.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaLegtoLegProfile.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaMGIDaily.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaPrints.Engine.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaPrints.Models.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaPrints.Rendering.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaPrints.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaProfileDataProvider.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaRollingProfiles.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaStepProfile.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaTimeStatistics.cs"
+ M "Orca Trades/Working_Suite/Indicators/OrcaVisualOrders.cs"
+ M docs/ORCA_ARCHITECTURE.md
+ M docs/ORCA_DIAGNOSTICS_SPEC.md
+ M docs/ORCA_PRODUCT_STATE.md
+ D docs/handoffs/2026-08-23_orca-time-statistics_rth-reset-font-weight.md
+ M docs/indicators/ORCA_CANDLE_VOLUME_PROFILE.md
+ M docs/indicators/ORCA_HTF_CANDLES.md
+ M docs/indicators/ORCA_SOURCE_MAP.md
+ M tests/OrcaFootprint.PlatformCheck/Program.cs
+ M tests/OrcaFootprint.Tests/Program.cs
+?? .codex-backups/OrcaRollingProfiles.head-before-session-window.cs
+?? .codex-backups/OrcaRollingProfiles.index-session-window.cs
+?? .codex-backups/OrcaRollingProfiles.pre-session-window.cs
+?? .codex-backups/orca-pre-refactor-20260602-190409/
+?? .codex-video-analysis/
+?? "Orca Full Suite/"
+?? "Orca Trades/Tests/"
+?? "Orca Trades/Working_Suite/AddOns/OrcaDiagnosticsAddOn.cs"
+?? "Orca Trades/Working_Suite/AddOns/OrcaRiskSizing.cs"
+?? "Orca Trades/Working_Suite/Indicators/OrcaAdaptiveChannels.cs"
+?? "Orca Trades/Working_Suite/Indicators/OrcaAdaptiveEnvelope.cs"
+?? "Orca Trades/Working_Suite/Indicators/OrcaDiagnosticsCore.cs"
+?? "Orca Trades/Working_Suite/Indicators/OrcaInstantReplay.cs"
+?? "Orca Trades/Working_Suite/Indicators/OrcaReplayCore.cs"
+?? Orca_NinjaTrader_sync_55d9422.zip
+?? docs/handoffs/2026-06-27_orca-diagnostics_phase-1-observatory.md
+?? docs/handoffs/2026-07-10_OrcaMGIDaily_magic-20-80-levels.md
+?? docs/handoffs/2026-07-13_orca-diagnostics_phase-3-cpu-attribution.md
+?? docs/handoffs/2026-07-17_orca-mgi-execution-lines_open-lean-pass.md
+?? docs/handoffs/2026-07-20_orca-mgi-absorption_phase-attribution-lean-pass.md
+?? docs/handoffs/2026-07-21_orca-prints_compact-single-aggregation.md
+?? docs/handoffs/2026-07-30_orca-adaptive-envelope_streaming-regression.md
+?? docs/handoffs/2026-08-01_orca-mgi-daily_four-hour-intraday-anchor.md
+?? docs/handoffs/2026-08-01_orca-mgi-daily_intraday-midpoint-toggles.md
+?? docs/handoffs/2026-08-01_orca-prints_compact-cluster-aggregation.md
+?? docs/handoffs/2026-08-01_orca-step-profile_dynamic-volume-data-menu.md
+?? docs/handoffs/2026-08-01_orca-step-profile_four-hour-session-anchor.md
+?? docs/handoffs/2026-08-07_orca-execution-lines_live-extrema-render-coalescing.md
+?? docs/handoffs/2026-08-07_orca-mgi-daily_intraday-timeframe-expansion.md
+?? docs/handoffs/2026-08-07_orca-mgi-daily_london-tokyo-opens.md
+?? docs/handoffs/2026-08-07_orca-prints_high-delta-price-levels.md
+?? docs/handoffs/2026-08-07_orca-risk-manager_calc-label-dragging.md
+?? docs/handoffs/2026-08-07_orca-step-profile_timeframes-volume-steps.md
+?? docs/handoffs/2026-08-10_orca-diagnostics_workspace-health-dashboard.md
+?? docs/handoffs/2026-08-10_orca-leg-to-leg_active-profile-orientation.md
+?? docs/handoffs/2026-08-11_orca-diagnostics_rolling-pressure-attribution.md
+?? docs/handoffs/2026-08-11_orca-risk-manager_execution-dispatch-hang.md
+?? docs/handoffs/2026-08-11_orca-risk-manager_lazy-dormant-panels.md
+?? docs/handoffs/2026-08-14_orca-mgi-daily_intraday-label-timeframe-toggle.md
+?? docs/handoffs/2026-08-14_orca-prints_cluster-single-suppression.md
+?? docs/handoffs/2026-08-14_orca-risk-manager_pnl-points-font-weights.md
+?? docs/handoffs/2026-08-14_orca-step-profile_session-basis.md
+?? docs/handoffs/2026-08-15_orca-risk-manager_atr-sizing-phase-1.md
+?? docs/handoffs/2026-08-15_orca-risk-manager_hot-reload-lifecycle.md
+?? docs/handoffs/2026-08-17_orca-execution-lines_open-arrow-visual-alignment.md
+?? docs/handoffs/2026-08-17_orca-step-profile_close-stamped-boundary-index.md
+?? docs/handoffs/2026-08-17_orca-step-profile_historical-mirror-session-anchor.md
+?? docs/handoffs/2026-08-17_orca-step-profile_mirror-layout-trade-source.md
+?? docs/handoffs/2026-08-18_orca-execution-lines_closed-market-account-selection.md
+?? docs/handoffs/2026-08-18_orca-execution-lines_grade-visibility-sqlite-time.md
+?? docs/handoffs/2026-08-18_orca-execution-lines_setup-grade.md
+?? docs/handoffs/2026-08-18_orca-mgi-daily_realtime-initial-balance-finalization.md
+?? docs/handoffs/2026-08-18_orca-risk-manager_alt-space-entry-only.md
+?? docs/handoffs/2026-08-18_orca-step-profile_independent-active-mirror-arrangement.md
+?? docs/handoffs/2026-08-19_orca-execution-lines_dark-trade-note-editor.md
+?? docs/handoffs/2026-08-19_orca-execution-lines_grade-layout-tag-library-removal.md
+?? docs/handoffs/2026-08-19_orca-mgi-daily_prior-rth-high-low.md
+?? docs/handoffs/2026-08-19_orca-risk-manager_panel-labels.md
+?? docs/handoffs/2026-08-20_orca-execution-lines_execution-id-deduplication.md
+?? docs/handoffs/2026-08-20_orca-execution-lines_selected-account-late-hook.md
+?? docs/handoffs/2026-08-21_orca-leg-to-leg_active-delta-reset.md
+?? docs/handoffs/2026-08-23_orca-leg-to-leg_reset-aggregation.md
+?? docs/handoffs/2026-08-23_orca-step-profile_session-labels.md
+?? docs/handoffs/2026-08-25_orca-mgi-daily_30-second-value-areas.md
+?? docs/handoffs/2026-08-25_orca-mgi-daily_full-day-va-naming-audit.md
+?? docs/handoffs/2026-08-26_orca-instant-replay_foundation.md
+?? docs/handoffs/2026-08-26_orca-leg-to-leg_reset-aggregation-ratio.md
+?? docs/handoffs/2026-08-26_orca-mgi-daily_temporary-ib30.md
+?? docs/handoffs/2026-08-26_orca-mgi-daily_tick-replay-value-area-finalization.md
+?? docs/handoffs/2026-08-26_orca-prints_moc-zoom-visibility.md
+?? docs/handoffs/2026-08-26_orca-risk-manager_independent-router-overlay.md
+?? docs/handoffs/2026-08-26_orca-step-htf_label-visibility-hotkeys.md
+?? docs/handoffs/2026-08-26_orca-step-profile_dynamic-historical-delta-width.md
+?? docs/handoffs/2026-08-26_orca-step-profile_non-rth-volume-width.md
+?? docs/handoffs/2026-08-29_orca-mgi-daily_line-end-price-tags.md
+?? docs/handoffs/2026-08-29_orca-visual-orders_replay-core-compile-dependency.md
+?? docs/handoffs/2026-08-29_orca-visual-orders_working-orders-chart-trader-visibility.md
+?? docs/handoffs/2026-08-30_orca-mgi-daily_session-rollover-deduplication.md
+?? docs/handoffs/2026-08-31_orca-step-profile_rth-30m-width.md
+?? docs/handoffs/2026-09-01_cvp_bidask-full-candle.md
+?? docs/handoffs/2026-09-01_cvp_normal-bidask-winner-emphasis.md
+?? docs/handoffs/2026-09-01_orca-instant-replay_completed-bar-adapter-group.md
+?? docs/handoffs/2026-09-01_orca-instant-replay_deployment-cumulative-delta.md
+?? docs/handoffs/2026-09-01_orca-instant-replay_historical-seeding-hidden-contract.md
+?? docs/handoffs/2026-09-03_cvp_delta-colored-volume-text.md
+?? docs/handoffs/2026-09-03_cvp_qualified-volume-text-hover.md
+?? docs/handoffs/2026-09-03_cvp_thresholded-volume-text-emphasis.md
+?? docs/handoffs/2026-09-03_orca-execution-lines_routed-instrument-display.md
+?? docs/handoffs/2026-09-03_orca-leg-to-leg_compact-delta-statistics.md
+?? docs/handoffs/2026-09-03_orca-leg-to-leg_statistics-readability.md
+?? docs/handoffs/2026-09-03_orca-risk-manager_compact-routed-labels.md
+?? docs/handoffs/2026-09-04_orca-anchored-vwaps_vwap1-fill-symmetry.md
+?? docs/handoffs/2026-09-04_orca-cumulative-delta_same-sign-bundles.md
+?? docs/handoffs/2026-09-04_orca-diagnostics_coverage-backlog-truthfulness.md
+?? docs/handoffs/2026-09-04_orca-execution-lines_startup-timing-lean-reporting.md
+?? docs/handoffs/2026-09-05_cvp_volume-text-brightness.md
+?? docs/handoffs/2026-09-05_orca-diagnostics_quiet-market-warning-coverage.md
+?? docs/handoffs/2026-09-05_orca-execution-lines_sqlite-parameter-binding.md
+?? docs/handoffs/2026-09-05_orca-provider_hardening-review.md
+?? docs/indicators/ORCA_ADAPTIVE_CHANNELS.md
+?? docs/indicators/ORCA_ADAPTIVE_ENVELOPE.md
+?? tests/OrcaDiagnostics.PlatformCheck/
+?? tests/OrcaExecutionLines.StartupCheck/
