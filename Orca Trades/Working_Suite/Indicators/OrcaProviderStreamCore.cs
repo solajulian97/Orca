@@ -57,7 +57,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private static readonly OrcaStreamTick[] Empty = new OrcaStreamTick[0];
         private readonly object sync = new object();
         private readonly Guid generation = Guid.NewGuid();
-        private readonly OrcaStreamTick[] ring;
+        private OrcaStreamTick[] ring;
         private readonly int maxReadEvents;
         private long firstSequence;
         private long nextSequence;
@@ -122,7 +122,8 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 if (closed) return;
                 closed = true;
-                Array.Clear(ring, 0, ring.Length);
+                // Closed reader handles must not retain the large payload allocation.
+                ring = null;
                 firstSequence = nextSequence;
             }
         }

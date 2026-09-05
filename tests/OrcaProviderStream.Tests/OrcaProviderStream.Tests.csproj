@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderStreamCore.cs" Link="OrcaProviderStreamCore.cs" />
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderRegistryCore.cs" Link="OrcaProviderRegistryCore.cs" />
   </ItemGroup>
 </Project>
