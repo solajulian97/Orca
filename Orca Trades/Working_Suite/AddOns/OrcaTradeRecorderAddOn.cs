@@ -471,8 +471,127 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public string Detail { get; set; }
 	}
 
+	// Pure execution ledger; callers serialize access with the runtime lock.
+	public sealed class OrcaRecorderRoundTrip
+	{
+		public string Account { get; set; }
+		public string Instrument { get; set; }
+		public string Direction { get; set; }
+		public DateTime EntryTime { get; set; }
+		public DateTime ExitTime { get; set; }
+		public int EntryQuantity { get; set; }
+		public decimal GrossPnl { get; set; }
+		public bool IsCompleteHistory { get; set; }
+		public List<string> ExecutionIds { get; set; }
+	}
+
+	internal sealed class OrcaRecorderTradeLedger
+	{
+		private sealed class Bucket
+		{
+			public int Net;
+			public decimal Cash;
+			public decimal PointValue;
+			public bool Uncertain;
+			public OrcaRecorderRoundTrip Trade;
+		}
+		private readonly Dictionary<string, Bucket> buckets = new Dictionary<string, Bucket>(StringComparer.Ordinal);
+		private readonly HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+		private readonly List<OrcaRecorderRoundTrip> completed = new List<OrcaRecorderRoundTrip>();
+		private bool uncertain;
+		private static string Key(string account, string instrument) { return account.Length + ":" + account + instrument; }
+		private Bucket Get(string account, string instrument)
+		{
+			string key = Key(account, instrument);
+			Bucket bucket;
+			if (!buckets.TryGetValue(key, out bucket)) buckets[key] = bucket = new Bucket();
+			return bucket;
+		}
+		public bool HasOpenTrades { get { return uncertain || buckets.Values.Any(b => b.Net != 0 || b.Uncertain); } }
+		public void MarkUncertain(string account, string instrument)
+		{
+			Get(account, instrument).Uncertain = true;
+			uncertain = true;
+		}
+		public void Seed(string account, string instrument, int quantity)
+		{
+			Bucket b = Get(account, instrument);
+			if (b.Net == quantity) return;
+			b.Net = quantity;
+			b.Uncertain = true;
+		}
+		public void Fill(string account, string instrument, string id, bool buy, int quantity, double price, double pointValue, DateTime time)
+		{
+			if (quantity <= 0 || double.IsNaN(price) || double.IsInfinity(price) || pointValue <= 0 || double.IsNaN(pointValue) || double.IsInfinity(pointValue)) {
+				MarkUncertain(account, instrument);
+				return;
+			}
+			// No-ID deliveries cannot safely be distinguished from otherwise identical fills.
+			if (string.IsNullOrWhiteSpace(id)) MarkUncertain(account, instrument);
+			else if (!seen.Add(Key(account, id))) return;
+			Bucket b = Get(account, instrument);
+			int sign = buy ? 1 : -1;
+			int closing = b.Net != 0 && Math.Sign(b.Net) != sign ? Math.Min(Math.Abs(b.Net), quantity) : 0;
+			if (closing > 0) {
+				b.Cash -= sign * (decimal)price * closing;
+				b.Net += sign * closing;
+				if (b.Trade != null && !string.IsNullOrEmpty(id) && !b.Trade.ExecutionIds.Contains(id)) b.Trade.ExecutionIds.Add(id);
+				if (b.PointValue != 0 && b.PointValue != (decimal)pointValue) b.Uncertain = true;
+				if (b.Net == 0) {
+					OrcaRecorderRoundTrip trade = b.Trade ?? new OrcaRecorderRoundTrip { Account = account, Instrument = instrument, Direction = buy ? "SHORT" : "LONG", ExecutionIds = new List<string>() };
+					trade.ExitTime = time;
+					trade.GrossPnl = b.Cash * (decimal)pointValue;
+					trade.IsCompleteHistory = b.Trade != null && !b.Uncertain;
+					completed.Add(trade);
+					b.Trade = null;
+					b.Cash = 0;
+					b.Uncertain = false;
+				}
+			}
+			int opening = quantity - closing;
+			if (opening > 0) {
+				if (b.Net == 0) {
+					b.PointValue = (decimal)pointValue;
+					b.Trade = new OrcaRecorderRoundTrip { Account = account, Instrument = instrument, Direction = buy ? "LONG" : "SHORT", EntryTime = time, ExecutionIds = new List<string>() };
+				}
+				if (b.PointValue != (decimal)pointValue) b.Uncertain = true;
+				b.Net += sign * opening;
+				b.Cash -= sign * (decimal)price * opening;
+				if (b.Trade != null) {
+					b.Trade.EntryQuantity += opening;
+					if (!string.IsNullOrEmpty(id) && !b.Trade.ExecutionIds.Contains(id)) b.Trade.ExecutionIds.Add(id);
+				}
+			}
+		}
+		public List<OrcaRecorderRoundTrip> DrainCompleted()
+		{
+			var result = new List<OrcaRecorderRoundTrip>(completed);
+			completed.Clear();
+			return result;
+		}
+		private static string Safe(string value)
+		{
+			var invalid = Path.GetInvalidFileNameChars();
+			string clean = new string((value ?? "Unknown").Select(c => invalid.Contains(c) || char.IsControl(c) ? '_' : c).ToArray()).Trim().TrimEnd('.');
+			return clean.Length > 24 ? clean.Substring(0, 24) : clean;
+		}
+		public static string BuildTitle(List<OrcaRecorderRoundTrip> trades, bool incomplete)
+		{
+			if (trades == null || trades.Count == 0 || incomplete || trades.Any(t => !t.IsCompleteHistory)) return "PNL-UNKNOWN";
+			decimal pnl = Math.Round(trades.Sum(t => t.GrossPnl), 2, MidpointRounding.AwayFromZero);
+			string outcome = pnl > 0 ? "WIN" : pnl < 0 ? "LOSS" : "BREAKEVEN";
+			string money = (pnl > 0 ? "+" : pnl < 0 ? "-" : "") + "$" + Math.Abs(pnl).ToString("0.00", CultureInfo.InvariantCulture);
+			if (trades.Count > 1) return "MULTI__" + trades.Count + "-TRADES__" + outcome + "__GROSS-" + money + "__" + Safe(string.Join("-", trades.Select(t => t.Instrument).Distinct()));
+			return outcome + "__GROSS-" + money + "__" + Safe(trades[0].Instrument) + "__" + trades[0].Direction + "__" + Safe(trades[0].Account);
+		}
+	}
+
 	public sealed class OrcaRecorderCaptureManifest
 	{
+		public List<OrcaRecorderRoundTrip> Trades { get; set; }
+		public string ResultTitle { get; set; }
+		public string PnlBasis { get; set; }
+		public bool HasIncompleteTrades { get; set; }
 		public int SchemaVersion { get; set; }
 		public string CaptureId { get; set; }
 		public DateTime StartedUtc { get; set; }
@@ -504,6 +623,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 	public sealed class OrcaTradeRecorderRuntime : IDisposable
 	{
 		private readonly object sync = new object();
+		private OrcaRecorderTradeLedger tradeLedger = new OrcaRecorderTradeLedger();
 		private readonly Dispatcher dispatcher;
 		private readonly DispatcherTimer timer;
 		private readonly SemaphoreSlim operationGate = new SemaphoreSlim(1, 1);
@@ -634,6 +754,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private async Task ArmCoreAsync()
 		{
+			lock (sync) tradeLedger = new OrcaRecorderTradeLedger();
 			SetStatus(OrcaTradeRecorderState.Starting, "Starting OBS and checking recorder readiness");
 			OrcaTradeRecorderSettings local = GetSettings();
 			try {
@@ -994,13 +1115,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (armed) {
 				try {
 					await EnsureReplayBufferRunningAsync().ConfigureAwait(false);
-					SetStatus(OrcaTradeRecorderState.Armed, "Trade saved — armed for the next position");
+					SetStatus(OrcaTradeRecorderState.Armed, "Saved " + capture.ResultTitle + " — MP4 pending Disarm; armed for the next position");
 				} catch (Exception ex) {
 					SetError("Trade footage was saved, but the replay buffer could not be rearmed", ex);
 					return;
 				}
 			}
-			OrcaTradeRecorderDiagnostics.Write("Trade capture stopped and raw footage preserved.");
+			OrcaTradeRecorderDiagnostics.Write("Trade capture stopped: " + capture.ResultTitle + "; gross P&L before commissions; raw footage preserved.");
 		}
 
 		private async Task EnsureReplayBufferRunningAsync()
@@ -1076,6 +1197,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (capture == null)
 				return;
+			if (capture.Trades == null) {
+				lock (sync) {
+					capture.Trades = tradeLedger.DrainCompleted();
+					capture.HasIncompleteTrades = tradeLedger.HasOpenTrades || capture.StartedWithOpenPosition;
+				}
+				capture.SchemaVersion = 2;
+				capture.PnlBasis = "GrossBeforeCommissions";
+				capture.ResultTitle = OrcaRecorderTradeLedger.BuildTitle(capture.Trades, capture.HasIncompleteTrades);
+			}
 			Directory.CreateDirectory(capture.BundleDirectory);
 			List<string> candidates = new List<string>();
 			if (!string.IsNullOrWhiteSpace(currentPreRollPath)) candidates.Add(currentPreRollPath);
@@ -1277,11 +1407,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 			try { accounts.AddRange(Account.All.Where(a => a != null)); } catch { }
 			foreach (Account account in accounts) {
 				if (hookedAccounts.Add(account)) {
+					// Seed before subscribing: an existing position has no observed entry fills.
+					try { lock (sync) {
+						foreach (Position existing in account.Positions) {
+							if (existing != null && existing.Instrument != null && existing.Quantity != 0 && existing.MarketPosition != MarketPosition.Flat)
+								tradeLedger.Seed(account.Name, existing.Instrument.FullName, existing.MarketPosition == MarketPosition.Long ? existing.Quantity : -existing.Quantity);
+						}
+					} } catch { lock (sync) tradeLedger.MarkUncertain(account.Name, "InitialPositionSnapshot"); }
 					account.PositionUpdate += OnPositionUpdate;
 					account.ExecutionUpdate += OnExecutionUpdate;
 				}
 			}
 			foreach (Account removed in hookedAccounts.Where(a => !accounts.Contains(a)).ToList()) {
+				lock (sync) tradeLedger.MarkUncertain(removed.Name, "AccountDisconnected");
 				try {
 					removed.PositionUpdate -= OnPositionUpdate;
 					removed.ExecutionUpdate -= OnExecutionUpdate;
@@ -1337,6 +1475,25 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private void OnExecutionUpdate(object sender, ExecutionEventArgs e)
 		{
+			try {
+				if (e != null && e.Execution != null) {
+					Execution fill = e.Execution;
+					lock (sync) {
+						if (armed && fill.Instrument != null && fill.Instrument.MasterInstrument != null) {
+							string account = fill.Account != null ? fill.Account.Name : (sender as Account) == null ? "Unknown" : ((Account)sender).Name;
+							if (e.IsSod || fill.Order == null)
+								tradeLedger.MarkUncertain(account, fill.Instrument.FullName);
+							else
+								tradeLedger.Fill(account, fill.Instrument.FullName, fill.ExecutionId,
+									fill.Order.OrderAction == OrderAction.Buy || fill.Order.OrderAction == OrderAction.BuyToCover,
+									fill.Quantity, fill.Price, fill.Instrument.MasterInstrument.PointValue, fill.Time);
+						}
+					}
+				}
+			} catch (Exception ex) {
+				lock (sync) tradeLedger.MarkUncertain("Unknown", "Unknown");
+				OrcaTradeRecorderDiagnostics.Write("Trade result unavailable: " + ex.Message);
+			}
 			RequestReconcile();
 		}
 
@@ -1707,7 +1864,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				list.Append("file '").Append(segment.Replace("'", "'\\''")).AppendLine("'");
 			File.WriteAllText(concatPath, list.ToString(), new UTF8Encoding(false));
 			string partial = Path.Combine(bundle, "trade-" + capture.CaptureId + ".partial.mp4");
-			string final = Path.Combine(bundle, "trade-" + capture.CaptureId + ".mp4");
+			string finalStem = string.IsNullOrEmpty(capture.ResultTitle) ? "trade" : capture.ResultTitle;
+			string final = Path.Combine(bundle, finalStem + "__" + capture.CaptureId + ".mp4");
 			if (File.Exists(partial)) File.Delete(partial);
 			string arguments = "-hide_banner -loglevel error -y -f concat -safe 0 -i " + Quote(concatPath) + " -c copy " + Quote(partial);
 			ProcessResult result = await RunProcessAsync(settings.FfmpegPath, arguments, TimeSpan.FromMinutes(3)).ConfigureAwait(false);
@@ -1722,7 +1880,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				throw new InvalidDataException("Final recording validation did not find both video and microphone audio streams.");
 
 			if (File.Exists(final))
-				final = Path.Combine(bundle, "trade-" + capture.CaptureId + "-" + DateTime.Now.ToString("HHmmss", CultureInfo.InvariantCulture) + ".mp4");
+				final = Path.Combine(bundle, finalStem + "__" + capture.CaptureId + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4");
 			File.Move(partial, final);
 			capture.FinalVideoPath = final;
 			capture.FinalizationStatus = "Complete";

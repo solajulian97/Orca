@@ -1,6 +1,6 @@
 # Orca Trade Recorder
 
-Last updated: 2026-08-21
+Last updated: 2026-09-05
 
 ## Purpose
 
@@ -56,6 +56,16 @@ The bundle contains raw pre-roll/recording segments and `capture.json`. The mani
 Finalization is deferred until Disarm. FFmpeg concatenates with stream copy, and ffprobe requires both video and audio streams before the temporary output is renamed to the final MP4. Raw inputs are retained. If finalization fails, the manifest records the error and no raw footage is deleted.
 
 Diagnostics are written asynchronously to a bounded, rotating `Documents/NinjaTrader 8/OrcaTradeRecorder.log`. Credentials are never included.
+
+## Round-trip results and filenames (2026-09-05)
+
+New captures contain a schema-2 execution ledger: account, full contract, direction, entry/exit times, total entry quantity, execution IDs, gross P&L, and history completeness for each completed round trip. Scaling and partial exits stay in one round trip; reversals close one and open another. Completed-cycle cash flow times the actual instrument point value equals Execution Lines' FIFO gross realized total. Commissions are not deducted and filenames explicitly say `GROSS`.
+
+At recording stop, the manifest and recorder status receive a result title. At Disarm, the finalized MP4 uses that title plus the unique capture ID, for example `WIN__GROSS-+$90.00__MNQ SEP26__LONG__Sim101__<capture-id>.mp4`. Losses and zero-cent results use `LOSS` and `BREAKEVEN`. Multiple round trips within one capture use `MULTI__2-TRADES__WIN__GROSS-+$90.00__<instruments>__<capture-id>.mp4`; each constituent result remains in the manifest. Classification rounds the aggregate gross amount to cents, away from zero at midpoint.
+
+Existing-position entries, unclosed ledger positions, missing execution IDs, reconnect/start-of-day events, or unreadable fills produce `PNL-UNKNOWN` rather than an asserted result. An uncertain session requires Disarm/re-arm to reset conservative uncertainty. Dedupe IDs are scoped by account and retained until the next arm. The recorder does not reconstruct pre-arm execution history. Existing schema-1 captures retain their legacy names; already-finalized recordings and Journal links are not renamed. New Journal imports continue to read the final path from `capture.json`.
+
+The ledger uses a short runtime lock during execution callbacks, with no filesystem, OBS, market-data subscription, chart dependency, or historical database work. It sums signed fill cash flow and splits reversal quantities; FIFO lot allocation is unnecessary for the fully closed gross total. No settings or outcome-based quality grades are introduced. Test recordings retain their existing timestamp filenames.
 
 ## Performance And Safety Boundaries
 
