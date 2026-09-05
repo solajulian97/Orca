@@ -30,6 +30,28 @@ class Program
     [STAThread]
     static void Main(string[] args)
     {
+        var app = new Application();
+        Exception workerFailure = null;
+        var worker = new System.Threading.Thread(() => {
+            try {
+                bool oldScanFailed = false;
+                try { var windows = Application.Current.Windows; }
+                catch (InvalidOperationException) { oldScanFailed = true; }
+                Check(oldScanFailed, "Old application-window scan reproduces cross-thread failure");
+                var button = new Button();
+                var owner = new Window { Content = button, ShowActivated = false, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = -20000, Width = 1, Height = 1 };
+                owner.Show();
+                var viewer = new TradeImageViewer(new TradeAttachment[0], null, "Dispatcher regression");
+                viewer.SetOwnerFrom(button);
+                Check(viewer.Owner == owner, "Viewer ownership works on secondary UI dispatcher");
+                viewer.Close(); owner.Close();
+            } catch (Exception ex) { workerFailure = ex; }
+        });
+        worker.SetApartmentState(System.Threading.ApartmentState.STA); worker.Start(); worker.Join();
+        if (workerFailure != null) throw workerFailure;
+        int?[] seconds = { null, -1, 0, 1, 59, 60, 61, 3599, 3600, 4330, 90061 };
+        string[] expected = { "-", "-", "0 seconds", "1 second", "59 seconds", "1 minute, 0 seconds", "1 minute, 1 second", "59 minutes, 59 seconds", "1 hour, 0 minutes, 0 seconds", "1 hour, 12 minutes, 10 seconds", "25 hours, 1 minute, 1 second" };
+        for (int i = 0; i < seconds.Length; i++) Check(new Trade { HoldSeconds = seconds[i] }.HoldDuration == expected[i], "Hold duration " + seconds[i]);
         string path = Path.Combine(args[0], "chart.png");
         var drawing = new DrawingVisual();
         using (var dc = drawing.RenderOpen())
