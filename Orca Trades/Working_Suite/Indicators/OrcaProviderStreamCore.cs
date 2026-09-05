@@ -8,23 +8,31 @@ namespace NinjaTrader.NinjaScript.Indicators
     public enum OrcaStreamClassification { Unknown, TickDirection, BidAsk }
     public enum OrcaStreamPhase { Unverified, Historical, HistoryConfirmed, Live, Faulted, Closed }
     public enum OrcaStreamFault { None, HistoricalGap, SourceDisconnected, InvalidEvent, IngestionFailed }
+    public enum OrcaStreamCoverageKind { Unverified, RequestedUtcRange, SourceLifecycle }
 
     public sealed class OrcaStreamCoverage
     {
         public readonly OrcaStreamPhase Phase;
         public readonly OrcaStreamFault Fault;
+        public readonly OrcaStreamCoverageKind Kind;
         public readonly DateTime HistoryFromUtc;
         public readonly DateTime HistoryToUtcExclusive;
         public readonly bool ProducerConfirmedHistory;
         public readonly bool FullConfirmedHistoryRetained;
         public readonly long HistoryEndSequenceExclusive;
+        public readonly bool HistoricalPassCompleted;
+        public readonly bool FullHistoricalPassRetained;
         internal OrcaStreamCoverage(OrcaStreamPhase phase, OrcaStreamFault fault, DateTime from, DateTime to,
-            bool confirmed, long historyEnd, long firstSequence)
+            bool confirmed, long historyEnd, long firstSequence, OrcaStreamCoverageKind kind)
         {
             Phase = phase; Fault = fault; HistoryFromUtc = from; HistoryToUtcExclusive = to;
-            ProducerConfirmedHistory = confirmed; HistoryEndSequenceExclusive = historyEnd;
-            FullConfirmedHistoryRetained = confirmed && (historyEnd == 0 || firstSequence == 0)
+            Kind = kind;
+            HistoricalPassCompleted = confirmed;
+            ProducerConfirmedHistory = confirmed && kind == OrcaStreamCoverageKind.RequestedUtcRange;
+            HistoryEndSequenceExclusive = historyEnd;
+            FullHistoricalPassRetained = confirmed && (historyEnd == 0 || firstSequence == 0)
                 && phase != OrcaStreamPhase.Closed && phase != OrcaStreamPhase.Faulted;
+            FullConfirmedHistoryRetained = FullHistoricalPassRetained && ProducerConfirmedHistory;
         }
     }
 
@@ -87,6 +95,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private bool closed;
         private OrcaStreamPhase phase;
         private OrcaStreamFault fault;
+        private OrcaStreamCoverageKind coverageKind;
         private DateTime historyFromUtc;
         private DateTime historyToUtc;
         private bool historyConfirmed;
@@ -106,6 +115,15 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
 
         public long Append(OrcaStreamTick tick)
+        { return AppendCore(tick, null); }
+
+        public long AppendHistorical(OrcaStreamTick tick)
+        { return AppendCore(tick, OrcaStreamPhase.Historical); }
+
+        public long AppendLive(OrcaStreamTick tick)
+        { return AppendCore(tick, OrcaStreamPhase.Live); }
+
+        private long AppendCore(OrcaStreamTick tick, OrcaStreamPhase? expectedPhase)
         {
             // Reject default(struct), which bypasses the event constructor.
             if (tick.Volume <= 0 || tick.Time == DateTime.MinValue)
@@ -113,12 +131,18 @@ namespace NinjaTrader.NinjaScript.Indicators
             lock (sync)
             {
                 if (closed) throw new ObjectDisposedException("OrcaProviderStreamBuffer");
+                if (coverageKind == OrcaStreamCoverageKind.SourceLifecycle && !expectedPhase.HasValue)
+                    throw new InvalidOperationException("Lifecycle ingestion requires an explicit historical/live lane.");
+                if (expectedPhase.HasValue && phase != expectedPhase.Value)
+                    throw new InvalidOperationException("Callback lane does not match the source lifecycle.");
                 if (phase == OrcaStreamPhase.Faulted || phase == OrcaStreamPhase.HistoryConfirmed)
                     throw new InvalidOperationException("Stream is not accepting events in this phase.");
-                if (phase == OrcaStreamPhase.Historical && (tick.Time.Kind != DateTimeKind.Utc
-                    || tick.Time < historyFromUtc || tick.Time >= historyToUtc))
+                if ((phase == OrcaStreamPhase.Historical || phase == OrcaStreamPhase.Live) && tick.Time.Kind != DateTimeKind.Utc)
+                    throw new ArgumentException("Verified ingestion lanes require UTC event timestamps.");
+                if (coverageKind == OrcaStreamCoverageKind.RequestedUtcRange && phase == OrcaStreamPhase.Historical
+                    && (tick.Time < historyFromUtc || tick.Time >= historyToUtc))
                     throw new ArgumentException("Historical event is outside the declared UTC half-open interval.");
-                if (phase == OrcaStreamPhase.Live && (tick.Time.Kind != DateTimeKind.Utc || tick.Time < historyToUtc))
+                if (coverageKind == OrcaStreamCoverageKind.RequestedUtcRange && phase == OrcaStreamPhase.Live && tick.Time < historyToUtc)
                     throw new ArgumentException("Live event precedes the declared handoff boundary.");
                 if (nextSequence == long.MaxValue) throw new InvalidOperationException("Sequence exhausted; replace generation.");
                 long sequence = nextSequence;
@@ -139,6 +163,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 RequirePhase(OrcaStreamPhase.Unverified);
                 if (nextSequence != 0) throw new InvalidOperationException("Cannot certify preexisting unverified events.");
                 historyFromUtc = fromUtc; historyToUtc = toUtcExclusive;
+                coverageKind = OrcaStreamCoverageKind.RequestedUtcRange;
                 phase = OrcaStreamPhase.Historical;
             }
         }
@@ -150,6 +175,8 @@ namespace NinjaTrader.NinjaScript.Indicators
             lock (sync)
             {
                 RequirePhase(OrcaStreamPhase.Historical);
+                if (coverageKind != OrcaStreamCoverageKind.RequestedUtcRange)
+                    throw new InvalidOperationException("Lifecycle completion cannot certify a clock-time range.");
                 historyEndSequence = nextSequence; historyConfirmed = true;
                 phase = OrcaStreamPhase.HistoryConfirmed;
             }
@@ -162,6 +189,48 @@ namespace NinjaTrader.NinjaScript.Indicators
                 RequirePhase(OrcaStreamPhase.HistoryConfirmed);
                 phase = OrcaStreamPhase.Live;
             }
+        }
+
+        public void BeginHistoricalPass()
+        {
+            lock (sync)
+            {
+                RequireEmptyUnverified();
+                coverageKind = OrcaStreamCoverageKind.SourceLifecycle;
+                phase = OrcaStreamPhase.Historical;
+            }
+        }
+
+        // Adapter must serialize its callbacks and call this only after its historical
+        // lane is drained. No time cutoff, sorting, boundary suppression or cache merge.
+        public void CompleteHistoricalPassAndBeginLive()
+        {
+            lock (sync)
+            {
+                RequirePhase(OrcaStreamPhase.Historical);
+                if (coverageKind != OrcaStreamCoverageKind.SourceLifecycle)
+                    throw new InvalidOperationException("Wrong handoff contract.");
+                historyEndSequence = nextSequence;
+                historyConfirmed = true;
+                phase = OrcaStreamPhase.Live;
+            }
+        }
+
+        public void BeginLiveOnly()
+        {
+            lock (sync)
+            {
+                RequireEmptyUnverified();
+                coverageKind = OrcaStreamCoverageKind.SourceLifecycle;
+                phase = OrcaStreamPhase.Live;
+                // No historical pass or range has been confirmed.
+            }
+        }
+
+        private void RequireEmptyUnverified()
+        {
+            RequirePhase(OrcaStreamPhase.Unverified);
+            if (nextSequence != 0) throw new InvalidOperationException("Cannot certify preexisting unverified events.");
         }
 
         public void MarkFault(OrcaStreamFault reason)
@@ -189,7 +258,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 var first = new OrcaStreamCursor(generation, firstSequence);
                 var coverage = new OrcaStreamCoverage(phase, fault, historyFromUtc, historyToUtc,
-                    historyConfirmed, historyEndSequence, firstSequence);
+                    historyConfirmed, historyEndSequence, firstSequence, coverageKind);
                 OrcaStreamReadStatus status = closed ? OrcaStreamReadStatus.Closed
                     : cursor.Generation != generation ? OrcaStreamReadStatus.WrongGeneration
                     : phase == OrcaStreamPhase.Faulted ? OrcaStreamReadStatus.SourceFaulted

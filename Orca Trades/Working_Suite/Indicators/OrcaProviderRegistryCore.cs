@@ -85,6 +85,11 @@ namespace NinjaTrader.NinjaScript.Indicators
             OrcaProviderStreamKey key, OrcaProviderStreamBuffer buffer)
         { this.registry = registry; Key = key; Buffer = buffer; }
         public long Append(OrcaStreamTick tick) { return Buffer.Append(tick); }
+        public long AppendHistorical(OrcaStreamTick tick) { return Buffer.AppendHistorical(tick); }
+        public long AppendLive(OrcaStreamTick tick) { return Buffer.AppendLive(tick); }
+        public void BeginHistoricalPass() { Buffer.BeginHistoricalPass(); }
+        public void CompleteHistoricalPassAndBeginLive() { Buffer.CompleteHistoricalPassAndBeginLive(); }
+        public void BeginLiveOnly() { Buffer.BeginLiveOnly(); }
         public void BeginHistory(DateTime fromUtc, DateTime toUtcExclusive) { Buffer.BeginHistory(fromUtc, toUtcExclusive); }
         public void ConfirmHistory() { Buffer.ConfirmHistory(); }
         public void BeginLive() { Buffer.BeginLive(); }

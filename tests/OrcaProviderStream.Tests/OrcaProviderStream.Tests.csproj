@@ -9,5 +9,6 @@
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderStreamCore.cs" Link="OrcaProviderStreamCore.cs" />
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderRegistryCore.cs" Link="OrcaProviderRegistryCore.cs" />
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderReadBudgetCore.cs" Link="OrcaProviderReadBudgetCore.cs" />
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderIngestionCore.cs" Link="OrcaProviderIngestionCore.cs" />
   </ItemGroup>
 </Project>

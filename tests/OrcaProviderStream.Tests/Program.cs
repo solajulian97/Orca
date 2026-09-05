@@ -60,7 +60,143 @@ class Program
         TestRegistry();
         TestCoverage();
         TestReadBudgets();
+        TestLifecycleHandoff();
+        TestIngestion();
         Console.WriteLine("PASS: " + checks + " checks. Storage/ownership/coverage contracts only; no NinjaTrader runtime validation.");
+    }
+
+    static void TestIngestion()
+    {
+        using (var registry = new OrcaProviderStreamRegistry(1, 16, 16))
+        {
+            OrcaProviderPublisherLease owner;
+            registry.TryAcquire(Key(), out owner);
+            var adapter = new OrcaProviderIngestion(owner, OrcaProviderClassificationPolicy.TradeQuoteThenTickDirection, true);
+            OrcaProviderStreamReader reader;
+            registry.TryOpenReader(Key(), out reader);
+            using (reader)
+            {
+                DateTime time = Tick(1).Time;
+                adapter.OnTrade(true, time, 100, 2, 99, 100, true, false);
+                adapter.OnTrade(true, time, 99, 3, 99, 100, true, false);
+                adapter.CompleteHistoricalPassAndBeginLive();
+                // The same quote/price/time as the last historical callback remains a distinct trade.
+                adapter.OnTrade(false, time, 99, 3, 99, 100, true, false);
+                Reject(() => adapter.OnTrade(true, time, 500, 1, 0, 0, false, true), "rejected lane does not change classifier");
+                adapter.OnTrade(false, time, 99, 1, double.NaN, double.NaN, false, false);
+                adapter.OnTrade(false, time, 99, 1, 99, 99, true, true);
+                adapter.OnTrade(false, time, 100, 1, 101, 100, true, false);
+                Reject(() => adapter.OnTrade(false, time, 500, 0, 0, 0, false, true), "invalid volume leaves classifier unchanged");
+                adapter.OnTrade(false, time, 100, 1, 0, 0, false, false);
+                using (var batch = reader.Read(reader.FirstAvailable, 16))
+                {
+                    Check(batch.Events.Count == 7 && batch.Coverage.HistoryEndSequenceExclusive == 2, "adapter lane boundary and rejected-event accounting");
+                    Check(batch.Events[0].SignedVolume == 2 && batch.Events[1].SignedVolume == -3
+                        && batch.Events[2].SignedVolume == -3, "trade-time quote classification and same-time duplicate preservation");
+                    Check(batch.Events[3].SignedVolume == -1 && batch.Events[3].Classification == OrcaStreamClassification.TickDirection,
+                        "equal-price fallback inherits direction without claiming bidask evidence");
+                    Check(batch.Events[4].SignedVolume == 0 && batch.Events[4].Classification == OrcaStreamClassification.Unknown,
+                        "explicit session reset and locked quotes yield unknown first trade");
+                    Check(batch.Events[5].SignedVolume == 1 && batch.Events[5].Classification == OrcaStreamClassification.TickDirection,
+                        "crossed quotes cannot claim bidask classification");
+                    Check(batch.Events[6].SignedVolume == 1, "failed event did not mutate classifier");
+                }
+                adapter.MarkFault(OrcaStreamFault.SourceDisconnected);
+                Reject(() => adapter.OnTrade(false, time, 100, 1, 99, 100, true, false), "adapter cannot publish after fault");
+            }
+        }
+        using (var registry = new OrcaProviderStreamRegistry(1, 4, 4))
+        {
+            OrcaProviderPublisherLease owner;
+            registry.TryAcquire(Key(policy: "tickdirection:v1"), out owner);
+            Reject(() => new OrcaProviderIngestion(owner, OrcaProviderClassificationPolicy.TradeQuoteThenTickDirection, false),
+                "adapter cannot publish under an incompatible policy identity");
+            var adapter = new OrcaProviderIngestion(owner, OrcaProviderClassificationPolicy.TickDirection, false);
+            adapter.OnTrade(false, Tick(1).Time, 100, 1, 99, 100, true, false);
+            adapter.OnTrade(false, Tick(1).Time, 99, 1, 98, 99, true, false);
+            OrcaProviderStreamReader reader;
+            registry.TryOpenReader(Key(policy: "tickdirection:v1"), out reader);
+            using (reader)
+            using (var batch = reader.Read(reader.FirstAvailable, 4))
+            {
+                Check(batch.Events[0].Classification == OrcaStreamClassification.Unknown
+                    && batch.Events[1].SignedVolume == -1, "tick-only policy ignores supplied quotes");
+                Check(!batch.Coverage.HistoricalPassCompleted, "live-only adapter does not claim history");
+            }
+        }
+    }
+
+    static void TestLifecycleHandoff()
+    {
+        using (var registry = new OrcaProviderStreamRegistry(1, 4, 4))
+        {
+            OrcaProviderPublisherLease owner;
+            registry.TryAcquire(Key(), out owner);
+            OrcaProviderStreamReader reader;
+            registry.TryOpenReader(Key(), out reader);
+            using (reader)
+            {
+                var cursor = reader.FirstAvailable;
+                owner.BeginHistoricalPass();
+                Reject(() => owner.Append(Tick(1)), "lifecycle generic append rejected");
+                Reject(() => owner.AppendLive(Tick(1)), "early live lane rejected");
+                owner.AppendHistorical(Tick(1)); owner.AppendHistorical(Tick(1));
+                Reject(() => owner.ConfirmHistory(), "pass cannot certify arbitrary interval");
+                owner.CompleteHistoricalPassAndBeginLive();
+                owner.AppendLive(Tick(1)); owner.AppendLive(Tick(1));
+                using (var batch = reader.Read(cursor, 4))
+                {
+                    Check(batch.Events.Count == 4 && batch.Coverage.HistoryEndSequenceExclusive == 2,
+                        "identical historical/live ticks preserved across sequence boundary");
+                    Check(batch.Coverage.Kind == OrcaStreamCoverageKind.SourceLifecycle
+                        && batch.Coverage.HistoricalPassCompleted && batch.Coverage.FullHistoricalPassRetained,
+                        "source pass completion explicit");
+                    Check(!batch.Coverage.ProducerConfirmedHistory && !batch.Coverage.FullConfirmedHistoryRetained
+                        && batch.Coverage.HistoryToUtcExclusive == DateTime.MinValue,
+                        "source pass does not claim complete UTC interval");
+                }
+                Reject(() => owner.AppendHistorical(Tick(1)), "late historical callback cannot become live");
+                Reject(() => owner.CompleteHistoricalPassAndBeginLive(), "duplicate handoff rejected");
+                // Clock regressions do not reorder or erase source-sequenced events.
+                var earlier = new OrcaStreamTick(Tick(1).Time.AddSeconds(-1), 99, 1, 0, OrcaStreamClassification.Unknown);
+                owner.AppendLive(earlier);
+                using (var batch = reader.Read(reader.FirstAvailable, 4))
+                    Check(batch.Events[3].Time == earlier.Time && !batch.Coverage.FullHistoricalPassRetained,
+                        "arrival sequence preserved and historical eviction visible");
+                owner.MarkFault(OrcaStreamFault.SourceDisconnected);
+                Reject(() => owner.AppendLive(Tick(1)), "fault blocks lifecycle lane");
+            }
+        }
+        using (var buffer = new OrcaProviderStreamBuffer(2, 2))
+        {
+            buffer.BeginLiveOnly(); buffer.AppendLive(Tick(1));
+            var batch = buffer.Read(buffer.FirstAvailable, 2);
+            Check(batch.Coverage.Phase == OrcaStreamPhase.Live && !batch.Coverage.HistoricalPassCompleted
+                && batch.Coverage.HistoryEndSequenceExclusive == -1, "live-only never manufactures empty history confirmation");
+            Reject(() => buffer.AppendHistorical(Tick(1)), "live-only rejects history");
+            Reject(() => buffer.BeginHistoricalPass(), "cannot backfill an existing live generation in place");
+        }
+        using (var buffer = new OrcaProviderStreamBuffer(2, 2))
+        {
+            buffer.BeginHistoricalPass(); buffer.CompleteHistoricalPassAndBeginLive();
+            var batch = buffer.Read(buffer.FirstAvailable, 2);
+            Check(batch.Coverage.HistoricalPassCompleted && batch.Coverage.HistoryEndSequenceExclusive == 0
+                && !batch.Coverage.ProducerConfirmedHistory, "empty completed callback pass is not interval proof");
+        }
+        for (int run = 0; run < 20; run++)
+        {
+            using (var buffer = new OrcaProviderStreamBuffer(2, 2))
+            {
+                buffer.BeginHistoricalPass();
+                int accepted = 0;
+                Parallel.Invoke(() => { try { buffer.AppendHistorical(Tick(1)); accepted = 1; } catch (InvalidOperationException) { } },
+                    () => buffer.CompleteHistoricalPassAndBeginLive());
+                buffer.AppendLive(Tick(1));
+                var batch = buffer.Read(buffer.FirstAvailable, 2);
+                Check(batch.Coverage.HistoryEndSequenceExclusive == accepted && batch.Events.Count == accepted + 1,
+                    "racing historical append either precedes boundary or is explicitly rejected");
+            }
+        }
     }
 
     static void TestReadBudgets()
