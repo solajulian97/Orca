@@ -60,6 +60,24 @@ class Program
                 using(var exclusive=new FileStream(imagePath,FileMode.Open,FileAccess.ReadWrite,FileShare.None)) {}
                 var moved=imagePath+".renamed";File.Move(imagePath,moved);File.Move(moved,imagePath);
                 if(thumbnail.PixelWidth!=256)throw new Exception("Thumbnail size unbounded");
+                var performance=new OrcaJournal.UI.Views.TagPerformanceView(db);
+                var performanceWindow=new Window{Content=performance,Width=1200,Height=720,Left=-20000,Top=-20000,ShowActivated=false,ShowInTaskbar=false};performanceWindow.Show();performance.UpdateLayout();
+                var checks=Find<CheckBox>(performance).ToList();
+                checks.Single(x=>x.Tag as string=="Risked proper amount").IsChecked=true;
+                checks.Single(x=>x.Tag as string=="Took proper partials").IsChecked=true;
+                var performanceSummary=Find<TextBlock>(performance).Single(x=>x.Name=="TagSummary");
+                if(!performanceSummary.Text.StartsWith("1 / 1"))throw new Exception("Tag intersection UI failed");
+                Find<ComboBox>(performance).Single(x=>x.Name=="TagMatchMode").SelectedIndex=1;
+                if(!performanceSummary.Text.StartsWith("1 / 1"))throw new Exception("Tag union duplicated trade");
+                Find<DatePicker>(performance).Single(x=>x.Name=="TagFrom").SelectedDate=new DateTime(2027,1,1);
+                if(!performanceSummary.Text.StartsWith("0 / 0"))throw new Exception("Tag date scope failed");
+                Find<DatePicker>(performance).Single(x=>x.Name=="TagFrom").SelectedDate=null;
+                performance.Reload();performance.UpdateLayout();
+                if(Find<CheckBox>(performance).Count(x=>x.IsChecked==true)!=2)throw new Exception("Refresh lost selected tags");
+                var tagFrame=new System.Windows.Threading.DispatcherFrame();System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle,new Action(()=>tagFrame.Continue=false));System.Windows.Threading.Dispatcher.PushFrame(tagFrame);
+                var tagBitmap=new RenderTargetBitmap(1200,720,96,96,PixelFormats.Pbgra32);tagBitmap.Render(performance);var tagEncoder=new PngBitmapEncoder();tagEncoder.Frames.Add(BitmapFrame.Create(tagBitmap));using(var file=File.Create(Path.Combine(args[0],"tag-performance.png")))tagEncoder.Save(file);
+                performanceWindow.Close();
+                Console.WriteLine("PASS: tag-performance UI intersection, union, dates and refresh selections.");
                 Console.WriteLine("PASS: actual WPF thumbnail permits exclusive reopen and rename while bitmap remains alive.");
                 Console.WriteLine("PASS: review editor loads theme, edits notes/tags/grade, saves, refreshes, and shows save feedback.");
             }
