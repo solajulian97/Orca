@@ -35,3 +35,9 @@ Actual compiled WPF harness verifies matching-trade review screenshot and video 
 ## Stage and next steps
 Not deployed: NinjaTrader observed running PID48420. Stage .codex-backups/journal-runtime-navigation-stage/OrcaJournal.dll SHA256 B5BB2011FC8F477F793BC9BD20D3DAA04F1FA6D60F60E6CEC409662C57B91D54. Expected current live61E56B3AE09312E2B358EFCAD54AE1C4420897684672F4CBB19B4E32765E3D2C.
 After Julian closes: guarded metadata/hash checks, backup DLL/database/sidecars/TSV, copy only staged DLL and verify live parity. Then validate calendar click account/day navigation, both screenshot and real video open from tag matching reviews, first and subsequent SIM round-trip excursions, and any specific rejection reason. First-cycle partial figures may omit unobserved prices and must stay qualified. Initial account-flat snapshot reconciliation remains future work; no claim that complete-history identity has been solved. No Full_Suite promotion eligibility.
+
+## Deployment completed — 2026-09-06 19:57 local
+Julian confirmed closure. NinjaTrader absence verified before backup, immediately before copy and after copy. Source/stage hash and expected prior live baseline matched; SQLite reference2.0.2.0 verified. Only OrcaJournal.dll deployed.
+Live SHA256 B5BB2011FC8F477F793BC9BD20D3DAA04F1FA6D60F60E6CEC409662C57B91D54.
+Backup: C:\Users\julia\Documents\New project\.codex-backups\journal-runtime-navigation-deploy-20260906-195720. Prior DLL and available database/sidecars/annotation TSV copied and hash-verified; live data hashes unchanged. Media untouched. Evidence saved in deployment.json.
+Deployment complete. Restart/load and manual validation of calendar navigation, review media and revised partial-excursion handling remain pending. No Full_Suite promotion.
