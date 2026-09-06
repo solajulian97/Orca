@@ -20,9 +20,13 @@ static class ReviewChecks
             var t = new Trade { TradeKey="review", Account="Sim", Instrument="MES", InstrumentFullName="MES SEP26", Direction="Long", EntryTime=DateTime.Today, ExitTime=DateTime.Today.AddMinutes(1), Quantity=1, SessionDate="2026-09-05", Notes="original", SetupGrade="B" }; trades.Insert(t);
             var tag = tags.GetOrCreateTag("chart tag", "#123456"); tags.ApplyTagToTrade(t.Id, tag.Id, false, "execution_lines");
             var attachments = new AttachmentRepository(db); attachments.Insert(new TradeAttachment { TradeId=t.Id,FilePath="keep.png",Kind="image",Source="journal",CreatedAt=DateTime.Now });
+            check(reviews.TagOptions("").Any(x=>x.Name=="chart tag" && !x.Selected), "Chart tag library offered without applying every tag");
+            check(reviews.TagOptions("").Any(x=>x.Name=="Risked proper amount" && x.Category==ReviewTagOption.Management), "Management suggestions grouped");
+            check(ReviewTagOption.DefaultCategory("FVG")==ReviewTagOption.Analysis, "Known chart analysis category");
             var baseline = reviews.Read(t.Id);
             check(baseline.Notes=="original" && baseline.Tags=="chart tag" && baseline.Revision==0, "Import seed");
-            var saved = reviews.Save(baseline, "Journal note", "A+", "setup\nSetup\n  learning  ");
+            var saved = reviews.Save(baseline, "Journal note", "A+", "setup\nSetup\n  learning  ", false, new System.Collections.Generic.Dictionary<string,string>{{"learning",ReviewTagOption.Management}});
+            check(reviews.TagOptions(saved.Tags).Single(x=>x.Name=="learning").Category==ReviewTagOption.Management,"Tag group persists");
             check(saved.Revision==1 && saved.Tags=="learning\nsetup", "Normalized tags and version");
             check(trades.GetById(t.Id).Notes=="original", "Raw imported note unchanged");
             check(trades.GetAll().Single().Notes=="Journal note", "Effective list uses Journal note");

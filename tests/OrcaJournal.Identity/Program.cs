@@ -107,7 +107,7 @@ class Program
         using (var db = new DatabaseManager(dbPath))
         {
             db.Initialize(); db.Initialize();
-            Check(Convert.ToInt32(Scalar(db,"SELECT version FROM schema_version")) == 7, "schema5 to7 idempotent migration");
+            Check(Convert.ToInt32(Scalar(db,"SELECT version FROM schema_version")) == 8, "schema5 to8 idempotent migration");
             Check((string)Scalar(db,"SELECT notes FROM trades WHERE id=1") == "old note" && (string)Scalar(db,"SELECT setup_grade FROM trades WHERE id=1") == "A", "legacy notes grade retained");
             Check(Convert.ToInt32(Scalar(db,"SELECT COUNT(*) FROM trade_tags")) == 1 && Convert.ToInt32(Scalar(db,"SELECT COUNT(*) FROM trade_attachments")) == 1, "tags images retained");
             Check(Convert.ToInt32(Scalar(db,"SELECT COUNT(*) FROM execution_line_hidden_tags")) == 1, "hidden library retained");
