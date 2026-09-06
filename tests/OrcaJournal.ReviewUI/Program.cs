@@ -16,9 +16,9 @@ class Program
     }
     [STAThread] static int Main(string[] args) {
         try {
-            var app=new Application();
+            var app=new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
             using(var db=new DatabaseManager(Path.Combine(args[0],"fixture.db"))) {
-                db.Initialize();var repo=new TradeRepository(db);var t=new Trade{TradeKey="ui",Account="SIM",Instrument="MES",InstrumentFullName="MES SEP26",Direction="Long",SessionDate="2026-09-05",EntryTime=DateTime.Today,ExitTime=DateTime.Today.AddMinutes(1),Quantity=1,Notes="Waited for a pullback. Review the entry timing.",SetupGrade="B"};repo.Insert(t);
+                db.Initialize();var repo=new TradeRepository(db);var t=new Trade{TradeKey="ui",Account="SIM",Instrument="MES",InstrumentFullName="MES SEP26",Direction="Long",SessionDate="2026-09-05",EntryTime=DateTime.Today,ExitTime=DateTime.Today.AddMinutes(1),Quantity=1,PnlDollars=275,Notes="Waited for a pullback. Review the entry timing.",SetupGrade="B"};repo.Insert(t);
                 var tagRepo=new TagRepository(db);
                 foreach(var name in new[]{"FVG","iFVG","MGI","node","OB","Passive Player","RB","Structure","Sweep","TAPER"})tagRepo.GetOrCreateTag(name,"#4285F4");
                 int saves=0;var window=new TradeReviewWindow(new TradeReviewRepository(db),t.Id,"SIM · MES · Long",()=>saves++);
@@ -26,10 +26,12 @@ class Program
                 var root=(FrameworkElement)window.Content; root.Measure(new Size(680,740));root.Arrange(new Rect(0,0,680,740));root.UpdateLayout();
                 var boxes=Find<TextBox>(root).Where(x=>!x.IsReadOnly && x.AcceptsReturn).ToList();
                 if(boxes.Count!=1)throw new Exception("Expected notes editor and checkbox tags");
+                Find<TextBox>(root).Single(x=>x.Name=="PlannedRisk").Text="200";
                 boxes[0].Text="Waited for confirmation; next time review stop placement before entering.";Find<CheckBox>(root).Single(x=>x.Content as string=="Risked proper amount").IsChecked=true; Find<CheckBox>(root).Single(x=>x.Content as string=="Took proper partials").IsChecked=true;
                 Find<ComboBox>(root).First().SelectedItem="A-";
                 if(!Find<TextBlock>(root).Any(x=>x.Text.StartsWith("Unsaved changes")))throw new Exception("Missing dirty feedback");
                 Find<Button>(root).Single(x=>x.Content as string=="Save review").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));root.UpdateLayout();
+                if(new TradeReviewRepository(db).Read(t.Id).PlannedRisk!=200)throw new Exception("Risk save failed");
                 if(saves!=1 || new TradeReviewRepository(db).Read(t.Id).Grade!="A-")throw new Exception("Save integration failed");
                 if(!Find<TextBlock>(root).Any(x=>x.Text=="Saved."))throw new Exception("Missing saved feedback");
                 var frame=new System.Windows.Threading.DispatcherFrame();
@@ -44,7 +46,14 @@ class Program
                 if(((FrameworkElement)((FrameworkElement)keep.Parent).Parent).Visibility!=Visibility.Visible)throw new Exception("Conflict choices not exposed");
                 keep.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));root.UpdateLayout();
                 if(saves!=2 || new TradeReviewRepository(db).Read(t.Id).Notes!="My unsaved draft" || repo.GetById(t.Id).Notes!="A later chart edit")throw new Exception("Explicit resolution failed");
-                window.Close();Console.WriteLine("PASS: review editor loads theme, edits notes/tags/grade, saves, refreshes, and shows save feedback.");
+                window.Close();
+                var mediaRepo=new AttachmentRepository(db);var attachment=new TradeAttachment{TradeId=t.Id,FilePath=Path.Combine(args[0],"example.png"),Kind="image",CreatedAt=DateTime.Now};mediaRepo.Insert(attachment);
+                var mediaWindow=new TradeMediaWindow(mediaRepo,t.Id,()=>{});
+                mediaWindow.WindowStartupLocation=WindowStartupLocation.Manual;mediaWindow.Left=-20000;mediaWindow.Top=-20000;mediaWindow.ShowActivated=false;mediaWindow.ShowInTaskbar=false;mediaWindow.Show();
+                var mediaRoot=(FrameworkElement)mediaWindow.Content;mediaRoot.UpdateLayout();
+                Find<TextBox>(mediaRoot).Single().Text="Entry setup";mediaWindow.Close();
+                if(mediaRepo.GetForTrade(t.Id).Single().Caption!="Entry setup")throw new Exception("Caption not saved on close");
+                Console.WriteLine("PASS: review editor loads theme, edits notes/tags/grade, saves, refreshes, and shows save feedback.");
             }
             return 0;
         } catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
