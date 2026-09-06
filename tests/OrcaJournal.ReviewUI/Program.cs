@@ -53,6 +53,14 @@ class Program
                 var mediaRoot=(FrameworkElement)mediaWindow.Content;mediaRoot.UpdateLayout();
                 Find<TextBox>(mediaRoot).Single().Text="Entry setup";mediaWindow.Close();
                 if(mediaRepo.GetForTrade(t.Id).Single().Caption!="Entry setup")throw new Exception("Caption not saved on close");
+                var imagePath=Path.Combine(args[0],"review.png");
+                var imageMedia=new TradeAttachment {FilePath=imagePath,Kind="image",Caption="Entry setup"};
+                var thumbnail=(BitmapSource)new OrcaJournal.UI.Controls.AttachmentThumbnailConverter().Convert(imageMedia,typeof(BitmapSource),null,System.Globalization.CultureInfo.InvariantCulture);
+                if(thumbnail==null || !thumbnail.IsFrozen)throw new Exception("Thumbnail decode failed");
+                using(var exclusive=new FileStream(imagePath,FileMode.Open,FileAccess.ReadWrite,FileShare.None)) {}
+                var moved=imagePath+".renamed";File.Move(imagePath,moved);File.Move(moved,imagePath);
+                if(thumbnail.PixelWidth!=256)throw new Exception("Thumbnail size unbounded");
+                Console.WriteLine("PASS: actual WPF thumbnail permits exclusive reopen and rename while bitmap remains alive.");
                 Console.WriteLine("PASS: review editor loads theme, edits notes/tags/grade, saves, refreshes, and shows save feedback.");
             }
             return 0;
