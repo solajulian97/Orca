@@ -60,6 +60,21 @@ class Program
                 using(var exclusive=new FileStream(imagePath,FileMode.Open,FileAccess.ReadWrite,FileShare.None)) {}
                 var moved=imagePath+".renamed";File.Move(imagePath,moved);File.Move(moved,imagePath);
                 if(thumbnail.PixelWidth!=256)throw new Exception("Thumbnail size unbounded");
+                mediaRepo.Insert(new TradeAttachment{TradeId=t.Id,FilePath=imagePath,Kind="image",Caption="Chart context",CreatedAt=DateTime.Now});
+                mediaRepo.Insert(new TradeAttachment{TradeId=t.Id,FilePath=Path.Combine(args[0],"recording.mp4"),Kind="video",Caption="Recorded trade",CreatedAt=DateTime.Now});
+                var mediaReview=new TradeReviewWindow(new TradeReviewRepository(db),t.Id,"test",()=>{});
+                mediaReview.Left=-20000;mediaReview.Top=-20000;mediaReview.ShowActivated=false;mediaReview.ShowInTaskbar=false;mediaReview.Show();mediaReview.UpdateLayout();
+                if(!Find<Button>(mediaReview).Any(x=>x.Content as string=="Open screenshot"))throw new Exception("Review missing screenshot action");
+                if(!Find<TextBlock>(mediaReview).Any(x=>x.Text=="Entry setup"))throw new Exception("Review missing media title");
+                if(!Find<Button>(mediaReview).Any(x=>x.Content as string=="Play video"))throw new Exception("Review missing video action");
+                if(!Find<Image>(mediaReview).Any(x=>x.Source!=null))throw new Exception("Review thumbnail failed");
+                ((ScrollViewer)mediaReview.Content).ScrollToBottom();mediaReview.UpdateLayout();
+                var mediaBitmap=new RenderTargetBitmap(700,780,96,96,PixelFormats.Pbgra32);mediaBitmap.Render((Visual)mediaReview.Content);var mediaEncoder=new PngBitmapEncoder();mediaEncoder.Frames.Add(BitmapFrame.Create(mediaBitmap));using(var file=File.Create(Path.Combine(args[0],"review-media.png")))mediaEncoder.Save(file);
+                mediaReview.Close();
+                var dayVm=new OrcaJournal.UI.ViewModels.TradesViewModel();dayVm.Load(repo.GetAll(),tagRepo,mediaRepo,new[]{"All Accounts","SIM"});
+                dayVm.FilterDirection="Short";dayVm.FilterInstrument="NQ";dayVm.ShowDay(new DateTime(2026,9,5),"SIM");
+                if(dayVm.Trades.Count!=1 || dayVm.SelectedTrade.Id!=t.Id || dayVm.FilterInstrument!="All" || dayVm.FilterDirection!="All")throw new Exception("Day navigation scope failed");
+                dayVm.ShowDay(new DateTime(2000,1,1),"SIM");if(dayVm.Trades.Count!=0 || dayVm.SelectedTrade!=null)throw new Exception("Empty day retained selected trade");
                 var performance=new OrcaJournal.UI.Views.TagPerformanceView(db);
                 var performanceWindow=new Window{Content=performance,Width=1200,Height=720,Left=-20000,Top=-20000,ShowActivated=false,ShowInTaskbar=false};performanceWindow.Show();performance.UpdateLayout();
                 var checks=Find<CheckBox>(performance).ToList();

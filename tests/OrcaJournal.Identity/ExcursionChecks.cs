@@ -19,7 +19,7 @@ static class ExcursionChecks
   Check(x.Mae==-100 && x.Mfe==200,"scale-in and partial exit extrema");Check(x.Samples==3,"only market observations counted");
   var b=new TradeBuilder();var trades=new List<Trade>();b.TradeCompleted+=trades.Add;
   b.OnFill(Fill("warm1",1,100,1,0),"A");Price(b,110,1);b.OnFill(Fill("warm2",-1,105,0,2),"A");
-  Check(!trades[0].Mfe.HasValue,"initial unverified flat boundary remains unavailable");
+  Check(trades[0].Mfe==50 && trades[0].ExcursionQuality.StartsWith("Partial") && trades[0].MfeDisplay.StartsWith("Partial"),"unverified initial boundary preserves explicitly partial observations");
   b.OnFill(Fill("e1",2,100,2,3),"A");Price(b,90,4);b.OnFill(Fill("e2",1,90,3,5),"A");Price(b,110,6);b.OnFill(Fill("e3",-2,110,1,7),"A");Price(b,95,8);b.OnFill(Fill("e4",-2,95,-1,9),"A");
   Check(trades.Count==2 && trades[1].Mae==-100 && trades[1].Mfe==200,"builder full round trip");Check(trades[1].PnlDollars==125,"partial realized plus open equals gross result");
   Price(b,90,10);b.OnFill(Fill("e5",1,92,0,11),"A");Check(trades[2].Mfe==25 && trades[2].Mae==0,"reversal starts fresh short excursion");
@@ -38,6 +38,9 @@ static class ExcursionChecks
   instrument.MarketData.Deliver(new MarketDataEventArgs{Instrument=instrument,MarketDataType=MarketDataType.Last,Price=110,Time=t.AddSeconds(4)});
   account.Deliver(Fill("cap5",-1,105,0,5));Check(captured[1].Mfe==50&&captured[1].Mae==0,"Last callback reaches builder; bid ignored");
   account.Deliver(Fill("cap6",1,100,1,6));cap.DetachAll();Check(instrument.MarketData.Subscribers==0,"shutdown releases feed");
+  var mid=new TradeBuilder();Trade midTrade=null;mid.TradeCompleted+=value=>midTrade=value;
+  mid.OnFill(Fill("mid1",1,100,4,0),"A");Price(mid,110,1);mid.OnFill(Fill("mid2",-1,105,3,2),"A");
+  Check(midTrade!=null && !midTrade.Mfe.HasValue,"startup mid-position does not publish partial P&L for a false full cycle");
   var c2=new TradeCapture(new TradeBuilder());var a2=new Account{Name="A2"};var a3=new Account{Name="A3"};c2.Attach(a2);c2.Attach(a3);
   a2.Deliver(Fill("detach1",1,100,1,0));a3.Deliver(Fill("detach2",1,200,1,0));Check(instrument.MarketData.Subscribers==1,"accounts share one contract subscription");
   c2.Detach(a2);Check(instrument.MarketData.Subscribers==1,"other account retains feed");c2.Detach(a3);Check(instrument.MarketData.Subscribers==0,"last account detach releases feed");c2.DetachAll();
