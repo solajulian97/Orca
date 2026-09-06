@@ -37,3 +37,9 @@ Manual validation pending: enter 200 against 275 and see 1.4R before/after savin
 3. Transport an additive versioned measurement payload with shared trade UID; accept only unambiguous compatible matches. Never infer excursions from entry/exit prices alone or fill old trades with zero.
 4. Add a quality-aware Journal display and importer tests before scatterplots/tag-based excursion reports. Historical reconstruction remains explicitly estimated unless complete underlying evidence exists.
 5. Automatic planned risk needs an immutable order-time snapshot tied to executions/UID, with clear treatment of resized orders/stops, partial fills and reversals. Manual risk stays available and authoritative until that contract is validated.
+
+## Deployment completed — 2026-09-06 00:55 local
+Julian confirmed closure. NinjaTrader was absent before backup, immediately before copying, and after deployment. Tested stage/source hashes matched; prior live hash matched D02966A1B116E207F04C9969E41A676F082D67B476581DFF3A363C84F1830C32. SQLite reference 2.0.2.0 verified.
+Copied only Custom\OrcaJournal.dll. Live SHA256 now 598091F1D4396E3777970FC5693B0BE353328891B44467117A5F6ED072EE4AAD.
+Backup: C:\Users\julia\Documents\New project\.codex-backups\journal-risk-media-deploy-20260906-005557. Prior DLL and available database/sidecars/annotation TSV backed up and hash-verified. Live data hashes unchanged during deployment; original media untouched. Schema 9 initializes on next startup.
+Combined grouped-tag/simple-review/planned-risk/media-controls deployment is complete. Restart/F5/load and runtime confirmation of this batch remain pending; MAE/MFE data capture remains roadmap work.
