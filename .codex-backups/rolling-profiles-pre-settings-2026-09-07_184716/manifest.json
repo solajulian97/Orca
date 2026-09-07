@@ -1,0 +1,53 @@
+{
+  "Captured": "2026-09-07T18:48:42.402242-04:00",
+  "Head": "2e936b0d1aca2080b2f3e7230b22760c68770477",
+  "ArchiveSHA256": "45585720f95fa320b2cf6eae4162c328e3401280c141514f82ef6f78a2548cd5",
+  "VerifiedEntries": 9,
+  "Files": [
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaRollingProfiles.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaRollingProfiles.cs",
+      "SHA256": "780c48c139134d46fd9903e2f6cbe29f85b785a7e4d7849531de8e2609f31170"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaRollingProfiles.cs",
+      "Entry": "live-reference/OrcaRollingProfiles.cs",
+      "SHA256": "ce9caad317519f94cf11be7ec505e984d414a431fa9f6a20c40d0b590a0e4026"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaVolumeProfileCore.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaVolumeProfileCore.cs",
+      "SHA256": "ca8a5dc968e53f63fdaf5573bdf820c0177c117ddc6248ec3b49ca55de433e08"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaVolumeProfileCore.cs",
+      "Entry": "live-reference/OrcaVolumeProfileCore.cs",
+      "SHA256": "ca8a5dc968e53f63fdaf5573bdf820c0177c117ddc6248ec3b49ca55de433e08"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaDiagnosticsCore.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaDiagnosticsCore.cs",
+      "SHA256": "b88d568e9cd7dfa5e3e8929bdc790640bc1e9cc72b40a58c50ea76e394f85cb6"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaDiagnosticsCore.cs",
+      "Entry": "live-reference/OrcaDiagnosticsCore.cs",
+      "SHA256": "457dc946100724b41db219ac67e9f3280b97b8d9b0742e69af52787432034261"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaProfileDataProvider.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaProfileDataProvider.cs",
+      "SHA256": "ed6acbeaa37f1801b078b6eca8fe448ffe6ef56c8180f327b982f2e1e43bbfb4"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaProfileDataProvider.cs",
+      "Entry": "live-reference/OrcaProfileDataProvider.cs",
+      "SHA256": "73024b4f37c0ad93da098fa55bee5db8bda7bc274931cd0dbaf1f182b14fe278"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-07-25_orca-rolling-windows_trading-session-time.md",
+      "Entry": "workspace/docs/handoffs/2026-07-25_orca-rolling-windows_trading-session-time.md",
+      "SHA256": "a9f52637d6397f13d83c1072828693b5018c86fbf41d986c6d50f0e0827beb8a"
+    }
+  ]
+}
