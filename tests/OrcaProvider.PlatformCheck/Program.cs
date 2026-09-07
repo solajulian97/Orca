@@ -2,7 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-string root = Path.GetFullPath(args.FirstOrDefault() ?? Directory.GetCurrentDirectory());
+string root = Path.GetFullPath(args.FirstOrDefault(a => !a.StartsWith("--")) ?? Directory.GetCurrentDirectory());
 string source = Path.Combine(root, "Orca Trades/Working_Suite/Indicators");
 var trees = Directory.GetFiles(source, "OrcaProvider*.cs").Select(path => CSharpSyntaxTree.ParseText(
     File.ReadAllText(path), new CSharpParseOptions(LanguageVersion.CSharp7_3), path)).ToArray();
@@ -20,6 +20,15 @@ var compilation = CSharpCompilation.Create("OrcaProviderPlatformCheck", trees,
     paths.Select(p => MetadataReference.CreateFromFile(p)),
     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
+if (args.Contains("--metadata"))
+{
+    foreach (string name in new[] { "NinjaTrader.Data.TradingHours", "NinjaTrader.Data.Session", "NinjaTrader.Data.PartialHoliday", "NinjaTrader.Data.MarketData", "NinjaTrader.Data.Bars" })
+    {
+        var type = compilation.GetTypeByMetadataName(name);
+        Console.WriteLine(name);
+        if (type != null) foreach (var member in type.GetMembers().OfType<IPropertySymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public)) Console.WriteLine(member.Type.ToDisplayString() + " " + member.Name);
+    }
+}
 foreach (var error in errors) Console.WriteLine(error);
 Console.WriteLine("Offline provider platform semantic check: " + errors.Length + " errors across " + trees.Length + " sources.");
 if (errors.Length != 0) return 1;

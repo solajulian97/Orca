@@ -62,10 +62,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                         if (eventTimeZone == null || Instrument == null || Bars == null || Bars.TradingHours == null)
                             throw new InvalidOperationException("Platform instrument/session/timezone metadata unavailable.");
                         loadStart = Stopwatch.GetTimestamp();
+                        var sessionCapture = OrcaProviderSessionCapture.Capture(Bars.TradingHours, eventTimeZone);
                         registry = new OrcaProviderStreamRegistry(1, 100000, 1, 1, 1);
                         // Deliberately unique probe environment: no inferred sharing across charts/connections.
                         var key = new OrcaProviderStreamKey(Instrument.FullName, "probe:" + diagnosticsId,
-                            Bars.TradingHours.Name + ":reset-per-session", "UTC", "bidask-fallback:v1");
+                            sessionCapture.Definition + ":event-zone:" + sessionCapture.EventTimezone + ":reset-per-session", "UTC", "bidask-fallback:v1");
                         if (registry.TryAcquire(key, out publisher) != OrcaProviderAcquireStatus.Acquired)
                             throw new InvalidOperationException("Probe publisher acquisition failed.");
                         ingestion = new OrcaProviderIngestion(publisher,
