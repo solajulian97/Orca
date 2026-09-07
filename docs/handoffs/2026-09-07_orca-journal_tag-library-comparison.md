@@ -26,3 +26,6 @@ Not deployed. Current live expected baseline remains 789CAB49F7E4AA30E1377B66599
 
 ## Future auto-tag work
 Optional factual rules: session/time, duration, instrument/direction, realized R when planned risk exists; later scale/partial patterns and validated excursion thresholds. Require preview/dry run, reason and rule version, missing-data handling, manual overrides and undo before bulk application. Do not infer setup quality or proper risk from P&L alone. Existing rules preserved but dormant.
+
+## Deployment completed — 2026-09-07 13:11 EDT
+NinjaTrader closed before and after deployment. Source/stage/live SHA256 verified: 6E4B98AAFB51FAAABE3357C786C37DB99AD269C4CD01AAA15E27BB78C4889C94. SQLite assembly reference 2.0.2.0 verified. Backup and manifest: .codex-backups/journal-tag-library-deploy-20260907-131158. Only DLL copied; existing database and annotation TSV hashes unchanged. Includes spacing and capitalization changes. Supersedes not-deployed status above. NinjaTrader startup, gallery/review/video interaction and live MAE/MFE validation remain pending.
