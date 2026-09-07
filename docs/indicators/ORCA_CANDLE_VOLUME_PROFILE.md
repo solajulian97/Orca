@@ -1,6 +1,18 @@
 # Orca Candle Volume Profile
 
-Updated: 2026-09-01. Working_Suite development source only.
+## Instant Replay
+
+`OrcaCandleVolumeProfile` supports completed-bar Orca Instant Replay. Its existing completed historical profile maps remain untouched while the coordinator's high-Z price-panel mask reveals bars one at a time. Developing tick replay is intentionally unavailable when this indicator is visible until a separate replay-only footprint model is implemented; this prevents the completed bar's final volume/delta profile from leaking into an earlier tick prefix. The adapter adds no secondary series, cache reads, or normal per-tick work.
+
+Updated: 2026-09-07. Working_Suite development source only.
+
+## Settings Organization
+
+The current settings layout supersedes the original enhanced-only grouping below: **01 Display**, **02 Profile Layout**, **03 Candles**, **04 Rows & Scaling**, **05 Profile Colors**, **06 POC & Value Area**, **07 Text - General**, **08 Text - Volume**, **09 Text - Delta**, **10 Text - Bid x Ask**, and **11 Advanced - Data**. All 93 existing displayed properties retain their identities and have distinct positions. Toggles precede related controls, POC color sits alongside Show POC, and each text family has its own group.
+
+Text groups appear in their applicable modes. Bid x Ask style, width and enhancement appear in Bid x Ask; combined arrangement appears in Volume + Delta. Existing enhanced applicability and Volume-only emphasis / combined-mode brightness conditions remain. Hidden settings retain their saved values. Native NinjaTrader properties remain platform-managed.
+
+Labels spell out value area, clarify text thresholds, and use Auto-Size Text, Bid/Ask Column Gap and Minimum Dominance Ratio. The description summarizes per-candle volume/delta, display choices, POC, value area and appearance controls. Property names, enums, defaults, ranges, brush serialization and factory signatures are unchanged. See `docs/handoffs/2026-09-07_cvp_settings-organization.md` for verification and deployment status.
 
 ## Ownership
 
@@ -23,13 +35,13 @@ Enhanced controls are contextual and ordered into Profile, Data Quality, Rows, S
 | Display Row Size / Dynamic Order Flow Aggregation | Existing presentation controls; do not change analysis rows. |
 | Normalization | Per Bar, Visible Range, Session Global, Fixed. |
 | Fixed Scale Volume | Enter a positive contract count before Fixed becomes a dropdown choice. Zero in a restored Fixed configuration reports N/A. |
-| OHLC Scaffold | Off, OHLC Spine, OHLC Spine + Body. Neutral spine is the enhanced default. |
+| Candle Display | Off, OHLC Spine, Full Candle. The default narrow spine preserves prior Bid x Ask appearance; Full Candle reserves Candle Width plus twice Candle/Profile Gap between Bid and Ask. |
 | POC Outline | Existing ShowPOC setting; neutral outline in enhanced mode. Lowest-price tie retained, tie count on hover. Developing POC is provisional. |
 | Cell Values | Bid x Ask, Total Volume, Strict Delta, Strict Delta %. |
 | Number Format | Full, Compact, Auto. Auto tries full then compact, otherwise hides text that cannot fit. |
 | Center Gutter | Separates bid and ask number columns. |
 | Show Data Health | Coverage, source limitations, clipping and failure status; hover retains detailed evidence. |
-| Emphasize Row Winner | Uses a heavier font weight for the same-row Bid or Ask that meets Winner Ratio. |
+| Emphasize Row Winner | Uses a heavier font weight for the same-row Bid or Ask that meets Winner Ratio in enhanced and normal Bid x Ask modes. |
 | Winner Ratio | Dominant side divided by opposing side; default 1.5. An unopposed positive side qualifies, while 0 x 0 does not. |
 
 Histogram uses a common denominator for both sides, with bid left/red and ask right/blue by default. Existing custom colors are respected. Cluster is explicitly labeled **Cluster - Delta Heatmap**, with fixed-width cells, total-volume intensity and strict delta hue. Histogram uses maximum opacity; Cluster uses its opacity range. Unclassified activity has a neutral mark. Known zeros render as `0`; entirely unclassified sides display `N/A`, with observed zero classified quantities and the unclassified total disclosed on hover. Missing accepted rows are never manufactured into zero-volume rows.
@@ -37,6 +49,36 @@ Histogram uses a common denominator for both sides, with bid left/red and ask ri
 Fonts retain the selected family/weight. DirectWrite tabular figures are requested and digit widths checked outside rendering. Missing/non-tabular numeral fonts fall back to Consolas with disclosure; Figtree remains selectable. Measured width governs text visibility; row height receives the same two-pixel vertical allowance as the established Bid x Ask renderer so practical 8-point labels do not disappear just before the next zoom step. Single-value views use the right text column to keep the central OHLC spine clear of digits.
 
 The row hover is intentionally concise: bar/price bounds, Bid x Ask, total, strict delta and delta percentage, POC, and a qualifying winner. It adds only actionable exceptions for unclassified volume, unavailable sides, clipping or preparation failure. Session identity, font fallback, event/sequence/revision, quality enums, quote age and hidden-text narration remain retained in prepared evidence where applicable but are not repeated in every row tooltip. `Show Data Health` now defaults off for new instances; existing saved values remain intact.
+
+## Volume Text Delta Coloring
+
+In `Volume + Delta`, `Scale Volume Text Brightness` optionally gives the white volume column its own per-candle hierarchy. The largest displayed volume row in each candle uses the full configured `Volume Text Color`; smaller rows fade toward `Volume Text Minimum Brightness`, which defaults to 35%. A square-root curve keeps lower-volume labels readable instead of making them nearly disappear. Scaling uses the same aggregated rows already rendered at the current compression and does not change the volume bars, delta labels, calculations, or data collection. The feature defaults off and is contextual to `Volume + Delta`.
+
+When `Profile Display` is `Volume`, `Emphasize Volume Text by Delta` can highlight meaningful directional rows while leaving ordinary volume numbers and the volume bars unchanged. The setting defaults off. A row qualifies only when it meets both `Minimum Absolute Delta` and `Minimum Delta %`; defaults are 150 and 15%. Qualifying positive/negative numbers use the existing Positive Delta or Negative Delta hue at full opacity. `Bold Qualified Text` defaults on and uses the existing cached heavier text format.
+
+The dual gate prevents tiny 100%-delta rows from dominating and prevents high-volume range rows from qualifying on accumulated absolute delta alone. Delta and volume are aggregated into the same displayed row before qualification. Exact-zero, unavailable and nonqualifying rows retain `Volume Text Color`. `Volume Text Min Threshold` remains the separate noise filter for small rows. The feature is inactive in Delta, Volume + Delta, Bid x Ask and Off modes, and it is independent from `Color Volume By Delta`, which continues to control the volume-bar fill. This is presentation-only and uses the established inferred CVP delta; it does not promote that value to strict Bid x Ask evidence. The former continuous percentage-intensity property remains serialized but hidden for template compatibility.
+
+Hovering within a qualified Volume row shows two compact unlabeled lines: `Bid x Ask` values first, then strict `Delta = Ask - Bid`. Unclassified volume is intentionally omitted. When neither strict side is available, the tooltip displays `N/A x N/A` and `N/A` instead of manufactured values. Strict hover evidence is retained only while this feature is enabled. Enabling it on existing historical bars therefore requires the normal NinjaScript reload so those rows can be rebuilt from the selected trade source.
+
+Winner emphasis also applies when Enhanced Footprint is off and Profile Display is Bid x Ask. Histogram preserves its bid-left/ask-right columns. Cluster preserves the `Bid x Ask` reading order while weighting only the qualifying side. The same settings and strict same-row ratio are shared across both renderers; Volume, Delta and combined modes remain unaffected.
+
+`Candle Display` also applies to both Bid x Ask renderers. `Full Candle` uses the configured bullish/bearish body colors and Candle Width, with Bid shifted left and Ask shifted right. Normal Histogram and Cluster leave the center lane open and redraw the actual candle in the foreground. Enhanced Histogram and Cluster reserve the same center lane in their prepared geometry and render the full OHLC candle there. POC outlines split around that lane so they do not cover the candle.
+
+## Enhanced Versus Normal Bid x Ask
+
+The two Histogram styles are intentionally visually related; enhanced mode is not meant to advertise itself through decoration. Their operational differences are:
+
+| Capability | Normal Bid x Ask | Enhanced Footprint |
+| --- | --- | --- |
+| Evidence owner | Existing per-bar strict Bid/Ask/unclassified maps | Typed integer-tick evidence book and immutable revisions |
+| Row calculation | Display compression is also the rendered calculation row | Fixed analysis rows are independent from display/zoom rows |
+| Normalization | Per-candle maximum | Per Bar, Visible Range, developing Session Global, or Fixed |
+| Preparation | Copies/aggregates/sorts legacy maps during the existing render path | Aggregates and prepares bounded snapshots outside `OnRender` |
+| Missing/unknown handling | Basic unclassified rendering | Explicit zero, unavailable, unclassified, clipping and coverage states |
+| POC inspection | Visual POC outline | Fixed-row POC, tie count, provisional state and concise row hover |
+| Technical status | None | Optional, default off for new instances |
+
+Shared controls now include Bid x Ask style/colors, text/font, winner emphasis/ratio, width, row display settings, POC and Candle Display. Keep enhanced off when the normal footprint is sufficient; enable it when fixed analysis rows, cross-bar/session scaling, hover reconciliation or snapshot-based preparation matter.
 
 ## Numerical And Data Contracts
 

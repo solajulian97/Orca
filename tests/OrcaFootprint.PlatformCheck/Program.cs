@@ -74,13 +74,21 @@ foreach (var tree in trees)
         throw new Exception("NinjaScript generation risk: IndicatorBaseConverter without the concrete Indicator declaration in " + tree.FilePath);
 Console.WriteLine("PASS: IndicatorBaseConverter stays with the concrete indicator, not a helper partial.");
 string[] preserved = { "ClassifySignedVolume", "ResolvePrimaryBarIndex", "IsPriceInsidePrimaryBar", "GetTimeDistanceTicks", "NormalizeTradeVolume",
-    "ResolveLegacyProfileDisplayMode", "DrawBarBidAskProfile", "RegisterSharedProfileSourceForKey" };
+    "ResolveLegacyProfileDisplayMode", "RegisterSharedProfileSourceForKey" };
 foreach (string name in preserved)
     if (Tokens(Method(oldRoot, name)) != Tokens(Method(newRoot, name))) throw new Exception("Legacy contract changed: " + name);
 var render = Method(newRoot, "OnRender");
 var earlyBranch = render.DescendantNodes().OfType<IfStatementSyntax>().Single(n => n.Condition.ToString() == "IsEnhancedFootprintActive");
-if (Tokens(render.RemoveNode(earlyBranch, SyntaxRemoveOptions.KeepNoTrivia)!) != Tokens(Method(oldRoot, "OnRender")))
-    throw new Exception("Legacy render body changed beyond the opt-in early branch.");
+var oldVolumeDelta = Method(oldRoot, "OnRender").DescendantNodes().OfType<IfStatementSyntax>()
+    .Single(n => n.Condition.ToString() == "showVolumeProfile || showDeltaProfile");
+var newVolumeDelta = render.DescendantNodes().OfType<IfStatementSyntax>()
+    .Single(n => n.Condition.ToString() == "showVolumeProfile || showDeltaProfile");
+if (Tokens(oldVolumeDelta) != Tokens(newVolumeDelta))
+    throw new Exception("Volume/Delta render branch changed during Bid x Ask work.");
+if (earlyBranch == null) throw new Exception("Enhanced render branch missing.");
+var bidAskProfile = Method(newRoot, "DrawBarBidAskProfile");
+if (!Tokens(bidAskProfile).Contains("centerGap") || !Tokens(render).Contains("FootprintScaffold"))
+    throw new Exception("Bid x Ask candle reservation is missing.");
 foreach (var oldEnum in oldRoot.DescendantNodes().OfType<EnumDeclarationSyntax>())
 {
     var newEnum = newRoot.DescendantNodes().OfType<EnumDeclarationSyntax>().Single(e => e.Identifier.Text == oldEnum.Identifier.Text);
@@ -90,12 +98,68 @@ var oldDefaults = Method(oldRoot, "OnStateChange").DescendantNodes().OfType<IfSt
 var newDefaults = Method(newRoot, "OnStateChange").DescendantNodes().OfType<IfStatementSyntax>().First().Statement;
 var assignments = newDefaults.DescendantNodes().OfType<AssignmentExpressionSyntax>().ToDictionary(a => a.Left.ToString(), a => Tokens(a.Right));
 foreach (var assignment in oldDefaults.DescendantNodes().OfType<AssignmentExpressionSyntax>())
-    if (!assignments.TryGetValue(assignment.Left.ToString(), out var actual) || actual != Tokens(assignment.Right))
+    if (assignment.Left.ToString() != "Description"
+        && (!assignments.TryGetValue(assignment.Left.ToString(), out var actual) || actual != Tokens(assignment.Right)))
         throw new Exception("Legacy default changed: " + assignment.Left);
+if (assignments["Description"] != "\"Displays volume and delta at each candle's price levels, with Volume, Delta, combined, and Bid x Ask footprint views. Includes point of control, value area, adjustable row sizing, and customizable colors and text.\"")
+    throw new Exception("CVP settings description changed unexpectedly.");
 if (assignments["EnhancedFootprint"] != "false") throw new Exception("Enhancement must default off.");
 if (assignments["FootprintShowHealth"] != "false") throw new Exception("Technical status must default hidden.");
 if (assignments["FootprintEmphasizeWinner"] != "true" || assignments["FootprintWinnerRatio"] != "1.5")
     throw new Exception("Winner emphasis defaults changed.");
+if (assignments["ColorVolumeTextByDelta"] != "false" || assignments["ScaleVolumeTextColorByDeltaPercent"] != "true"
+    || assignments["VolumeTextDeltaMinAbsolute"] != "150" || assignments["VolumeTextDeltaMinPercent"] != "15.0"
+    || assignments["BoldQualifiedVolumeText"] != "true")
+    throw new Exception("Volume text delta-emphasis defaults changed.");
+if (assignments["ScaleVolumeTextBrightnessByVolume"] != "false" || assignments["VolumeTextMinBrightness"] != "0.35f")
+    throw new Exception("Volume + Delta text-brightness defaults changed.");
+foreach (string name in new[] { "ColorVolumeTextByDelta", "ScaleVolumeTextColorByDeltaPercent", "VolumeTextDeltaMinAbsolute", "VolumeTextDeltaMinPercent", "BoldQualifiedVolumeText", "ScaleVolumeTextBrightnessByVolume", "VolumeTextMinBrightness" })
+{
+    var property = newRoot.DescendantNodes().OfType<PropertyDeclarationSyntax>().Single(p => p.Identifier.Text == name);
+    if (property.AttributeLists.SelectMany(a => a.Attributes).Any(a => a.Name.ToString().Contains("NinjaScriptProperty")))
+        throw new Exception("Volume text presentation setting must not alter generated factory signatures: " + name);
+}
+var volumeProfile = Method(newRoot, "DrawBarVolumeProfile");
+var volumeTextBrush = Method(newRoot, "SelectVolumeTextBrush");
+if (!Tokens(volumeProfile).Contains("ShowDelta || colorVolumeTextByDelta")
+    || !Tokens(volumeProfile).Contains("DrawVolumeTextLabel ( vol , maxVol , rowDelta , hasRowDelta"))
+    throw new Exception("Volume-only text coloring does not consume the matching aggregated delta row.");
+if (!Tokens(volumeTextBrush).Contains("FootprintFormatting . IsDeltaEmphasis")
+    || !Tokens(volumeTextBrush).Contains("positiveVolumeTextDeltaBrushDx")
+    || !Tokens(volumeTextBrush).Contains("negativeVolumeTextDeltaBrushDx")
+    || !Tokens(volumeTextBrush).Contains("volumeTextBrushDx"))
+    throw new Exception("Volume text delta-emphasis selection lost threshold, full-color, or neutral behavior.");
+if (!Tokens(volumeTextBrush).Contains("FootprintFormatting . VolumeTextIntensity")
+    || !Tokens(volumeTextBrush).Contains("volumeTextIntensityBrushes"))
+    throw new Exception("Volume + Delta text brightness lost its per-candle volume scaling or cached palette.");
+if (!Tokens(Method(newRoot, "DrawVolumeTextLabel")).Contains("qualified && BoldQualifiedVolumeText"))
+    throw new Exception("Qualified volume text no longer uses optional heavier formatting.");
+if (!Tokens(Method(newRoot, "EnsureBarMaps")).Contains("ShouldCollectStrictBidAskEvidence")
+    || !Tokens(Method(newRoot, "ProcessTradeIntoPrimaryBar")).Contains("ShouldCollectStrictBidAskEvidence"))
+    throw new Exception("Qualified Volume-mode hover no longer retains strict Bid/Ask evidence.");
+var qualifiedEvidence = Method(newRoot, "TryGetQualifiedVolumeTextEvidence");
+if (!Tokens(qualifiedEvidence).Contains("FootprintFormatting . IsDeltaEmphasis")
+    || !Tokens(qualifiedEvidence).Contains("barBidVolumeMaps")
+    || !Tokens(qualifiedEvidence).Contains("barAskVolumeMaps")
+    || !Tokens(qualifiedEvidence).Contains("barUnclassifiedVolumeMaps"))
+    throw new Exception("Qualified Volume-mode hover evidence lost its threshold or strict-side contract.");
+var renderingRoot = trees[2].GetRoot();
+var volumeHover = Method(renderingRoot, "TryShowQualifiedVolumeTextTooltip");
+if (!Tokens(volumeHover).Contains("{0:N0} x {1:N0}\\n{2:+#,0;-#,0;0}")
+    || !Tokens(volumeHover).Contains("N/A x N/A\\nN/A")
+    || Tokens(volumeHover).Contains("Unclassified"))
+    throw new Exception("Qualified Volume-mode hover lost its compact two-line value contract.");
+var settingsConverter = Method(newRoot.DescendantNodes().OfType<ClassDeclarationSyntax>()
+    .Single(c => c.Identifier.Text == "OrcaFootprintSettingsConverter"), "GetProperties");
+if (!Tokens(settingsConverter).Contains("indicator . ProfileDisplayMode != CandleProfileDisplayMode . Volume")
+    || !Tokens(settingsConverter).Contains("! indicator . ColorVolumeTextByDelta"))
+    throw new Exception("Volume text delta-color settings are not contextual to Volume mode and the main toggle.");
+if (!Tokens(settingsConverter).Contains("indicator . ProfileDisplayMode != CandleProfileDisplayMode . VolumeAndDelta")
+    || !Tokens(settingsConverter).Contains("! indicator . ScaleVolumeTextBrightnessByVolume"))
+    throw new Exception("Volume text brightness settings are not contextual to Volume + Delta mode and the main toggle.");
+foreach (string name in new[] { "DrawBidAskClusterText", "DrawBidAskHistogramText" })
+    if (!Tokens(Method(newRoot, name)).Contains("FootprintFormatting . IsWinner"))
+        throw new Exception("Normal Bid x Ask winner emphasis missing: " + name);
 Console.WriteLine("PASS: backup classifier, attribution, migration, enums, defaults, shared publication, and legacy render token parity.");
 var enhancedRender = Method(trees[2].GetRoot(), "RenderEnhancedFootprint");
 var semantics = compilation.GetSemanticModel(trees[2]);
