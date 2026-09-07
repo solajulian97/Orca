@@ -11,5 +11,5 @@ No new settings persistence/schema/series/market subscriptions/AddDataSeries/Cal
 
 ## Verification and deployment state
 Release net48/x64 build0 errors,4 existing warnings. Existing23 tag,25 excursion/title,13 risk/media,22 review,85 identity checks pass; actual compiled WPF harness passes and render inspected. No NinjaTrader test of this new batch. Earlier user feedback is not validation of these new labels/calculations.
-Stage .codex-backups/journal-expectancy-stage/OrcaJournal.dll SHA2564913E2423D4B83FDCF409D0341FBCCD4D29FC5EB5B9C3E964B65B49F8B7EC9CC. NinjaTrader running PID71880; not deployed. Expected live1C5B8BE889D3A205420D5006286000AB7DBDE85FFB5213754D21912D2ADEDF9F.
+Stage .codex-backups/journal-expectancy-stage/OrcaJournal.dll SHA2565B524157E3C442F26B395E28C83D8890E96C0E415BD3B5B2CDCFF397570739D4. NinjaTrader running PID71880; not deployed. Expected live1C5B8BE889D3A205420D5006286000AB7DBDE85FFB5213754D21912D2ADEDF9F.
 After closure use guarded deployment/backups. Validate mixed/winner-only/loser-only cohorts, expandable help, horizontal table scrolling at narrow widths. MAE/MFE runtime validation separate and pending. Not eligible for Full_Suite promotion.
