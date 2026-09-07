@@ -105,6 +105,16 @@ class Program
                 Find<DatePicker>(performance).Single(x=>x.Name=="TagFrom").SelectedDate=null;
                 performance.Reload();performance.UpdateLayout();
                 if(Find<CheckBox>(performance).Count(x=>x.IsChecked==true)!=2)throw new Exception("Refresh lost selected tags");
+                Find<TextBox>(performance).Single(x=>x.Name=="SavedTagViewName").Text="Managed setup";
+                Find<Button>(performance).Single(x=>x.Content as string=="Save new").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Find<Button>(performance).Single(x=>x.Content as string=="Clear tags").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Find<ComboBox>(performance).Single(x=>x.Name=="TagMatchMode").SelectedIndex=0;
+                Find<DatePicker>(performance).Single(x=>x.Name=="TagFrom").SelectedDate=new DateTime(2027,1,1);
+                Find<Button>(performance).Single(x=>x.Content as string=="Load").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                performance.UpdateLayout();
+                if(Find<CheckBox>(performance).Count(x=>x.IsChecked==true)!=2 || Find<ComboBox>(performance).Single(x=>x.Name=="TagMatchMode").SelectedIndex!=1 || Find<DatePicker>(performance).Single(x=>x.Name=="TagFrom").SelectedDate!=new DateTime(2027,1,1))throw new Exception("Saved combination did not restore tags and mode while keeping dates");
+                Find<DatePicker>(performance).Single(x=>x.Name=="TagFrom").SelectedDate=null;
+                Console.WriteLine("PASS: saved-combination UI saves and restores tags/match while preserving date scope.");
                 var tagFrame=new System.Windows.Threading.DispatcherFrame();System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle,new Action(()=>tagFrame.Continue=false));System.Windows.Threading.Dispatcher.PushFrame(tagFrame);
                 var tagBitmap=new RenderTargetBitmap(1200,720,96,96,PixelFormats.Pbgra32);tagBitmap.Render(performance);var tagEncoder=new PngBitmapEncoder();tagEncoder.Frames.Add(BitmapFrame.Create(tagBitmap));using(var file=File.Create(Path.Combine(args[0],"tag-performance.png")))tagEncoder.Save(file);
                 performanceWindow.Close();
