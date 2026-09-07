@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\Orca Trades\Working_Suite\AddOns\OrcaTradeIdentity.cs" Link="Core\OrcaTradeIdentity.Shared.cs" />
+    <Compile Include="$(JournalRoot)\Analytics\TradeOutcomes.cs" Link="Analytics\TradeOutcomes.cs" />
     <Compile Include="$(JournalRoot)\Analytics\TagPerformance.cs" Link="Analytics\TagPerformance.cs" />
     <Compile Include="$(JournalRoot)\Core\*.cs" Link="Core\%(Filename)%(Extension)" />
     <Compile Include="$(JournalRoot)\Data\*.cs" Link="Data\%(Filename)%(Extension)" />

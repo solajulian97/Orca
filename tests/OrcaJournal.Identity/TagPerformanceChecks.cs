@@ -11,6 +11,15 @@ static class TagPerformanceChecks
  static TaggedTrade Row(int id,double pnl,double? risk,params string[] tags)=>new TaggedTrade{Trade=new Trade{Id=id,PnlDollars=pnl,PlannedRisk=risk},Tags=new HashSet<string>(tags,StringComparer.OrdinalIgnoreCase)};
  public static void Run()
  {
+  Check(TradeOutcomes.Classify(20,20)=="Breakevens" && TradeOutcomes.Classify(-20,20)=="Breakevens","inclusive boundaries");
+  Check(TradeOutcomes.Classify(20.01,20)=="Winners" && TradeOutcomes.Classify(-20.01,20)=="Losers","outside boundaries");
+  Check(TradeOutcomes.Matches(0,20,"Breakevens") && !TradeOutcomes.Matches(4,20,"Exclude breakevens"),"zero and small gain excluded");
+  var bandRows=new[]{Row(101,200,100),Row(102,-100,100),Row(103,4,100),Row(104,-20,100)};
+  var meaningful=TagPerformance.Summarize(bandRows.Where(x=>TradeOutcomes.Matches(x.Trade.PnlDollars,20,"Exclude breakevens")),"");
+  Check(meaningful.Count==2 && meaningful.WinRate==0.5 && meaningful.RR==2 && meaningful.Net==100,"excluded band does not distort win rate RR or selected net");
+  Check(bandRows.Sum(x=>x.Trade.PnlDollars)==84,"raw P&L unchanged");
+  var setting=new TradeOutcomes();int events=0;setting.PropertyChanged+=(s,e)=>events++;setting.Threshold=10;Check(events==1 && setting.Threshold==10,"threshold notification");
+  bool rejected=false;try{setting.Threshold=-1;}catch(ArgumentException){rejected=true;}Check(rejected&&setting.Threshold==10,"invalid threshold rejected");
   var rows=new[]{Row(1,200,100,"Sweep","FVG"),Row(2,-100,100,"Sweep"),Row(3,50,null,"FVG"),Row(4,0,null)};
   var all=TagPerformance.Calculate(rows,new[]{"sweep","FVG","SWEEP"},true);Check(all.Summary.Count==1&&all.Summary.Net==200,"all tag intersection with case-insensitive deduplication");Check(all.Summary.AverageR==2,"realized R uses planned risk");
   var any=TagPerformance.Calculate(rows,new[]{"Sweep","FVG"},false);Check(any.Summary.Count==3 && any.Summary.Net==150,"any tag union counted once");Check(any.Overlaps.Count==3 && any.Overlaps.Sum(x=>x.Count)==3,"observed overlap partitions are disjoint");Check(any.Summary.WinRate==2.0/3 && any.Summary.Average==50,"net average and win rate");Check(any.Summary.RCount==2 && any.Summary.AverageR==0.5,"missing risk excluded not zero");
