@@ -41,4 +41,10 @@ if (probe.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(i => i.Expr
 if (methods["OnBarUpdate"].ToString().Contains("OnTrade(")) throw new Exception("Do not ingest from both callbacks");
 if (!methods["OnMarketData"].ToString().Contains("MarketDataType.Last")) throw new Exception("Last filter missing");
 Console.WriteLine("PASS: no renderer, no added series, no bar-path trade ingestion. NinjaTrader F5/runtime still required.");
+var subscriptionProbe = trees.Single(t => Path.GetFileName(t.FilePath) == "OrcaProviderSubscriptionProbe.cs").GetRoot();
+if (subscriptionProbe.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m => m.Identifier.Text == "OnMarketData" || m.Identifier.Text == "OnRender"))
+    throw new Exception("Subscription observer must not add automatic market-data ingestion or rendering.");
+if (subscriptionProbe.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(i => new[] { "Append", "OnTrade", "AddDataSeries" }.Any(name => i.Expression.ToString().Contains(name))))
+    throw new Exception("Subscription observer must not publish trades or add series.");
+Console.WriteLine("PASS: subscription observer has no provider publication, automatic OnMarketData override, renderer or added series.");
 return 0;
