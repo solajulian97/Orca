@@ -1,0 +1,118 @@
+{
+  "Captured": "2026-09-07T13:12:25.6245212-04:00",
+  "Head": "5f5fcfe058e7af4f1a26027a00927585684b139b",
+  "ArchiveSHA256": "35042F83450F4243AA2AB0233E3B92D75C4096AC19BD7A744AEC46C8E11276EF",
+  "VerifiedEntries": 22,
+  "Files": [
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaStepProfile.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaStepProfile.cs",
+      "SHA256": "76F43C61B0D55B960C63CEC23AB6BF4FAFE520B1F9198BDAFFCDACA0DB813775"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaDiagnosticsCore.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaDiagnosticsCore.cs",
+      "SHA256": "B88D568E9CD7DFA5E3E8929BDC790640BC1E9CC72B40A58C50EA76E394F85CB6"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaStepProfile.PlatformCheck\\Program.cs",
+      "Entry": "workspace/tests/OrcaStepProfile.PlatformCheck/Program.cs",
+      "SHA256": "BE0CC6108322E576AF266D0D1F09A678EB9DDFD93825DC42113AE3A21126EC71"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaStepProfile.PlatformCheck\\OrcaStepProfile.PlatformCheck.csproj",
+      "Entry": "workspace/tests/OrcaStepProfile.PlatformCheck/OrcaStepProfile.PlatformCheck.csproj",
+      "SHA256": "BD96F3A7CBC04477D63DCED7B110A192E85F9BB9A367FB83D73FF5BB5FD6731A"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-01_orca-step-profile_dynamic-volume-data-menu.md",
+      "Entry": "workspace/docs/handoffs/2026-08-01_orca-step-profile_dynamic-volume-data-menu.md",
+      "SHA256": "6A53F9E1C797BA863C9AA58A88FEE4A1E208532876157FB47A33302EC2A5E2C1"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-01_orca-step-profile_four-hour-session-anchor.md",
+      "Entry": "workspace/docs/handoffs/2026-08-01_orca-step-profile_four-hour-session-anchor.md",
+      "SHA256": "F874927D8FB98608F1E2FD9954E19767C95B3ED0FB51C8DCFF05E12F4684EFBF"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-07_orca-step-profile_timeframes-volume-steps.md",
+      "Entry": "workspace/docs/handoffs/2026-08-07_orca-step-profile_timeframes-volume-steps.md",
+      "SHA256": "3FB4EAADE57E1913ACE9A4E00969F34BE67EA8A12E59D76FF424A60E9FF378F2"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-14_orca-step-profile_session-basis.md",
+      "Entry": "workspace/docs/handoffs/2026-08-14_orca-step-profile_session-basis.md",
+      "SHA256": "06797BFDDDE5DD7279EBF61060DDFCED0839F78C3AB18EC51C45AA260E9DE72D"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-17_orca-step-profile_close-stamped-boundary-index.md",
+      "Entry": "workspace/docs/handoffs/2026-08-17_orca-step-profile_close-stamped-boundary-index.md",
+      "SHA256": "1FEAD9648978AE6921406D1A63069913ACFBFA68E0740AE07D707F36EAFF7520"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-17_orca-step-profile_historical-mirror-session-anchor.md",
+      "Entry": "workspace/docs/handoffs/2026-08-17_orca-step-profile_historical-mirror-session-anchor.md",
+      "SHA256": "227E5EED2767CE8844DCEAE0F3F2E0B859C3968138C9DAF390EE83EAE7E5465F"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-17_orca-step-profile_mirror-layout-trade-source.md",
+      "Entry": "workspace/docs/handoffs/2026-08-17_orca-step-profile_mirror-layout-trade-source.md",
+      "SHA256": "F68EBB5C137C1589B92578E6B524433247763C633CF70BA5CB66711675D29ABC"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-18_orca-step-profile_independent-active-mirror-arrangement.md",
+      "Entry": "workspace/docs/handoffs/2026-08-18_orca-step-profile_independent-active-mirror-arrangement.md",
+      "SHA256": "7161109D4D607626847DC2218B8BF12B6707678A8D6B833BD29744B753624618"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-23_orca-step-profile_session-labels.md",
+      "Entry": "workspace/docs/handoffs/2026-08-23_orca-step-profile_session-labels.md",
+      "SHA256": "8671E00F63FA14D88C2A1684B17A4D5D29686741769D36E4DD9BDE79944E1C8C"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-26_orca-step-profile_dynamic-historical-delta-width.md",
+      "Entry": "workspace/docs/handoffs/2026-08-26_orca-step-profile_dynamic-historical-delta-width.md",
+      "SHA256": "975C26D3B443F62AE6CF74F09E308A00B95A2B22C24F51AD27CFD773F8150176"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-26_orca-step-profile_non-rth-volume-width.md",
+      "Entry": "workspace/docs/handoffs/2026-08-26_orca-step-profile_non-rth-volume-width.md",
+      "SHA256": "9E771C8AD1CE4655EF2C9DDA857007FE95032EB95DFAFEF75C88B7BE9E1C4046"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-31_orca-step-profile_rth-30m-width.md",
+      "Entry": "workspace/docs/handoffs/2026-08-31_orca-step-profile_rth-30m-width.md",
+      "SHA256": "F24198C800B910BF7E73313B1826E7D48915CD3CE1739B2F2AE60001C9C220F2"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-05_orca-step-profile_profile-statistics.md",
+      "Entry": "workspace/docs/handoffs/2026-09-05_orca-step-profile_profile-statistics.md",
+      "SHA256": "185374CC6D2BB1D63F298CE5D5472951478AF70C5DF83D66BF10B950D55FF902"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-06_orca-step-profile_historical-delta-labels-hover.md",
+      "Entry": "workspace/docs/handoffs/2026-09-06_orca-step-profile_historical-delta-labels-hover.md",
+      "SHA256": "BE6A50B7AA488F9EEF565C1F41CB799E55422EAC6DF9FAE36DC2B52E1BF71EAA"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-06_orca-step-profile_statistics-after-separator.md",
+      "Entry": "workspace/docs/handoffs/2026-09-06_orca-step-profile_statistics-after-separator.md",
+      "SHA256": "B3F67FC3AFE483CD6D8F1BA6900CD8F5A85634DBF1C91D60F558872C94C4E288"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-06_orca-step-profile_statistics-spine-alignment.md",
+      "Entry": "workspace/docs/handoffs/2026-09-06_orca-step-profile_statistics-spine-alignment.md",
+      "SHA256": "A94C9BA630493CECEBD36F6DB10257030B5F91C3DABBBEBA008AC29415D7F16C"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaStepProfile.cs",
+      "Entry": "live-reference/OrcaStepProfile.cs",
+      "SHA256": "3D26534647A5A790B346D6FB70E1441B7CD54A3625DB820894CA81674CFE95EA"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaDiagnosticsCore.cs",
+      "Entry": "live-reference/OrcaDiagnosticsCore.cs",
+      "SHA256": "457DC946100724B41DB219AC67E9F3280B97B8D9B0742E69AF52787432034261"
+    }
+  ]
+}
