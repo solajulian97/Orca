@@ -10,7 +10,8 @@ namespace NinjaTrader.NinjaScript.Indicators
     {
         private readonly object probeSync = new object();
         private readonly string diagnosticsId = Guid.NewGuid().ToString("N");
-        private OrcaProviderStreamRegistry registry;
+        private OrcaProviderFeedLifetime feedLifetime;
+        private OrcaProviderReaderComparison comparison;
         private OrcaProviderPublisherLease publisher;
         private OrcaProviderStreamReader reader;
         private OrcaProviderIngestion ingestion;
@@ -47,8 +48,9 @@ namespace NinjaTrader.NinjaScript.Indicators
                     terminated = true;
                     if (reader != null) reader.Dispose();
                     if (publisher != null) publisher.Dispose();
-                    if (registry != null) registry.Dispose();
-                    reader = null; publisher = null; registry = null; ingestion = null;
+                    if (comparison != null) comparison.Dispose();
+                    if (feedLifetime != null) feedLifetime.Dispose();
+                    reader = null; publisher = null; feedLifetime = null; ingestion = null; comparison = null;
                     OrcaDiagnosticsCore.UnregisterInstance(diagnosticsId);
                     return;
                 }
@@ -63,22 +65,27 @@ namespace NinjaTrader.NinjaScript.Indicators
                             throw new InvalidOperationException("Platform instrument/session/timezone metadata unavailable.");
                         loadStart = Stopwatch.GetTimestamp();
                         var sessionCapture = OrcaProviderSessionCapture.Capture(Bars.TradingHours, eventTimeZone);
-                        registry = new OrcaProviderStreamRegistry(1, 100000, 1, 1, 1);
+                        feedLifetime = new OrcaProviderFeedLifetime(Bars.IsInReplayMode
+                            ? OrcaProviderEnvironment.MarketReplay : OrcaProviderEnvironment.LiveFeed, 1, 100000, 256, 3, 2);
                         // Deliberately unique probe environment: no inferred sharing across charts/connections.
-                        var key = new OrcaProviderStreamKey(Instrument.FullName, "probe:" + diagnosticsId,
-                            sessionCapture.Definition + ":event-zone:" + sessionCapture.EventTimezone + ":reset-per-session", "UTC", "bidask-fallback:v1");
-                        if (registry.TryAcquire(key, out publisher) != OrcaProviderAcquireStatus.Acquired)
+                        var identity = new OrcaProviderSourceIdentity(Instrument.FullName, feedLifetime.Environment,
+                            feedLifetime.Epoch, sessionCapture.Definition, sessionCapture.EventTimezone, true,
+                            Guid.Parse(diagnosticsId), OrcaProviderClassificationPolicy.TradeQuoteThenTickDirection,
+                            "platform-supplied-unverified:v1");
+                        if (feedLifetime.TryAcquire(identity, out publisher) != OrcaProviderAcquireStatus.Acquired)
                             throw new InvalidOperationException("Probe publisher acquisition failed.");
                         ingestion = new OrcaProviderIngestion(publisher,
                             OrcaProviderClassificationPolicy.TradeQuoteThenTickDirection, historicalReplay);
-                        if (!registry.TryOpenReader(key, out reader)) throw new InvalidOperationException("Probe reader acquisition failed.");
+                        if (feedLifetime.OpenReader(identity, out reader) != OrcaProviderReaderStatus.Opened) throw new InvalidOperationException("Probe reader acquisition failed.");
+                        comparison = OrcaProviderReaderComparison.Create(feedLifetime, identity);
                         OrcaDiagnosticsCore.RegisterInstance(diagnosticsId, "OrcaProviderProbe", this);
                         OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsId, 0, "PrimaryChartSeries", "Chart", "Probe adds no secondary series");
                         Print("OrcaProviderProbe " + diagnosticsId + ": started; TickReplay=" + historicalReplay
-                            + "; capacity=100000 events; platform timezone=" + eventTimeZone.Id + "; no consumers attached");
+                            + "; capacity=100000 events; platform timezone=" + eventTimeZone.Id + "; comparisonReaders=2; no production consumers attached");
                     }
                     else if (State == State.Realtime && ingestion != null && !faulted)
                     {
+                        if (!comparison.DrainThrough(historicalCount + liveCount)) throw new InvalidOperationException("Comparison fell behind at realtime handoff.");
                         if (historicalReplay) ingestion.CompleteHistoricalPassAndBeginLive();
                     }
                     if (reader != null && !faulted)
@@ -123,13 +130,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                     ingestion.OnTrade(historical, utc, e.Price, e.Volume, e.Bid, e.Ask, true, resetPending);
                     resetPending = false;
                     if (historical) historicalCount++; else liveCount++;
+                    if (((historicalCount + liveCount) & 255) == 0)
+                        if (!comparison.DrainThrough(historicalCount + liveCount)) throw new InvalidOperationException("Comparison fell behind producer.");
                 }
                 catch (Exception ex) { Fault(ex.Message, OrcaStreamFault.InvalidEvent); }
                 finally
                 {
                     if (workStart != 0) OrcaDiagnosticsCore.ReportWorkSample(diagnosticsId, OrcaDiagnosticsWorkKind.MarketData, -1, workStart);
                 }
-                if (!faulted) ReportStatus(false);
+                if (!faulted)
+                {
+                    try { ReportStatus(false); }
+                    catch (Exception ex) { Fault(ex.Message, OrcaStreamFault.IngestionFailed); }
+                }
             }
         }
 
@@ -159,12 +172,16 @@ namespace NinjaTrader.NinjaScript.Indicators
             long now = Stopwatch.GetTimestamp();
             if (!print && now < nextReport) return;
             nextReport = now + Stopwatch.Frequency;
+            if (!comparison.DrainThrough(historicalCount + liveCount)) throw new InvalidOperationException("Comparison status is not caught up.");
             using (var batch = reader.Read(reader.FirstAvailable, 1))
             {
                 string status = "phase=" + batch.Coverage.Phase + " historical=" + historicalCount + " live=" + liveCount
                     + " retained=" + (batch.PublishedThroughExclusive - batch.FirstAvailable.Sequence)
                     + " evicted=" + batch.FirstAvailable.Sequence + " passComplete=" + batch.Coverage.HistoricalPassCompleted
                     + " fullPassRetained=" + batch.Coverage.FullHistoricalPassRetained + " UTC-range-confirmed=false"
+                    + " readerComparison=" + (comparison.VerifiedEvents > 0 ? "PASS" : "NO_EVENTS")
+                    + " verified=" + comparison.VerifiedEvents + " volume=" + comparison.Volume
+                    + " signed=" + comparison.SignedVolume + " digest=" + comparison.Digest.ToString("X16")
                     + " elapsed=" + ((now - loadStart) / (double)Stopwatch.Frequency).ToString("F1") + "s";
                 OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsId, "ExperimentalPrimaryLastProbe",
                     faulted ? "Unavailable" : historicalReplay && batch.Coverage.Phase == OrcaStreamPhase.Historical ? "HistoricalReplay" : "ProbeOnly", "PrivateProbeRegistry");
@@ -178,6 +195,8 @@ namespace NinjaTrader.NinjaScript.Indicators
             if (faulted || terminated) return;
             faulted = true;
             if (ingestion != null) ingestion.MarkFault(reason);
+            if (comparison != null) comparison.Dispose();
+            if (feedLifetime != null) feedLifetime.Dispose();
             Print("OrcaProviderProbe " + diagnosticsId + ": FAULT " + message);
             OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsId, "ExperimentalPrimaryLastProbe", "Unavailable", "PrivateProbeRegistry");
         }
