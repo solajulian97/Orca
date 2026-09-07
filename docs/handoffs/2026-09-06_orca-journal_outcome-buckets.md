@@ -28,3 +28,9 @@ No schema migration, new data series/subscriptions, Tick Replay, AddDataSeries, 
 ## Staged, not deployed
 NinjaTrader observed running PID40272. Stage .codex-backups/journal-outcomes-stage/OrcaJournal.dll SHA2561C5B8BE889D3A205420D5006286000AB7DBDE85FFB5213754D21912D2ADEDF9F. Expected live baseline B5BB2011FC8F477F793BC9BD20D3DAA04F1FA6D60F60E6CEC409662C57B91D54.
 After closure: verify source/stage/live hashes/SQLite reference and process absence, back up DLL/data/sidecars/TSV, copy only DLL and verify parity. Manual checks: all outcome buckets, threshold shared between views, inclusive boundaries, all/any tags combined with bucket, numeric ascending/descending headers and blue selection. Runtime MAE/MFE remains a separate pending validation track. Preference persistence/dashboard outcome view can be considered later if requested.
+
+## Deployment completed — 2026-09-06 23:41 local
+Julian confirmed closure. NinjaTrader absence verified before backup, immediately before copy and after deployment. Source/stage and prior live hashes matched; SQLite reference2.0.2.0 verified. Copied only OrcaJournal.dll.
+Live SHA2561C5B8BE889D3A205420D5006286000AB7DBDE85FFB5213754D21912D2ADEDF9F.
+Backup: C:\Users\julia\Documents\New project\.codex-backups\journal-outcomes-deploy-20260906-234114. Prior DLL and available database/sidecars/annotation TSV backed up and hash-verified; live data hashes unchanged. Original media untouched. Evidence in deployment.json.
+Outcome-bucket deployment complete. Restart/load, native sorting/colors/filter validation and MAE/MFE runtime checks remain pending. Threshold persistence was discussed but not implemented; threshold resets to20 on reopening Journal. No Full_Suite promotion.
