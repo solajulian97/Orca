@@ -13,6 +13,7 @@ class Program
     }
     static void Main()
     {
+        ProviderIdentityTests.Run(Check);
         using (var buffer = new OrcaProviderStreamBuffer(3, 2))
         {
             var original = buffer.FirstAvailable;
