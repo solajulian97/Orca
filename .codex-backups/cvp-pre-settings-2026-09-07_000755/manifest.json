@@ -1,0 +1,128 @@
+{
+  "Captured": "2026-09-07T00:08:52.8512203-04:00",
+  "Head": "0969f71a688ba4486a4b7b166865faa815cf265a",
+  "ArchiveSHA256": "BE920F2F83DAFA79EBAB8A23E871966BD5681C2F0E6F27F9586B536D9C7B5A6D",
+  "VerifiedEntries": 24,
+  "Files": [
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaCandleVolumeProfile.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.cs",
+      "SHA256": "B8C986BD4615AC4ECEC627681CAF0F3253F5AD1337FA5F9A44ED2ECFB7EA6E89"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaCandleVolumeProfile.Rendering.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.Rendering.cs",
+      "SHA256": "C88A8D0CEF2DFC0DC8E33BC8D30315171FA503950CBE8CAD92C51610073A09D8"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaFootprintCore.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaFootprintCore.cs",
+      "SHA256": "5A04460D66816E54C5071CF3C3FDDEE1EFD79A8870C6B96B6AFCDFCEED76F7D4"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\indicators\\ORCA_CANDLE_VOLUME_PROFILE.md",
+      "Entry": "workspace/docs/indicators/ORCA_CANDLE_VOLUME_PROFILE.md",
+      "SHA256": "91D327564B19B4A3D822C5708B43252115522CE37D832379A2078CF0CC01C2A8"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-07-21_cvp_bid-ask-footprint.md",
+      "Entry": "workspace/docs/handoffs/2026-07-21_cvp_bid-ask-footprint.md",
+      "SHA256": "C09B689B4CEEEE599064F40E964C87EB6CDB246B0E4FD3E70BCA725009FF8817"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-30_cvp_footprint-v1-foundation-clarity.md",
+      "Entry": "workspace/docs/handoffs/2026-08-30_cvp_footprint-v1-foundation-clarity.md",
+      "SHA256": "8BDBAC4201D778763395F0DF2B1AC1D230AA8F228CF7F55380E2AA276FE8B4F2"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-30_cvp_pre-footprint-backup.md",
+      "Entry": "workspace/docs/handoffs/2026-08-30_cvp_pre-footprint-backup.md",
+      "SHA256": "1B4D886DBCCED15E033EAF49938D0D684BB89B55028F740D0329C7E9B73CC56B"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-31_cvp_settings-converter-generation.md",
+      "Entry": "workspace/docs/handoffs/2026-08-31_cvp_settings-converter-generation.md",
+      "SHA256": "90063AAB24F6E802DED0D3B2105EFAC8C103CAA80AA444204B5AE5A425366266"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-01_cvp_bidask-full-candle.md",
+      "Entry": "workspace/docs/handoffs/2026-09-01_cvp_bidask-full-candle.md",
+      "SHA256": "3373B9E224F044AA79D7D0C35634E0D60CDD4F00DC94393AA66CC684C63261EF"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-01_cvp_footprint-readability-winner-emphasis.md",
+      "Entry": "workspace/docs/handoffs/2026-09-01_cvp_footprint-readability-winner-emphasis.md",
+      "SHA256": "1E05AA4C4583229CEA63A6ED5A7A768A07B69CE9404B128D34E3A8F1F7D045C7"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-01_cvp_normal-bidask-winner-emphasis.md",
+      "Entry": "workspace/docs/handoffs/2026-09-01_cvp_normal-bidask-winner-emphasis.md",
+      "SHA256": "3578000AAB00CE17A6ED37DC3355FA0602A2CC5FAFCC578F0C7AA6CA6BA68DCB"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-03_cvp_delta-colored-volume-text.md",
+      "Entry": "workspace/docs/handoffs/2026-09-03_cvp_delta-colored-volume-text.md",
+      "SHA256": "973E5F81C9D70C8C8B634717BF029CB479B5B6C6807CC27B8E690B4A8ED4FB64"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-03_cvp_qualified-volume-text-hover.md",
+      "Entry": "workspace/docs/handoffs/2026-09-03_cvp_qualified-volume-text-hover.md",
+      "SHA256": "57B1E17B242080E487F1E6F7C7CCD4B64EC45CB1119BF8D7918854545CA7ED35"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-03_cvp_thresholded-volume-text-emphasis.md",
+      "Entry": "workspace/docs/handoffs/2026-09-03_cvp_thresholded-volume-text-emphasis.md",
+      "SHA256": "617063D82F072909523DF80EB2EFF48BC20DBE14804294C93F0B0D736A2CC609"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-05_cvp_volume-text-brightness.md",
+      "Entry": "workspace/docs/handoffs/2026-09-05_cvp_volume-text-brightness.md",
+      "SHA256": "1E63F74E6EA5A554F6EA724668527190995F0E9C03CA85843E9DC6E55574B5B2"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaFootprint.Tests\\Program.cs",
+      "Entry": "workspace/tests/OrcaFootprint.Tests/Program.cs",
+      "SHA256": "185D39A71EE43B1176E2FABF43B49AB68907A5FBD4001816FDC4DEA4DEF8C696"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaFootprint.PlatformCheck\\Program.cs",
+      "Entry": "workspace/tests/OrcaFootprint.PlatformCheck/Program.cs",
+      "SHA256": "B258F2F08623A08D908BFE6168460C20859FA1CCDF7149C10E52C40398B1CB51"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaFootprint.PlatformCheck\\OrcaFootprint.PlatformCheck.csproj",
+      "Entry": "workspace/tests/OrcaFootprint.PlatformCheck/OrcaFootprint.PlatformCheck.csproj",
+      "SHA256": "0EE1C833F04A491D53E0A61EA9B845CD1A18155FD5A7CE3196C02CBA953F2066"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaFootprint.Tests\\OrcaFootprint.Tests.csproj",
+      "Entry": "workspace/tests/OrcaFootprint.Tests/OrcaFootprint.Tests.csproj",
+      "SHA256": "62314E767B126ED41B500BE7F2334D2EC0B928E3FC505746ED05FA81DF2711F7"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaFootprint.PlatformCheck\\InvalidConverterWrapper.txt",
+      "Entry": "workspace/tests/OrcaFootprint.PlatformCheck/InvalidConverterWrapper.txt",
+      "SHA256": "63C4D80C8B804E0CAB3BF984051A92B73FC274975D183364405A51F161837535"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\tests\\OrcaFootprint.PlatformCheck\\BaselineFixture.txt",
+      "Entry": "workspace/tests/OrcaFootprint.PlatformCheck/BaselineFixture.txt",
+      "SHA256": "B3C8F228B1D6740B6F0B6440149C6B70857EA9709656CC60959DF66F7CF3D27A"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaCandleVolumeProfile.cs",
+      "Entry": "live-reference/OrcaCandleVolumeProfile.cs",
+      "SHA256": "CD9643C59184B4BA344314D32E48CC9033E705A588D0D97D553FE5DA4B8535C9"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaCandleVolumeProfile.Rendering.cs",
+      "Entry": "live-reference/OrcaCandleVolumeProfile.Rendering.cs",
+      "SHA256": "49A1228AAF6450B5FFCF858D91A456BA270CDE42E6F414421A71CCF4071A8488"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaFootprintCore.cs",
+      "Entry": "live-reference/OrcaFootprintCore.cs",
+      "SHA256": "4F419ECB401AC35634D1596E46F718BE39AF649D28D6CA01CA8A44D8E48966BF"
+    }
+  ]
+}
