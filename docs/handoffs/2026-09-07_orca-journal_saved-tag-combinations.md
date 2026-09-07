@@ -25,3 +25,6 @@ Stage: .codex-backups/journal-saved-views-stage/OrcaJournal.dll
 SHA256: 789CAB49F7E4AA30E1377B665997FA1D6600B5B12B0BF26FD7268685B3A8B449
 Not deployed. Guarded DLL backup/copy required once NinjaTrader is closed. Existing live DLL remains unchanged.
 Not eligible for Full_Suite promotion; manual NinjaTrader validation pending.
+
+## Deployment completed — 2026-09-07 00:16 EDT
+NinjaTrader confirmed closed before and after copy. Staged/source/live SHA256 matched 789CAB49F7E4AA30E1377B665997FA1D6600B5B12B0BF26FD7268685B3A8B449. SQLite reference 2.0.2.0 verified. Backup: .codex-backups/journal-saved-views-deploy-20260907-001647 (deployment.json records hashes). Only Journal DLL deployed; database and annotation TSV hashes unchanged. Includes expectancy/layout changes. NinjaTrader startup and manual validation still pending; schema 11 initializes on next Journal startup. Supersedes not-deployed status above.
