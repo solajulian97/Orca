@@ -31,9 +31,23 @@ class Program {
   vm.Load(trades,new[]{"All Accounts","SIM"});Check(vm.SelectedPeriod=="Yesterday" && vm.SelectedAccount=="SIM","Refresh preserves selections");
   var view=new DashboardView{DataContext=vm};view.Measure(new Size(1400,800));view.Arrange(new Rect(0,0,1400,800));view.UpdateLayout();
   var bmp=new RenderTargetBitmap(1400,800,96,96,PixelFormats.Pbgra32);bmp.Render(view);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bmp));using(var f=File.Create(Path.Combine(args[0],"dashboard.png")))encoder.Save(f);
-  vm.NextMonthCommand.Execute(null);Check(vm.SelectedPeriod=="Calendar month" && !vm.IsSingleDay,"Month navigation");
+  vm.NextMonthCommand.Execute(null);Check(vm.SelectedPeriod=="Yesterday" && vm.IsSingleDay && vm.Kpis.NetPnlDollars==800,"Month navigation preserves period");
   vm.SelectDayCommand.Execute(new PnlCalendarDay{Date=day});Check(vm.IsSingleDay && vm.Kpis.NetPnlDollars==800,"Day drilldown");
   vm.SelectedPeriod="Today";Check(vm.Kpis.TotalTrades==0,"Today excludes other dates");
+  Check(DashboardViewModel.RollingWeekdayStart(new DateTime(2026,9,7),5)==new DateTime(2026,9,1),"Monday five weekdays inclusive");
+  Check(DashboardViewModel.RollingWeekdayStart(new DateTime(2026,9,7),10)==new DateTime(2026,8,25),"Ten weekdays cross month");
+  Check(DashboardViewModel.RollingWeekdayStart(new DateTime(2026,9,7),20)==new DateTime(2026,8,11),"Twenty weekdays");
+  Check(DashboardViewModel.RollingWeekdayStart(new DateTime(2026,9,6),10)==new DateTime(2026,8,24),"Sunday does not count");
+  Check(DashboardViewModel.RollingWeekdayStart(new DateTime(2024,3,1),2)==new DateTime(2024,2,29),"Leap-year boundary");
+  Check(DashboardViewModel.RollingWeekdayStart(new DateTime(2026,1,1),2)==new DateTime(2025,12,31),"Year boundary and explicit weekday policy");
+  var cutoff=DashboardViewModel.RollingWeekdayStart(DateTime.Today,10);
+  var rolling=new DashboardViewModel();rolling.Load(new[]{T(cutoff.AddDays(-1),999),T(cutoff,100),T(DateTime.Today,50)},new[]{"All Accounts","SIM"});rolling.SelectedPeriod="Last 10 Trading Days";
+  Check(rolling.Kpis.NetPnlDollars==150,"Inclusive rolling cutoff");
+  string originalMonth=rolling.CalendarTitle;rolling.PreviousMonthCommand.Execute(null);string browsed=rolling.CalendarTitle;
+  Check(rolling.SelectedPeriod=="Last 10 Trading Days" && rolling.Kpis.NetPnlDollars==150 && browsed!=originalMonth,"Browse keeps rolling KPI window");
+  rolling.Load(new[]{T(cutoff,100),T(DateTime.Today,50)},new[]{"All Accounts","SIM"});Check(rolling.CalendarTitle==browsed,"Refresh preserves browsed month");
+  rolling.NextMonthCommand.Execute(null);Check(rolling.CalendarTitle==originalMonth && rolling.Kpis.NetPnlDollars==150,"Return month preserves window");
+  rolling.SelectedPeriod="Calendar month";rolling.PreviousMonthCommand.Execute(null);Check(rolling.SelectedPeriod=="Calendar month","Explicit calendar month still navigates");
   Console.WriteLine("PASS: "+checks+" dashboard checks and rendered view.");return 0;
  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
 }

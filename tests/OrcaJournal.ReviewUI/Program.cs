@@ -85,6 +85,11 @@ class Program
                 library.Reload();Find<Button>(library).Single(x=>x.Tag as string=="Risked proper amount").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));library.UpdateLayout();
                 if(Find<Button>(library).Count(x=>x.Content as string=="Open full review")!=18 || !Find<TextBlock>(library).Any(x=>x.Name=="LibraryStatus" && x.Text.Contains("23 media")))throw new Exception("Gallery paging or detached exclusion failed");
                 Find<Button>(library).Single(x=>x.Content as string=="Next").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));library.UpdateLayout();if(Find<Button>(library).Count(x=>x.Content as string=="Open full review")!=5)throw new Exception("Gallery next page failed");
+                var libraryRepo=new TradeReviewRepository(db);var beforeRemoval=libraryRepo.Read(t.Id);
+                libraryRepo.RemoveTagFromLibrary("Risked proper amount");library.Reload();library.UpdateLayout();
+                if(Find<Button>(library).Any(x=>x.Tag as string=="Risked proper amount") || libraryRepo.Read(t.Id).Tags!=beforeRemoval.Tags || libraryRepo.Read(t.Id).Revision!=beforeRemoval.Revision || !libraryRepo.TagOptions(beforeRemoval.Tags).Any(x=>x.Name=="Risked proper amount"))throw new Exception("Removal must hide picker but preserve historical assignments");
+                if(libraryRepo.TagOptions("").Any(x=>x.Name=="Risked proper amount"))throw new Exception("Removed tag offered for new assignment");
+                libraryRepo.SaveTagGroup("Risked proper amount",ReviewTagOption.Management);library.Reload();library.UpdateLayout();if(!Find<Button>(library).Any(x=>x.Tag as string=="Risked proper amount"))throw new Exception("Restore tag failed");
                 libraryWindow.Close();Console.WriteLine("PASS: Tag Library effective tags, groups, media and empty state; advanced collapsed.");
                 var dayVm=new OrcaJournal.UI.ViewModels.TradesViewModel();dayVm.Load(repo.GetAll(),tagRepo,mediaRepo,new[]{"All Accounts","SIM"});
                 dayVm.FilterDirection="Short";dayVm.FilterInstrument="NQ";dayVm.ShowDay(new DateTime(2026,9,5),"SIM");
