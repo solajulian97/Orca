@@ -10,6 +10,8 @@ namespace NinjaTrader.NinjaScript.Indicators
     public sealed class OrcaProviderSourceIdentity
     {
         public readonly OrcaProviderStreamKey Key;
+        public readonly Guid ConnectionEpoch;
+        public readonly OrcaProviderEnvironment Environment;
 
         public OrcaProviderSourceIdentity(string fullContract, OrcaProviderEnvironment environment,
             Guid connectionEpoch, string sessionDefinitionSnapshot, string timezoneRulesSnapshot,
@@ -20,6 +22,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                 throw new ArgumentOutOfRangeException("environment");
             if (connectionEpoch == Guid.Empty) throw new ArgumentException("An explicit connection/replay epoch is required.", "connectionEpoch");
             if (classifierOrigin == Guid.Empty) throw new ArgumentException("An explicit classifier initialization scope is required.", "classifierOrigin");
+            ConnectionEpoch = connectionEpoch;
+            Environment = environment;
             Require(fullContract, "fullContract");
             Require(sessionDefinitionSnapshot, "sessionDefinitionSnapshot");
             Require(timezoneRulesSnapshot, "timezoneRulesSnapshot");

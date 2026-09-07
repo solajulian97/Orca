@@ -22,11 +22,12 @@ var compilation = CSharpCompilation.Create("OrcaProviderPlatformCheck", trees,
 var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
 if (args.Contains("--metadata"))
 {
-    foreach (string name in new[] { "NinjaTrader.Data.TradingHours", "NinjaTrader.Data.Session", "NinjaTrader.Data.PartialHoliday", "NinjaTrader.Data.MarketData", "NinjaTrader.Data.Bars" })
+    foreach (string name in new[] { "NinjaTrader.Data.TradingHours", "NinjaTrader.Data.Session", "NinjaTrader.Data.PartialHoliday", "NinjaTrader.Data.MarketData", "NinjaTrader.Data.Bars", "NinjaTrader.Data.MarketDataEventArgs", "NinjaTrader.Cbi.Connection", "NinjaTrader.Data.BarsRequest", "NinjaTrader.Cbi.Instrument" })
     {
         var type = compilation.GetTypeByMetadataName(name);
         Console.WriteLine(name);
         if (type != null) foreach (var member in type.GetMembers().OfType<IPropertySymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public)) Console.WriteLine(member.Type.ToDisplayString() + " " + member.Name);
+        if (type != null) foreach (var member in type.GetMembers().OfType<IMethodSymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public && m.MethodKind == MethodKind.Ordinary && (m.Name.Contains("Connection") || m.Name.Contains("Request")))) Console.WriteLine(member.ToDisplayString());
     }
 }
 foreach (var error in errors) Console.WriteLine(error);
