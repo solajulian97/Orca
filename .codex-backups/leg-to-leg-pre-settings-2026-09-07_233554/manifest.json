@@ -1,0 +1,344 @@
+{
+  "Captured": "2026-09-07T23:38:04.475791-04:00",
+  "Head": "c4f70a360f80be541e4307852d11542f3fbaf3f0",
+  "ArchiveSHA256": "7bf3cf07fe5cbf467f3df612a59582215834926999cf43193785907c61f04831",
+  "VerifiedEntries": 67,
+  "SavedTemplateFiles": 55,
+  "Files": [
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaLegtoLegProfile.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaLegtoLegProfile.cs",
+      "SHA256": "017d93d90daa548cac12aa493740153b240c0c8f2a6c60086206e71fddb2c971"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaLegtoLegProfile.cs",
+      "Entry": "live-reference/OrcaLegtoLegProfile.cs",
+      "SHA256": "9097f4d05d7e412f6f429a22314822ee1425eb01ed6775f1ef7cc853409e6974"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaDiagnosticsCore.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaDiagnosticsCore.cs",
+      "SHA256": "b88d568e9cd7dfa5e3e8929bdc790640bc1e9cc72b40a58c50ea76e394f85cb6"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaDiagnosticsCore.cs",
+      "Entry": "live-reference/OrcaDiagnosticsCore.cs",
+      "SHA256": "457dc946100724b41db219ac67e9f3280b97b8d9b0742e69af52787432034261"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\Orca Trades\\Working_Suite\\Indicators\\OrcaReplayCore.cs",
+      "Entry": "workspace/Orca Trades/Working_Suite/Indicators/OrcaReplayCore.cs",
+      "SHA256": "4a75dbb9d15042c00b08dbbd0a02c7feb92b64d777b34f972b4b05458054bf94"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\bin\\Custom\\Indicators\\OrcaReplayCore.cs",
+      "Entry": "live-reference/OrcaReplayCore.cs",
+      "SHA256": "da78e27035ea63d76d7b28d7fe00dd10d324e50f46646562ca9fb484eb6fd109"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-10_orca-leg-to-leg_active-profile-orientation.md",
+      "Entry": "workspace/docs/handoffs/2026-08-10_orca-leg-to-leg_active-profile-orientation.md",
+      "SHA256": "556ef3cd5086d9d1f318a73d5e6155c7775a7fbb5eb8d63958881be5a66d50ab"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-21_orca-leg-to-leg_active-delta-reset.md",
+      "Entry": "workspace/docs/handoffs/2026-08-21_orca-leg-to-leg_active-delta-reset.md",
+      "SHA256": "15900ce054157742018062fd03c0665cf3129c7ba4c3eb454a7dd12e22031db3"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-23_orca-leg-to-leg_reset-aggregation.md",
+      "Entry": "workspace/docs/handoffs/2026-08-23_orca-leg-to-leg_reset-aggregation.md",
+      "SHA256": "930c5a15f21e6638f1c8223dfb8631e296d599b2bd4ff1a12ca915115b1666fe"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-08-26_orca-leg-to-leg_reset-aggregation-ratio.md",
+      "Entry": "workspace/docs/handoffs/2026-08-26_orca-leg-to-leg_reset-aggregation-ratio.md",
+      "SHA256": "f14e02e0eccfa93c2e0d621e584bc88d9f3cea48d6aa25b22803bc0527249b0e"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-03_orca-leg-to-leg_compact-delta-statistics.md",
+      "Entry": "workspace/docs/handoffs/2026-09-03_orca-leg-to-leg_compact-delta-statistics.md",
+      "SHA256": "47a84717f827ac98436e7ddefea5250e240700daa9e6afd8ff94ed7dc53acefd"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\New project\\docs\\handoffs\\2026-09-03_orca-leg-to-leg_statistics-readability.md",
+      "Entry": "workspace/docs/handoffs/2026-09-03_orca-leg-to-leg_statistics-readability.md",
+      "SHA256": "406032cb2993d7c2cda119b69d2fc15831f91c1259657731cdca114fb322e389"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\1m mnq.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/1m mnq.xml",
+      "SHA256": "f34259c19195106234cc1430e2fbc10e647d5fe4298313edf17d2436feaaf711"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\atr nq.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/atr nq.xml",
+      "SHA256": "34e9cdaa1b83bb4cf669a85f0244c084e83396494deb386b8a76bc089f1e8a67"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\1m nq.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/1m nq.xml",
+      "SHA256": "4eebb6eb455c28f328cc63c0f7fc50da0154c7d7093be75350d79ef168aea17b"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\180 rev.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/180 rev.xml",
+      "SHA256": "ea95d802a1cd808df4abccdc70b646b7d786c8a60cd1933215f5bebaaa335657"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\nq 1000v.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/nq 1000v.xml",
+      "SHA256": "3db30b2bff4fdc8c0272256b9e96a2b1d4ee1ad0a352f400b467af58721cdaba"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\nq 5m.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/nq 5m.xml",
+      "SHA256": "4c5455994ae182fe4f015fda1907b258d9596b99a5d1609b1f57a239672413e3"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\1.5 d.agg. 200rev.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/1.5 d.agg. 200rev.xml",
+      "SHA256": "00190f05e8d2898850d2f51c4b2856a5534f0ea6437430b76020ca6796ae994a"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\nq 250.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/nq 250.xml",
+      "SHA256": "b08d1316630f0dcbbd6852ad449400d9d210c95bd5e7979029d577c17158126b"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\NQ 120 REV 1.5 D.AGG..xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/NQ 120 REV 1.5 D.AGG..xml",
+      "SHA256": "b64e09ae8dff68f6b2ce992d4d8072653e425823ccf0d9541bb727fade479991"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\Default.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/Default.xml",
+      "SHA256": "b08d1316630f0dcbbd6852ad449400d9d210c95bd5e7979029d577c17158126b"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Indicator\\OrcaLegtoLegProfile\\nq 15s.xml",
+      "Entry": "saved-templates/Indicator/OrcaLegtoLegProfile/nq 15s.xml",
+      "SHA256": "f3cc44e27b819e28621839a3dd58da78a42657ed33fdb5dfcee2bf016c089495"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\1m nq 2.1.xml",
+      "Entry": "saved-templates/Chart/1m nq 2.1.xml",
+      "SHA256": "1250a231404704db03c3fb4c5e6538f2c3d6ee9f22ebc100e7202e523a59c4dc"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 1000v MNQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 1000v MNQ 1.0.xml",
+      "SHA256": "fbe8963d7fa49f6388e6aefa4d801da351f83b14835d613a7239b2c050b132ef"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 1000V HK ES.xml",
+      "Entry": "saved-templates/Chart/Orca 1000V HK ES.xml",
+      "SHA256": "028f6996977fd547e21aab920de85979ca9bc6c426a35a490a6ed0d4b23cfbc9"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 100R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 100R NQ 1.0.xml",
+      "SHA256": "cde7c1e4acb0de10f841e99447a22bfa5d9a74390ed311bf31986ec92f8428b0"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 1000v NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 1000v NQ 1.0.xml",
+      "SHA256": "c4532a58a10772fb5e303e931e690fa3c0f758f0a0427c788746c31c10601d15"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 10M NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 10M NQ 1.0.xml",
+      "SHA256": "aae6137d46827e2349e6ee450a221b2134f342f1d46a9cd4648f67648c35e97c"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 15M ES.xml",
+      "Entry": "saved-templates/Chart/Orca 15M ES.xml",
+      "SHA256": "21b51d9a8a83359dcef1171056ae7ae7e80ceb3f14ba8275abf8deae4f7dec5e"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 15R ES 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 15R ES 1.0.xml",
+      "SHA256": "d87c2f4b1227454fbe2c3aabd351999e2bae4d8b5f3d7fd90d81266a77b11a89"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 120R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 120R NQ 1.0.xml",
+      "SHA256": "777aba45798410166e973fe89591de57aa04cf1d570e71b246ceed8d8a3758f2"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 15m NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 15m NQ 1.0.xml",
+      "SHA256": "a23a10a78dffb52d212a6982e8f7c4928e6fdf61c8d3ef629da7f1c3bf0a4c98"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 160R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 160R NQ 1.0.xml",
+      "SHA256": "a6e8ffb211ec8654c2f141331ada378f0a42691e42b28dd805caceae99c46f8c"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 1H VP NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 1H VP NQ 1.0.xml",
+      "SHA256": "eebe758fdd5eba9a3091db0dc9d312ef8ca29e0d901e5e51010134f3b00750d9"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 1m NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 1m NQ 1.0.xml",
+      "SHA256": "60f1bca2bd4e8b0a8a85662cb062adb470969b10a3161e0890c26e6fdeaddd1d"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 20R NQ 1.0 ROLLING.xml",
+      "Entry": "saved-templates/Chart/Orca 20R NQ 1.0 ROLLING.xml",
+      "SHA256": "87b8498e5cb023e86c6c526749026d84fa7a275de54f9ee96cbf060df6030667"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 20R NQ 1.0 LEG TO LEG.xml",
+      "Entry": "saved-templates/Chart/Orca 20R NQ 1.0 LEG TO LEG.xml",
+      "SHA256": "2b83f9318ac8f59b0c81f2e1240401e6874729d827f64a74793f7223a7b23ba4"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 1m PA NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 1m PA NQ 1.0.xml",
+      "SHA256": "0f858499cdd21d8ea2ab9ebe7c41e22d8395d795385ca2fd731cc72ef5bece81"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 240R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 240R NQ 1.0.xml",
+      "SHA256": "739d3cce6eaed8cf7beac603c4a7da0ea2eade64f159fcc3299c2b7c6095b58c"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30M NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 30M NQ 1.0.xml",
+      "SHA256": "1b902d51a87572b5d020ddd0d0ec9bb6f96bbcdfd23745dbaf87e06afaae460d"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 30R NQ 1.0.xml",
+      "SHA256": "d09553d9761e339bfb2549af425ebf86223759529b42532c0671f27905497b1e"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 2M NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 2M NQ 1.0.xml",
+      "SHA256": "2ce8c945a86135752a725b0f2cde67dbebca3718709304503a1cc31b61e5d982"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30m NQ CVP 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 30m NQ CVP 1.0.xml",
+      "SHA256": "ab63a11454895bf319495799943f0a055ff69e88bb85d2f5f91d187ab8eceeed"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30S PA NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 30S PA NQ 1.0.xml",
+      "SHA256": "7e7415a150b29a79d6fe02189c968ca472a52449cd616621a4026586ecd3db24"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30m ES 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 30m ES 1.0.xml",
+      "SHA256": "a55f19968b374c50e8bb96ba6a326a1361f55ae1424c5a367c2e897182c1d029"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30R VP NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 30R VP NQ 1.0.xml",
+      "SHA256": "8f0d3c29572a4977bc5590b388b25f258444b848a1f5e507b5b7a60832cb1ac9"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30s with 15m Step Profile HFT .xml",
+      "Entry": "saved-templates/Chart/Orca 30s with 15m Step Profile HFT .xml",
+      "SHA256": "24f4ef39a1a3bd43a204e589165291a8529fe08047402c8ef0b80f160d16d6c8"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 30S VP NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 30S VP NQ 1.0.xml",
+      "SHA256": "f6b99458bda603398764d73a0683d06f2fe60f0dd73b50be9f173db00b884b5d"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 3k Volume NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 3k Volume NQ 1.0.xml",
+      "SHA256": "c9d40f4ad9839d5cce51bde77bfca1925d1a7e0484f3d35cba01167f56418ab3"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 3m ES.xml",
+      "Entry": "saved-templates/Chart/Orca 3m ES.xml",
+      "SHA256": "0129221aad0dcfba6a089453b56cdf3fda80a7ca44d641a2ca23abd23972b2ce"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 40R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 40R NQ 1.0.xml",
+      "SHA256": "038833e800bf028032a8f4b7bb5d072e714649796f6b77d54b3cff58f468fcc5"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 5m FP ES 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 5m FP ES 1.0.xml",
+      "SHA256": "a7952abb91fc6fd35b47163d87e6bae674cb5bdd6b1f1664e42eb7568a82d29a"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 480R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 480R NQ 1.0.xml",
+      "SHA256": "1dce469c5e2d9b3312f579dd5c6cbd973ef625c3e0d5fe965fb567db16be67cc"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 5m NQ 1.1 Step Profiles 4h.xml",
+      "Entry": "saved-templates/Chart/Orca 5m NQ 1.1 Step Profiles 4h.xml",
+      "SHA256": "d94d1637a7a13d0480e2652bfb4d94bf66db73f9493f9410a3849754fcd7e035"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 5S NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 5S NQ 1.0.xml",
+      "SHA256": "b45f45608800a94dc95e70dd911664a2ea7936bddcccdf50d19fcc5553b19f6b"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 500v ES 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 500v ES 1.0.xml",
+      "SHA256": "42a019b94bdaa31b661bb72daccf908cbb8842ea092c008c282cfe9c9edc8ef8"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 80r MNQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 80r MNQ 1.0.xml",
+      "SHA256": "34c1a38d73402f270871eb295fcd69aeeaf7ad7068c0d73dcec032e41e7cda38"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 60R NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca 60R NQ 1.0.xml",
+      "SHA256": "779582d05791955c9aae92a156f656f1f11cf8762a7bf3e1172ab0154139d801"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 5m NQ 1.1 Step Profiles.xml",
+      "Entry": "saved-templates/Chart/Orca 5m NQ 1.1 Step Profiles.xml",
+      "SHA256": "ecb3b2dc3101b228d545a00aee61f958118b3c05a6c47a8a1936a80adfc7cfdf"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca 80R NQ 1.0 delta volume.xml",
+      "Entry": "saved-templates/Chart/Orca 80R NQ 1.0 delta volume.xml",
+      "SHA256": "258a00fd1f02713983cee4a0e137bed6cbc5750cbf1763ce10e36b896b2a0353"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca Adaptive ATR 1m Range NQ 1.0.xml",
+      "Entry": "saved-templates/Chart/Orca Adaptive ATR 1m Range NQ 1.0.xml",
+      "SHA256": "b7be0f88058d2e280ace75ba02ced1b2106f7269ae52aaee9002f064a0db54e2"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca ES 2000V.xml",
+      "Entry": "saved-templates/Chart/Orca ES 2000V.xml",
+      "SHA256": "a72b595d5b78b89c9dd3ad164fe5da32e670847b70feb9ce17d2af8f87389f49"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca MES 500V IB .xml",
+      "Entry": "saved-templates/Chart/Orca MES 500V IB .xml",
+      "SHA256": "1457d6cd29e40ebab1fe66196e876aebe9821ca65fcf249ef56ce8bccb472075"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\Orca Light Background.xml",
+      "Entry": "saved-templates/Chart/Orca Light Background.xml",
+      "SHA256": "ed2b082090e6a9bf31141acdace1cbebb7a8a691a40d3a3d1ea0a9ea0cb7c68f"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\voluma 3.5k mnq.xml",
+      "Entry": "saved-templates/Chart/voluma 3.5k mnq.xml",
+      "SHA256": "c745800ea55e18e3387860cb085e64d8a7922da600972560f1113a8d5c0437b6"
+    },
+    {
+      "Source": "C:\\Users\\julia\\Documents\\NinjaTrader 8\\templates\\Chart\\voluma es 10k.xml",
+      "Entry": "saved-templates/Chart/voluma es 10k.xml",
+      "SHA256": "64c31d64f6e96530f992d8a955039605effc1672898f8c2ebb3f351a93ba95ac"
+    }
+  ]
+}
