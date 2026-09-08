@@ -45,6 +45,12 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 if (State == State.Terminated)
                 {
+                    // Capture the live tail before releasing readers; no timer or extra subscription.
+                    if (!terminated && !faulted && reader != null)
+                    {
+                        try { ReportStatus(true); }
+                        catch (Exception ex) { Fault(ex.Message, OrcaStreamFault.IngestionFailed); }
+                    }
                     terminated = true;
                     if (reader != null) reader.Dispose();
                     if (publisher != null) publisher.Dispose();
@@ -114,11 +120,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         protected override void OnMarketData(MarketDataEventArgs e)
         {
-            if (e == null || e.MarketDataType != MarketDataType.Last) return;
+            if (e == null) return;
             State callbackState = State;
             lock (probeSync)
             {
                 if (terminated || faulted || ingestion == null) return;
+                if (e.IsReset)
+                {
+                    Fault("Market-data reset; reload probe before resuming.", OrcaStreamFault.SourceDisconnected);
+                    return;
+                }
+                if (e.MarketDataType != MarketDataType.Last) return;
+                if (callbackState == State.Transition)
+                {
+                    Fault("Last callback during Transition; historical/live assignment is unverified.", OrcaStreamFault.HistoricalGap);
+                    return;
+                }
                 bool historical = callbackState == State.Historical;
                 if ((!historical || !historicalReplay) && callbackState != State.Realtime) return;
                 long workStart = 0;
@@ -140,7 +157,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 }
                 if (!faulted)
                 {
-                    try { ReportStatus(false); }
+                    try { ReportStatus(!historical && liveCount == 1); }
                     catch (Exception ex) { Fault(ex.Message, OrcaStreamFault.IngestionFailed); }
                 }
             }
@@ -148,12 +165,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         protected override void OnConnectionStatusUpdate(ConnectionStatusEventArgs e)
         {
-            if (e == null || (e.PriceStatus != ConnectionStatus.ConnectionLost && e.PriceStatus != ConnectionStatus.Disconnected)) return;
+            if (e == null) return;
             lock (probeSync)
             {
-                // Conservative probe policy: no guessed connection ownership or automatic recovery.
-                if (!terminated && ingestion != null && State == State.Realtime)
-                    Fault("Price connection changed; reload probe before resuming (any connection).", OrcaStreamFault.SourceDisconnected);
+                // Any notification can indicate changed routing. Even order-only notifications
+                // conservatively invalidate this isolated experiment; no feed attribution is guessed.
+                if (!terminated && ingestion != null)
+                    Fault("Connection notification (price=" + e.PriceStatus
+                        + "); continuity unverified; reload probe before resuming (any connection).", OrcaStreamFault.SourceDisconnected);
             }
         }
 
