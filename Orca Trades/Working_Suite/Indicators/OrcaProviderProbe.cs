@@ -25,6 +25,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private long liveCount;
         private long loadStart;
         private long nextReport;
+        private int connectionReports;
 
         protected override void OnStateChange()
         {
@@ -168,6 +169,17 @@ namespace NinjaTrader.NinjaScript.Indicators
             if (e == null) return;
             lock (probeSync)
             {
+                if (terminated || ingestion == null) return;
+                // Bounded evidence continues after fault without reopening or publishing.
+                // Current object state is context only, not proof that an older callback is safe.
+                if (connectionReports++ < 8)
+                    Print("OrcaProviderProbe " + diagnosticsId + ": connection-observation utc="
+                        + DateTime.UtcNow.ToString("O") + " state=" + State
+                        + " price=" + e.PreviousPriceStatus + "->" + e.PriceStatus
+                        + " order=" + e.PreviousStatus + "->" + e.Status
+                        + " currentPrice=" + (e.Connection == null ? "unavailable" : e.Connection.PriceStatus.ToString())
+                        + " error=" + e.Error + " historical=" + historicalCount + " live=" + liveCount
+                        + " alreadyFaulted=" + faulted);
                 // Any notification can indicate changed routing. Even order-only notifications
                 // conservatively invalidate this isolated experiment; no feed attribution is guessed.
                 if (!terminated && ingestion != null)

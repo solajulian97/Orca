@@ -68,6 +68,13 @@ static class Program
         probe.Emit(new MarketDataEventArgs());
         Check(Field<long>(probe, "historicalCount") == 0 && Field<long>(probe, "liveCount") == 1, "live-only ignores historical and quote callbacks");
         probe.SetState(State.Terminated);
+        probe = Start(false); probe.SetState(State.Realtime);
+        for (int i = 0; i < 20; i++) probe.Connection(ConnectionStatus.Connecting);
+        Check(probe.Output.Count(s => s.Contains("connection-observation")) == 8, "connection observations bounded after fault");
+        Check(probe.Output.Any(s => s.Contains("alreadyFaulted=True") && s.Contains("currentPrice=unavailable")), "subsequent notifications visible without assumed connection");
+        probe.Emit(new MarketDataEventArgs());
+        Check(Field<long>(probe, "liveCount") == 0, "diagnostic continuation never resumes ingestion");
+        probe.SetState(State.Terminated);
         Console.WriteLine("PASS: " + checks + " linked-probe checks; platform callback scheduling remains unverified.");
     }
 }

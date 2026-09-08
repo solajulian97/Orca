@@ -7,7 +7,13 @@ using NinjaTrader.Data;
 namespace NinjaTrader.Cbi
 {
     public enum ConnectionStatus { Connected, Connecting, ConnectionLost, Disconnected }
-    public class ConnectionStatusEventArgs { public ConnectionStatus PriceStatus; }
+    public class Connection { public ConnectionStatus PriceStatus; }
+    public class ConnectionStatusEventArgs
+    {
+        public ConnectionStatus PriceStatus, PreviousPriceStatus, Status, PreviousStatus;
+        public Connection Connection;
+        public string Error = "NoError";
+    }
     public class Instrument { public string FullName = "ES SEP26"; }
 }
 namespace NinjaTrader.Data
