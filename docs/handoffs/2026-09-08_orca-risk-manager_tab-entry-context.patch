@@ -1,0 +1,291 @@
+diff --git a/Orca Trades/Working_Suite/AddOns/OrcaRiskManagerAddOn.cs b/Orca Trades/Working_Suite/AddOns/OrcaRiskManagerAddOn.cs
+index 5e53e9a..b5f0352 100644
+--- a/Orca Trades/Working_Suite/AddOns/OrcaRiskManagerAddOn.cs
++++ b/Orca Trades/Working_Suite/AddOns/OrcaRiskManagerAddOn.cs	
+@@ -40,6 +40,7 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 			public OrcaRoutedExecutionOverlayController RoutedOverlay;
+ 			public bool IsSelectionAttached;
+ 			public bool IsDetached;
++			public int RefreshQueued;
+ 		}
+ 
+ 		private static readonly Dictionary<ChartTab, bool> PanelVisibilityByTab = new Dictionary<ChartTab, bool>();
+@@ -168,7 +169,9 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 					e.Handled = true;
+ 			};
+ 			binding.SelectionChangedHandler = (s, e) => {
+-				if (IsBindingActive(binding)) RefreshChartWindowPanels(chartWindow);
++				// Child selectors also bubble this event. Rebind only after the tab switch settles.
++				if (object.ReferenceEquals(e.OriginalSource, chartWindow.MainTabControl))
++					QueueChartWindowRefresh(binding);
+ 			};
+ 			binding.RetryTickHandler = (s, e) => {
+ 				binding.RetryTimer?.Stop();
+@@ -187,12 +190,18 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 		private void QueueChartWindowRefresh(ChartWindowBinding binding)
+ 		{
+ 			Chart chartWindow = binding?.ChartWindow;
+-			if (chartWindow?.Dispatcher == null || !IsBindingActive(binding)) return;
+-			chartWindow.Dispatcher.InvokeAsync(() => {
+-				if (!IsBindingActive(binding)) return;
+-				AttachSelectionChangedHandler(binding);
+-				if (chartWindow.IsLoaded) RefreshChartWindowPanels(chartWindow);
+-			});
++			if (chartWindow?.Dispatcher == null || chartWindow.Dispatcher.HasShutdownStarted || !IsBindingActive(binding)) return;
++			if (System.Threading.Interlocked.Exchange(ref binding.RefreshQueued, 1) != 0) return;
++			try {
++				chartWindow.Dispatcher.InvokeAsync(() => {
++					System.Threading.Interlocked.Exchange(ref binding.RefreshQueued, 0);
++					if (!IsBindingActive(binding)) return;
++					AttachSelectionChangedHandler(binding);
++					if (chartWindow.IsLoaded) RefreshChartWindowPanels(chartWindow);
++				}, System.Windows.Threading.DispatcherPriority.Loaded);
++			} catch {
++				System.Threading.Interlocked.Exchange(ref binding.RefreshQueued, 0);
++			}
+ 		}
+ 
+ 		private void AttachSelectionChangedHandler(ChartWindowBinding binding)
+@@ -772,13 +781,11 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 			} catch { }
+ 		}
+ 
+-		private ChartTab GetSelectedChartTab(Chart chartWindow)
++		internal static ChartTab GetSelectedChartTab(Chart chartWindow)
+ 		{
+-			object content = chartWindow.MainTabControl?.SelectedContent;
+-			ChartTab selectedContentTab = content as ChartTab;
+-			if (selectedContentTab != null) return selectedContentTab;
+-
+-			object item = chartWindow.MainTabControl?.SelectedItem;
++			// SelectedContent can still belong to the previous tab inside SelectionChanged.
++			// Resolve the selected item itself; an unknown selection must not pick another tab.
++			object item = chartWindow?.MainTabControl?.SelectedItem;
+ 			ChartTab tab = item as ChartTab;
+ 			if (tab == null && item is TabItem tabItem) tab = tabItem.Content as ChartTab;
+ 			return tab;
+@@ -786,12 +793,12 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 
+ 		private ChartTab GetActiveChartTab(Chart chartWindow, object eventSource)
+ 		{
+-			ChartTab tab = FindOwningChartTab(eventSource as DependencyObject);
+-			if (tab != null && IsTabVisible(tab)) return tab;
+-
+-			tab = GetSelectedChartTab(chartWindow);
++			ChartTab tab = GetSelectedChartTab(chartWindow);
+ 			if (tab != null) return tab;
+ 
++			tab = FindOwningChartTab(eventSource as DependencyObject);
++			if (tab != null && IsTabVisible(tab)) return tab;
++
+ 			tab = GetChartTabFromWindowProperty(chartWindow);
+ 			if (tab != null) return tab;
+ 
+@@ -1642,6 +1649,7 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 		}
+ 		public void AttachToTab(ChartTab tab) {
+ 			if (tab == null || object.ReferenceEquals(attachedTab, tab)) return;
++			entryTabBindingVersion++;
+ 			if (isRoutedOverlayOnly) {
+ 				ClearRoutedProtectionDrag();
+ 				RemoveRoutedOrderOverlay();
+@@ -2106,6 +2114,52 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 			return (Window.GetWindow(attachedTab) as Chart)?.ChartTrader?.Instrument;
+ 		}
+ 		private Instrument GetActiveInstrument() { Chart cw = Window.GetWindow(attachedTab) as Chart; return OrcaExecutionRouter.ResolveExecutionInstrument(GetChartInstrument(), cw?.ChartTrader?.Instrument); }
++		private long entryTabBindingVersion;
++		private sealed class EntryContext {
++			public Chart Window;
++			public ChartTab Tab;
++			public Account Account;
++			public Instrument Instrument;
++			public string ChartInstrumentName;
++			public string ExecutionInstrumentName;
++			public long TabBindingVersion;
++		}
++		private bool BlockEntry(string reason) {
++			System.Windows.MessageBox.Show(reason, "Orca order not submitted", MessageBoxButton.OK, MessageBoxImage.Warning);
++			return false;
++		}
++		private bool TryCaptureEntryContext(out EntryContext context) {
++			context = null;
++			if (isCleanedUp || !isPanelRuntimeActive) return BlockEntry("Open Risk Manager on the selected chart before submitting an entry.");
++			Chart window = Window.GetWindow(this) as Chart;
++			ChartTab selected = OrcaRiskManagerAddOn.GetSelectedChartTab(window);
++			if (selected == null || !object.ReferenceEquals(selected, attachedTab))
++				return BlockEntry("Risk Manager is changing chart tabs. Wait for the selected chart to finish activating, then retry.");
++			Account account = window?.ChartTrader?.Account;
++			if (account == null) return BlockEntry("Select an account in Chart Trader before submitting an entry.");
++			Instrument chartInstrument = selected.ChartControl?.Instrument;
++			Instrument executionInstrument;
++			string reason;
++			if (!OrcaExecutionRouter.TryResolveEntryInstrument(chartInstrument, out executionInstrument, out reason))
++				return BlockEntry(reason);
++			if (OrcaReplayCore.IsChartLocked(selected.ChartControl)) return BlockEntry("Exit chart replay before submitting an entry.");
++			context = new EntryContext { Window = window, Tab = selected, Account = account, Instrument = executionInstrument,
++				ChartInstrumentName = chartInstrument.FullName, ExecutionInstrumentName = executionInstrument.FullName,
++				TabBindingVersion = entryTabBindingVersion };
++			return true;
++		}
++		private bool ValidateEntryContext(EntryContext captured) {
++			// Confirmation dialogs pump UI events: recheck immediately before creating the order.
++			EntryContext current;
++			if (!TryCaptureEntryContext(out current)) return false;
++			if (!object.ReferenceEquals(captured.Window, current.Window) || !object.ReferenceEquals(captured.Tab, current.Tab)
++				|| captured.TabBindingVersion != current.TabBindingVersion
++				|| !object.ReferenceEquals(captured.Account, current.Account)
++				|| !string.Equals(captured.ChartInstrumentName, current.ChartInstrumentName, StringComparison.OrdinalIgnoreCase)
++				|| !string.Equals(captured.ExecutionInstrumentName, current.ExecutionInstrumentName, StringComparison.OrdinalIgnoreCase))
++				return BlockEntry("The chart, account, or execution route changed before submission. Review the entry on the selected chart and retry.");
++			return true;
++		}
+ 		private bool IsSameInstrument(Instrument left, Instrument right) { if (left == null || right == null) return false; if (object.ReferenceEquals(left, right)) return true; return string.Equals(left.FullName, right.FullName, StringComparison.OrdinalIgnoreCase); }
+ 		private double GetActivePrice() { var cb = GetPrimaryChartBars(); return cb?.Bars != null && cb.Bars.Count > 0 ? cb.Bars.GetClose(cb.Bars.Count - 1) : 0; }
+ 		private void OnExecutionRouterSettingsChanged(object sender, EventArgs e) {
+@@ -2684,11 +2738,14 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 		private void SubmitAltSpaceQuickEntryAt(double price, MouseButton button) {
+ 			try {
+ 				price = RoundToTick(price);
+-				Account account = GetActiveAccount();
+-				Instrument instrument = GetActiveInstrument();
++				EntryContext entry;
++				if (!TryCaptureEntryContext(out entry)) return;
++				Account account = entry.Account;
++				Instrument instrument = entry.Instrument;
+ 				int quantity = ParseQuantity();
+ 				if (account == null || instrument == null || quantity < 1 || price <= 0) return;
+ 				if (!CanSubmitHotkeyOrder(account, "Submit Alt+Space entry-only order")) return;
++				if (!ValidateEntryContext(entry)) return;
+ 				OrderAction action;
+ 				OrderType orderType;
+ 				ResolveEntryOrderAtPrice(price, button, out action, out orderType);
+@@ -2948,10 +3005,13 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 		}
+ 		private void SubmitStagedBracket() {
+ 			try {
+-				Account acc = GetActiveAccount(); Instrument ins = GetActiveInstrument();
++				EntryContext entry;
++				if (!TryCaptureEntryContext(out entry)) return;
++				Account acc = entry.Account; Instrument ins = entry.Instrument;
+ 				stagedQuantity = ParseQuantity();
+ 				if (acc == null || ins == null || stagedQuantity < 1 || stagedEntryPrice <= 0 || stagedStopPrice <= 0 || stagedTargetPrice <= 0) return;
+ 				if (!CanSubmitHotkeyOrder(acc)) return;
++				if (!ValidateEntryContext(entry)) return;
+ 				pendingStopPrice = stagedStopPrice; pendingTargetPrice = stagedTargetPrice; pendingContracts = stagedQuantity;
+ 				string id = "OrcaBracket_" + Guid.NewGuid().ToString("N");
+ 				double limitPrice = stagedEntryOrderType == OrderType.Limit ? stagedEntryPrice : 0;
+@@ -3004,8 +3064,37 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 				}
+ 			} catch { }
+ 		}
+-		private void ExecuteTrade(OrderType t) { try { Account acc = GetActiveAccount(); Instrument ins = GetActiveInstrument(); if (acc == null || ins == null) return; int q = 1; int.TryParse(txtContracts.Text, out q); if (q < 1 || !ConfirmLiveOrderIfNeeded(acc, "Submit Orca entry order")) return; OrderAction act = isLongSelected ? OrderAction.Buy : OrderAction.SellShort; double ent = hEntry?.StartAnchor.Price ?? 0, stp = hStop?.StartAnchor.Price ?? 0, tar = hTarget?.StartAnchor.Price ?? 0; if (stp != 0) { pendingStopPrice=stp; pendingTargetPrice=tar; } string id = "Orca_" + Guid.NewGuid().ToString("N"); if (t == OrderType.Market) acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, q, 0, 0, "", id, DateTime.MaxValue, null) }); else acc.Submit(new[] { acc.CreateOrder(ins, act, t, OrderEntry.Manual, TimeInForce.Day, q, t==OrderType.Limit?ent:0, t==OrderType.StopMarket?ent:0, "", id, DateTime.MaxValue, null) }); pendingEntryName = id; } catch { } }
+-		private void ExecuteFastCommand(string c) { try { Account acc = GetActiveAccount(); Instrument ins = GetActiveInstrument(); if (acc == null || ins == null) return; int q = 1; int.TryParse(txtContracts.Text, out q); if (q < 1 || !ConfirmLiveOrderIfNeeded(acc, "Submit Orca fast order")) return; string id = "Fast_" + Guid.NewGuid().ToString("N"); OrderAction act = c.StartsWith("Sell")? OrderAction.Sell : OrderAction.Buy; if (c.EndsWith("Mkt")) acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, q, 0, 0, "", id, DateTime.MaxValue, null) }); else acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, q, GetActivePrice() + (c=="BuyAsk"?ins.MasterInstrument.TickSize:-ins.MasterInstrument.TickSize), 0, "", id, DateTime.MaxValue, null) }); } catch { } }
++		private void ExecuteTrade(OrderType t) {
++			try {
++				EntryContext entry;
++				if (!TryCaptureEntryContext(out entry)) return;
++				Account acc = entry.Account; Instrument ins = entry.Instrument;
++				int q = 1; int.TryParse(txtContracts.Text, out q);
++				if (q < 1 || !ConfirmLiveOrderIfNeeded(acc, "Submit Orca entry order")) return;
++				if (!ValidateEntryContext(entry)) return;
++				OrderAction act = isLongSelected ? OrderAction.Buy : OrderAction.SellShort;
++				double ent = hEntry?.StartAnchor.Price ?? 0, stp = hStop?.StartAnchor.Price ?? 0, tar = hTarget?.StartAnchor.Price ?? 0;
++				if (stp != 0) { pendingStopPrice=stp; pendingTargetPrice=tar; }
++				string id = "Orca_" + Guid.NewGuid().ToString("N");
++				if (t == OrderType.Market) acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, q, 0, 0, "", id, DateTime.MaxValue, null) });
++				else acc.Submit(new[] { acc.CreateOrder(ins, act, t, OrderEntry.Manual, TimeInForce.Day, q, t==OrderType.Limit?ent:0, t==OrderType.StopMarket?ent:0, "", id, DateTime.MaxValue, null) });
++				pendingEntryName = id;
++			} catch { }
++		}
++		private void ExecuteFastCommand(string c) {
++			try {
++				EntryContext entry;
++				if (!TryCaptureEntryContext(out entry)) return;
++				Account acc = entry.Account; Instrument ins = entry.Instrument;
++				int q = 1; int.TryParse(txtContracts.Text, out q);
++				if (q < 1 || !ConfirmLiveOrderIfNeeded(acc, "Submit Orca fast order")) return;
++				if (!ValidateEntryContext(entry)) return;
++				string id = "Fast_" + Guid.NewGuid().ToString("N");
++				OrderAction act = c.StartsWith("Sell") ? OrderAction.Sell : OrderAction.Buy;
++				if (c.EndsWith("Mkt")) acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, q, 0, 0, "", id, DateTime.MaxValue, null) });
++				else acc.Submit(new[] { acc.CreateOrder(ins, act, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, q, GetActivePrice() + (c=="BuyAsk"?ins.MasterInstrument.TickSize:-ins.MasterInstrument.TickSize), 0, "", id, DateTime.MaxValue, null) });
++			} catch { }
++		}
+ 		private void StartDragOrder(string t) {
+ 			if (!(attachedTab?.Content is System.Windows.Controls.Grid r)) return;
+ 			if (isDragOrderActive) {
+@@ -3664,7 +3753,20 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 				return Convert.ToDouble(value);
+ 			} catch { return 0; }
+ 		}
+-		private void PlaceDragOrderAt(double p) { try { Account acc = GetActiveAccount(); Instrument ins = GetActiveInstrument(); if (acc==null || ins==null) return; int q = 1; int.TryParse(txtContracts.Text, out q); if (q < 1 || !ConfirmLiveOrderIfNeeded(acc, "Submit Orca drag order")) return; string id = "Drag_" + Guid.NewGuid().ToString("N"); OrderAction act = dragOrderType.Contains("Buy") ? OrderAction.Buy : OrderAction.Sell; OrderType typ = dragOrderType.Contains("Stop") ? OrderType.StopMarket : OrderType.Limit; acc.Submit(new[] { acc.CreateOrder(ins, act, typ, OrderEntry.Manual, TimeInForce.Day, q, typ==OrderType.Limit?p:0, typ==OrderType.StopMarket?p:0, "", id, DateTime.MaxValue, null) }); } catch { } }
++		private void PlaceDragOrderAt(double p) {
++			try {
++				EntryContext entry;
++				if (!TryCaptureEntryContext(out entry)) return;
++				Account acc = entry.Account; Instrument ins = entry.Instrument;
++				int q = 1; int.TryParse(txtContracts.Text, out q);
++				if (q < 1 || !ConfirmLiveOrderIfNeeded(acc, "Submit Orca drag order")) return;
++				if (!ValidateEntryContext(entry)) return;
++				string id = "Drag_" + Guid.NewGuid().ToString("N");
++				OrderAction act = dragOrderType.Contains("Buy") ? OrderAction.Buy : OrderAction.Sell;
++				OrderType typ = dragOrderType.Contains("Stop") ? OrderType.StopMarket : OrderType.Limit;
++				acc.Submit(new[] { acc.CreateOrder(ins, act, typ, OrderEntry.Manual, TimeInForce.Day, q, typ==OrderType.Limit?p:0, typ==OrderType.StopMarket?p:0, "", id, DateTime.MaxValue, null) });
++			} catch { }
++		}
+ 		private void CancelDragOrder() { isDragOrderActive = false; if (dragCanvas != null) { (System.Windows.Media.VisualTreeHelper.GetParent(dragCanvas) as System.Windows.Controls.Panel)?.Children.Remove(dragCanvas); dragCanvas = null; } if (attachedTab?.ChartControl != null) { var w = Window.GetWindow(attachedTab.ChartControl); if (w != null) w.PreviewKeyDown -= Window_PreviewKeyDown_CancelDrag; } }
+ 		private void Window_PreviewKeyDown_CancelDrag(object s, KeyEventArgs e) { if (e.Key == Key.Escape) { CancelDragOrder(); e.Handled = true; } }
+ 		private void Flatten() { try { CancelAltSpaceQuickEntry(); CancelStagedBracket(); Account acc = GetActiveAccount(); Instrument ins = GetActiveInstrument(); if (acc != null && ins != null && ConfirmFlattenIfNeeded(acc)) { foreach (var o in acc.Orders) if (IsSameInstrument(o.Instrument, ins) && (o.OrderState == OrderState.Working || o.OrderState == OrderState.Accepted)) acc.Cancel(new[] { o }); ClosePosition(100); } } catch { } }
+diff --git a/Orca Trades/Working_Suite/AddOns/OrcaExecutionRouterAddOn.cs b/Orca Trades/Working_Suite/AddOns/OrcaExecutionRouterAddOn.cs
+index 0e4d7a3..aadcc09 100644
+--- a/Orca Trades/Working_Suite/AddOns/OrcaExecutionRouterAddOn.cs
++++ b/Orca Trades/Working_Suite/AddOns/OrcaExecutionRouterAddOn.cs	
+@@ -214,6 +214,48 @@ namespace NinjaTrader.NinjaScript.AddOns
+ 			return fallbackInstrument ?? chartInstrument;
+ 		}
+ 
++		// New entries require an exact contract. Display and existing-order management keep
++		// their established resolver so a blocked entry cannot disable close/cancel paths.
++		internal static bool TryResolveEntryInstrument(Instrument chartInstrument, out Instrument executionInstrument, out string reason)
++		{
++			executionInstrument = null;
++			reason = null;
++			if (chartInstrument == null || string.IsNullOrWhiteSpace(chartInstrument.FullName)) {
++				reason = "The selected chart instrument is not ready.";
++				return false;
++			}
++			EnsureLoaded();
++			string root = GetRoot(chartInstrument);
++			string targetRoot = null;
++			lock (Sync) {
++				if (settings.Enabled) {
++					if (settings.RouteEsToMes && string.Equals(root, "ES", StringComparison.OrdinalIgnoreCase)) targetRoot = "MES";
++					else if (settings.RouteNqToMnq && string.Equals(root, "NQ", StringComparison.OrdinalIgnoreCase)) targetRoot = "MNQ";
++				}
++			}
++			if (targetRoot == null) {
++				executionInstrument = chartInstrument;
++				return true;
++			}
++			string fullName = chartInstrument.FullName;
++			if (!fullName.StartsWith(root + " ", StringComparison.OrdinalIgnoreCase)
++				|| string.IsNullOrWhiteSpace(fullName.Substring(root.Length))) {
++				reason = "Routing requires a specific " + root + " contract on the selected chart.";
++				return false;
++			}
++			string targetFullName = targetRoot + fullName.Substring(root.Length);
++			try {
++				Instrument mapped = Instrument.GetInstrument(targetFullName, true);
++				if (mapped != null && string.Equals(mapped.FullName, targetFullName, StringComparison.OrdinalIgnoreCase)
++					&& string.Equals(GetRoot(mapped), targetRoot, StringComparison.OrdinalIgnoreCase)) {
++					executionInstrument = mapped;
++					return true;
++				}
++			} catch { }
++			reason = "Routing is enabled, but " + targetFullName + " could not be resolved. No order was submitted.";
++			return false;
++		}
++
+ 		private static string SettingsPath
+ 		{
+ 			get {
