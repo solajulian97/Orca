@@ -79,6 +79,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                         connectionMonitor = new OrcaProviderConnectionMonitor(feedLifetime);
                         connectionMonitor.Attach();
                         if (!CheckConnectionContinuity()) return;
+                        Print("OrcaProviderProbe " + diagnosticsId + ": connection-monitor-active; attachmentNotifications="
+                            + connectionMonitor.AttachmentNotifications + "; publisherAcquired=False");
                         // Deliberately unique probe environment: no inferred sharing across charts/connections.
                         var identity = new OrcaProviderSourceIdentity(Instrument.FullName, feedLifetime.Environment,
                             feedLifetime.Epoch, sessionCapture.Definition, sessionCapture.EventTimezone, true,
@@ -95,7 +97,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                         OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsId, 0, "PrimaryChartSeries", "Chart", "Probe adds no secondary series");
                         Print("OrcaProviderProbe " + diagnosticsId + ": started; TickReplay=" + historicalReplay
                             + "; capacity=100000 events; platform timezone=" + eventTimeZone.Id
-                            + "; comparisonReaders=2; connectionGuard=DirectPlatformEvents; no production consumers attached");
+                            + "; comparisonReaders=2; connectionGuard=DirectPlatformEventsAfterAttach; no production consumers attached");
                     }
                     else if (State == State.Realtime && ingestion != null && !faulted)
                     {
@@ -226,7 +228,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                     + " readerComparison=" + (comparison.VerifiedEvents > 0 ? "PASS" : "NO_EVENTS")
                     + " verified=" + comparison.VerifiedEvents + " volume=" + comparison.Volume
                     + " signed=" + comparison.SignedVolume + " digest=" + comparison.Digest.ToString("X16")
-                    + " connectionGuard=DirectPlatformEvents"
+                    + " connectionGuard=DirectPlatformEventsAfterAttach"
+                    + " attachmentNotifications=" + connectionMonitor.AttachmentNotifications
                     + " elapsed=" + ((now - loadStart) / (double)Stopwatch.Frequency).ToString("F1") + "s";
                 OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsId, "ExperimentalPrimaryLastProbe",
                     faulted ? "Unavailable" : historicalReplay && batch.Coverage.Phase == OrcaStreamPhase.Historical ? "HistoricalReplay" : "ProbeOnly", "PrivateProbeRegistry");

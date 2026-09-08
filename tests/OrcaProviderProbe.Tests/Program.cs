@@ -92,6 +92,13 @@ static class Program
 
     static void MonitorChecks()
     {
+        var alreadyRunning = Start(false);
+        var lateMonitor = new OrcaProviderConnectionMonitor(Field<OrcaProviderFeedLifetime>(alreadyRunning, "feedLifetime"));
+        bool lateRejected = false;
+        try { lateMonitor.Attach(); } catch (InvalidOperationException) { lateRejected = true; }
+        Check(lateRejected && Connection.HandlerCount == 1, "cannot start an unguarded setup interval on an existing stream");
+        alreadyRunning.SetState(State.Terminated);
+
         var owner = Owner(); var monitor = new OrcaProviderConnectionMonitor(owner);
         Check(!monitor.IsArmed, "unattached monitor cannot admit");
         monitor.Attach(); Check(monitor.IsArmed && Connection.HandlerCount == 1, "exactly one handler attached");
@@ -113,14 +120,76 @@ static class Program
         monitor = new OrcaProviderConnectionMonitor(Owner());
         Connection.DuringAdd = () => Connection.Emit(ConnectionStatus.Connected);
         try { monitor.Attach(); } finally { Connection.DuringAdd = null; }
-        Check(monitor.IsInvalidated, "notification during attachment fails closed");
+        Check(!monitor.IsInvalidated && monitor.IsArmed && monitor.AttachmentNotifications == 1,
+            "setup notification counted before the empty owner's active interval");
+        Connection.Emit(ConnectionStatus.Connected);
+        Check(monitor.IsInvalidated && monitor.DescribeInvalidation().Contains("phase=Active; attachmentNotifications=1"),
+            "same status after activation fails closed and labels boundary evidence");
         monitor.Dispose();
+
+        monitor = new OrcaProviderConnectionMonitor(Owner());
+        Connection.DuringAdd = () => Connection.CaptureHandlers()(null, null);
+        try { monitor.Attach(); } finally { Connection.DuringAdd = null; }
+        Check(monitor.AttachmentNotifications == 1 && !monitor.IsInvalidated, "unclassified setup callback is counted too");
+        monitor.Dispose();
+
+        foreach (ConnectionStatus status in Enum.GetValues(typeof(ConnectionStatus)))
+        {
+            var bootstrapProbe = new OrcaProviderProbe();
+            bootstrapProbe.Bars.TradingHours.Sessions.Add(new Session());
+            Connection.DuringAdd = () =>
+            {
+                var setupOwner = Field<OrcaProviderFeedLifetime>(bootstrapProbe, "feedLifetime");
+                Check(setupOwner.ActiveStreams == 0 && Field<OrcaProviderPublisherLease>(bootstrapProbe, "publisher") == null,
+                    "no publisher exists during attachment");
+                // Same-thread reentrant input cannot be admitted while the handler is added.
+                bootstrapProbe.Emit(new MarketDataEventArgs());
+                Connection.Emit(status);
+                Task.Run(() => Connection.Emit(status)).GetAwaiter().GetResult();
+            };
+            try { bootstrapProbe.SetState(State.DataLoaded); } finally { Connection.DuringAdd = null; }
+            Check(!Field<bool>(bootstrapProbe, "faulted") && Field<long>(bootstrapProbe, "liveCount") == 0,
+                "bootstrap has no accepted input and does not invalidate a nonexistent stream");
+            Check(bootstrapProbe.Output.Any(s => s.Contains("attachmentNotifications=2; publisherAcquired=False")),
+                "synchronous and concurrent during-add callbacks counted in activation evidence");
+            bootstrapProbe.SetState(State.Realtime); bootstrapProbe.Emit(new MarketDataEventArgs());
+            Check(Field<long>(bootstrapProbe, "liveCount") == 1, "first post-activation input accepted");
+            Connection.Emit(status); bootstrapProbe.Emit(new MarketDataEventArgs());
+            Check(Field<bool>(bootstrapProbe, "faulted") && Field<long>(bootstrapProbe, "liveCount") == 1,
+                "all statuses still invalidate after activation without a grace period");
+            bootstrapProbe.SetState(State.Terminated);
+        }
+
+        EventHandler<ConnectionStatusEventArgs> queued = null;
+        monitor = new OrcaProviderConnectionMonitor(Owner());
+        Connection.DuringAdd = () => queued = Connection.CaptureHandlers();
+        try { monitor.Attach(); } finally { Connection.DuringAdd = null; }
+        queued(null, new ConnectionStatusEventArgs());
+        Check(monitor.IsInvalidated && monitor.AttachmentNotifications == 0,
+            "callback captured in setup but delivered after activation remains terminal");
+        monitor.Dispose();
+
+        // Each callback racing the activation exchange must either increment the frozen
+        // setup count or invalidate the active interval. It cannot disappear between them.
+        for (int i = 0; i < 50; i++)
+        {
+            monitor = new OrcaProviderConnectionMonitor(Owner());
+            Task callback = null;
+            Connection.DuringAdd = () => callback = Task.Run(() => Connection.Emit(ConnectionStatus.Connecting));
+            try { monitor.Attach(); callback.GetAwaiter().GetResult(); } finally { Connection.DuringAdd = null; }
+            Check((monitor.AttachmentNotifications == 1) != monitor.IsInvalidated,
+                "activation race assigns the single callback to exactly one interval");
+            monitor.Dispose();
+        }
 
         Connection.ThrowAfterAdd = true;
         var failedProbe = new OrcaProviderProbe();
         failedProbe.Bars.TradingHours.Sessions.Add(new Session());
-        try { failedProbe.SetState(State.DataLoaded); } finally { Connection.ThrowAfterAdd = false; }
+        Connection.DuringAdd = () => Connection.Emit(ConnectionStatus.Connected);
+        try { failedProbe.SetState(State.DataLoaded); } finally { Connection.ThrowAfterAdd = false; Connection.DuringAdd = null; }
         Check(Field<bool>(failedProbe, "faulted") && Connection.HandlerCount == 0, "partial add failure closes and detaches stored monitor");
+        Check(failedProbe.Output.Any(s => s.Contains("phase=AttachmentFailure; attachmentNotifications=1"))
+            && Field<OrcaProviderPublisherLease>(failedProbe, "publisher") == null, "failed attach records setup count and never acquires publisher");
         failedProbe.SetState(State.Terminated);
 
         monitor = new OrcaProviderConnectionMonitor(Owner()); monitor.Attach();

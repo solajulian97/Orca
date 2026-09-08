@@ -55,4 +55,9 @@ if (connectionMonitor.DescendantNodes().OfType<FieldDeclarationSyntax>().Any(f =
     new[] { "Indicator", "ChartControl", "Connection", "Account", "Action" }.Contains(f.Declaration.Type.ToString())))
     throw new Exception("Direct connection monitor must not retain platform owners or arbitrary callbacks.");
 Console.WriteLine("PASS: direct connection monitor has no chart callback, renderer, trading or market-data subscription.");
+string stateChange = methods["OnStateChange"].ToString();
+if (stateChange.IndexOf("connectionMonitor.Attach()", StringComparison.Ordinal) >= stateChange.IndexOf("feedLifetime.TryAcquire(", StringComparison.Ordinal)
+    || !stateChange.Contains("publisherAcquired=False"))
+    throw new Exception("Monitor must activate before acquiring any publisher and report setup evidence.");
+Console.WriteLine("PASS: monitor activation precedes publisher acquisition with explicit setup evidence.");
 return 0;
