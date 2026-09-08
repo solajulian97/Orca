@@ -21,3 +21,6 @@ User confirmed prior Tag Library/open screenshot and Tag Performance layout at r
 .codex-backups/journal-trading-days-stage/OrcaJournal.dll
 SHA256 5BC7CA068EF3FE908E92E52596D30B9C3979D8D15BE6A7BCA0A5442A63C8ECE2
 Not deployed. Current expected live baseline 6E4B98AAFB51FAAABE3357C786C37DB99AD269C4CD01AAA15E27BB78C4889C94. Guarded backup/copy after NinjaTrader closes.
+
+## Deployment completed — 2026-09-08 00:05 EDT
+NinjaTrader confirmed closed before and after deployment. Source/stage/live SHA256 matched 5BC7CA068EF3FE908E92E52596D30B9C3979D8D15BE6A7BCA0A5442A63C8ECE2; SQLite reference 2.0.2.0 verified. Backup/manifest: .codex-backups/journal-trading-days-deploy-20260908-000524. Only DLL copied; database/annotation TSV hashes unchanged. Supersedes not-deployed status above. Custom Dashboard date ranges remain proposed, not implemented or included. Startup and manual validation of this build remain pending.
