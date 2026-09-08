@@ -47,4 +47,12 @@ if (subscriptionProbe.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m 
 if (subscriptionProbe.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(i => new[] { "Append", "OnTrade", "AddDataSeries" }.Any(name => i.Expression.ToString().Contains(name))))
     throw new Exception("Subscription observer must not publish trades or add series.");
 Console.WriteLine("PASS: subscription observer has no provider publication, automatic OnMarketData override, renderer or added series.");
+var connectionMonitor = trees.Single(t => Path.GetFileName(t.FilePath) == "OrcaProviderConnectionMonitor.cs").GetRoot();
+if (connectionMonitor.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(i =>
+    new[] { "Print", "Process", "InvokeAsync", "OnTrade", "AddDataSeries" }.Any(name => i.Expression.ToString().Contains(name))))
+    throw new Exception("Direct connection monitor must not dispatch chart work, print, add data or publish trades.");
+if (connectionMonitor.DescendantNodes().OfType<FieldDeclarationSyntax>().Any(f =>
+    new[] { "Indicator", "ChartControl", "Connection", "Account", "Action" }.Contains(f.Declaration.Type.ToString())))
+    throw new Exception("Direct connection monitor must not retain platform owners or arbitrary callbacks.");
+Console.WriteLine("PASS: direct connection monitor has no chart callback, renderer, trading or market-data subscription.");
 return 0;

@@ -4,6 +4,7 @@
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProvider*Core.cs" />
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderSessionCapture.cs" />
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderProbe.cs" />
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderConnectionMonitor.cs" />
     <Compile Include="../OrcaProviderStream.Tests/ProviderSessionCaptureTests.cs" />
   </ItemGroup>
 </Project>

@@ -6,8 +6,44 @@ using NinjaTrader.Data;
 // Shape-only callbacks; real API binding is checked by OrcaProvider.PlatformCheck.
 namespace NinjaTrader.Cbi
 {
-    public enum ConnectionStatus { Connected, Connecting, ConnectionLost, Disconnected }
-    public class Connection { public ConnectionStatus PriceStatus; }
+    public enum ConnectionStatus { Connected, Connecting, ConnectionLost, Disconnecting, Disconnected }
+    public class Connection
+    {
+        private static readonly object Sync = new object();
+        private static EventHandler<ConnectionStatusEventArgs> handlers;
+        public static Action DuringAdd;
+        public static bool ThrowAfterAdd, ThrowOnRemove;
+        public ConnectionStatus PriceStatus;
+        public static int HandlerCount { get { lock (Sync) return handlers == null ? 0 : handlers.GetInvocationList().Length; } }
+        public static EventHandler<ConnectionStatusEventArgs> CaptureHandlers() { lock (Sync) return handlers; }
+        public static event EventHandler<ConnectionStatusEventArgs> ConnectionStatusUpdate
+        {
+            add
+            {
+                lock (Sync) handlers += value;
+                if (DuringAdd != null) DuringAdd();
+                if (ThrowAfterAdd) throw new InvalidOperationException("injected partial add failure");
+            }
+            remove
+            {
+                lock (Sync)
+                {
+                    if (ThrowOnRemove) throw new InvalidOperationException("injected remove failure");
+                    handlers -= value;
+                }
+            }
+        }
+        public static void Emit(ConnectionStatus status)
+        {
+            var captured = CaptureHandlers();
+            if (captured != null) captured(null, new ConnectionStatusEventArgs
+            {
+                PriceStatus = status, PreviousPriceStatus = ConnectionStatus.Connected,
+                Status = status, PreviousStatus = ConnectionStatus.Connected,
+                Connection = new Connection { PriceStatus = ConnectionStatus.Connected }
+            });
+        }
+    }
     public class ConnectionStatusEventArgs
     {
         public ConnectionStatus PriceStatus, PreviousPriceStatus, Status, PreviousStatus;
