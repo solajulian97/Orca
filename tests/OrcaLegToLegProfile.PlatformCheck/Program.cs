@@ -46,7 +46,9 @@ foreach (var setting in settings)
     groups.Add(group);
 }
 if (groups.Count != 11) throw new Exception("Expected eleven settings groups.");
-Console.WriteLine("PASS: all 77 settings retained in 11 groups with unique ordering.");
+var hidden = settings.Values.Where(p => p.AttributeLists.SelectMany(a => a.Attributes).Any(a => a.Name.ToString() == "Browsable" && a.ArgumentList!.Arguments.Single().Expression.ToString() == "false")).Select(p => p.Identifier.Text).Order().ToArray();
+if (!hidden.SequenceEqual(new[] { "LegBoxBrush", "ShowCurrentLegBox" })) throw new Exception("Unexpected hidden settings.");
+Console.WriteLine("PASS: 75 visible settings in 11 groups; two leg-box properties retained hidden for compatibility.");
 
 var cvp = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root, "Orca Trades/Working_Suite/Indicators/OrcaCandleVolumeProfile.cs"))).GetRoot()
     .DescendantNodes().OfType<ClassDeclarationSyntax>().Single(c => c.Identifier.Text == "OrcaCandleVolumeProfile")
@@ -131,7 +133,12 @@ sealed class SettingsPresentationStripper : CSharpSyntaxRewriter
 {
     public const string Description = "Displays volume and delta across price swings, with tick- or ATR-based leg detection. Includes active and historical profiles, point of control, value area, and optional active-leg delta resets with statistics.";
     public const string OldDescription = "Rotation-based leg delta/volume profile with Value Area, POC, gradient support, and an optional live active-leg delta reset.";
-    public override SyntaxNode? VisitAttributeList(AttributeListSyntax node) => node.Attributes.All(a => a.Name.ToString() == "Display") ? null : base.VisitAttributeList(node);
+    public override SyntaxNode? VisitAttributeList(AttributeListSyntax node)
+    {
+        if (node.Parent is PropertyDeclarationSyntax p && (p.Identifier.Text == "ShowCurrentLegBox" || p.Identifier.Text == "LegBoxBrush")
+            && node.Attributes.Count == 1 && node.Attributes[0].ToString() == "Browsable(false)") return null;
+        return node.Attributes.All(a => a.Name.ToString() == "Display") ? null : base.VisitAttributeList(node);
+    }
     public override SyntaxNode? VisitExpressionStatement(ExpressionStatementSyntax node)
     {
         if (node.Expression is AssignmentExpressionSyntax a && a.Left.ToString() == "Description"

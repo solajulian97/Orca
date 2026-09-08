@@ -4,11 +4,11 @@ Settings reference updated 2026-09-07. Source: `Orca Trades/Working_Suite/Indica
 
 ## Settings organization
 
-All 77 editable settings remain available in 11 numbered groups. Only Display labels, tooltips, groups, ordering and the indicator description changed. No property identity, default, range, enum, serialization field or visibility changed.
+75 settings are visible in 11 numbered groups. Show Current Leg Box and Leg Box Color are hidden at Julian's request. Their properties and existing saved values remain compatible; other property identities, defaults, ranges, enums and serialization are unchanged.
 
 | Group | Controls |
 | --- | --- |
-| 01 Display | Volume/delta visibility, historical delta and leg count, active leg box |
+| 01 Display | Volume/delta visibility, historical delta and leg count |
 | 02 Profile Layout | Active/historical widths, offsets, spacing, mirror, draw behind candles |
 | 03 Leg Detection | ATR/tick reversals, historical reversal overrides, minimum filters |
 | 04 Rows & Scaling | Volume/delta compression and dynamic delta rows |

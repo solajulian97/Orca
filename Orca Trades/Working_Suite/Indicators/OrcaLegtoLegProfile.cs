@@ -1946,7 +1946,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty] [Display(Name="Show Volume", GroupName="01 Display", Order=0)] public bool ShowVolume { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Delta", GroupName="01 Display", Order=1, Description="Show delta profiles. Historical delta also requires Show Historical Delta; active orientation continues to follow this setting.")] public bool ShowDelta { get; set; }
 		[NinjaScriptProperty] [Display(Name="Show Historical Delta", GroupName="01 Display", Order=2, Description="Show completed-leg delta profiles when Show Delta is enabled.")] public bool ShowPastDelta { get; set; }
-		[NinjaScriptProperty] [Display(Name="Show Current Leg Box", GroupName="01 Display", Order=4)] public bool ShowCurrentLegBox { get; set; }
+		[NinjaScriptProperty] [Browsable(false)] [Display(Name="Show Current Leg Box", GroupName="01 Display", Order=4)] public bool ShowCurrentLegBox { get; set; }
 		[NinjaScriptProperty] [Range(5, 50)] [Display(Name="Delta Text Font Size", GroupName="08 Text - Delta", Order=0, Description="Size of the delta-row labels. Full-leg and reset statistics use Statistics Font Size.")] public int DeltaLabelFontSize { get; set; }
 		[NinjaScriptProperty] [TypeConverter(typeof(LegProfileTextFontFamilyConverter))] [Display(Name="Text Font Family", Description="Selects the font family used for Leg-to-Leg Profile labels and annotations.", GroupName="07 Text - General", Order=0)] public string TextFontFamily { get; set; }
 		[NinjaScriptProperty] [Display(Name="Text Font Weight", Description="Selects the text weight used for Leg-to-Leg Profile labels and annotations.", GroupName="07 Text - General", Order=1)] public LegProfileTextFontWeight TextFontWeight { get; set; }
@@ -1980,7 +1980,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Browsable(false)] public string NegativeTextBrushSerialize { get { return Serialize.BrushToString(NegativeTextBrush); } set { NegativeTextBrush = Serialize.StringToBrush(value); } }
 		[XmlIgnore] [Display(Name="Label Background Color", GroupName="08 Text - Delta", Order=4)] public WpfBrush LabelBgBrush { get; set; }
 		[Browsable(false)] public string LabelBgBrushSerialize { get { return Serialize.BrushToString(LabelBgBrush); } set { LabelBgBrush = Serialize.StringToBrush(value); } }
-		[XmlIgnore] [Display(Name="Leg Box Color", GroupName="01 Display", Order=5)] public WpfBrush LegBoxBrush { get; set; }
+		[XmlIgnore] [Browsable(false)] [Display(Name="Leg Box Color", GroupName="01 Display", Order=5)] public WpfBrush LegBoxBrush { get; set; }
 		[Browsable(false)] public string LegBoxBrushSerialize { get { return Serialize.BrushToString(LegBoxBrush); } set { LegBoxBrush = Serialize.StringToBrush(value); } }
 		[XmlIgnore] [Display(Name="POC Color", GroupName="06 POC & Value Area", Order=1)] public WpfBrush POCBrush { get; set; }
 		[Browsable(false)] public string POCBrushSerialize { get { return Serialize.BrushToString(POCBrush); } set { POCBrush = Serialize.StringToBrush(value); } }
