@@ -46,3 +46,7 @@ NinjaTrader tests performed by agent: none. F5/Custom-assembly load and revised 
 F5, add only OrcaProviderProbe to one connected chart, wait for historical load and about ten seconds of live input, then remove it. Capture from the activation line through final summary/removal. A positive setup count establishes callbacks before this local activation boundary on that run, not a universal synchronous snapshot guarantee. An Active fault is new evidence and stays terminal. No restart is requested for the prior run because its screenshot reports successful detachment.
 
 Shared service discovery, first-consumer shadow parity, historical/live source contracts, recovery, safe local-series removal and controlled performance measurements remain later work. This bounded probe update does not finish the production provider.
+
+## 2026-09-09 runtime follow-up
+
+Julian supplied revised-marker output with two attachment notifications, a historical/live comparison PASS and normal removal. The complete run verified 2,175,885 historical + 75 live = 2,175,960 events at 25.4 seconds, then reported `connection-monitor-detached=True`. This supersedes the pending revised-code load and normal historical/live/removal check above for this one observed run only. It does not verify deliberate interruption/reconnection, independent historical completeness, standalone subscriber snapshot semantics or production consumer parity. Full evidence and next safe gate: `2026-09-09_orca-provider_live-tail-runtime-evidence.md`. No Full_Suite promotion.

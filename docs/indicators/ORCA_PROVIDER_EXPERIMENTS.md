@@ -1,6 +1,6 @@
 # Exact-event provider experiments
 
-Updated 2026-09-08. Active source: `Orca Trades/Working_Suite/Indicators/OrcaProvider*.cs`.
+Updated 2026-09-09. Active source: `Orca Trades/Working_Suite/Indicators/OrcaProvider*.cs`.
 
 These opt-in experiments are separate from the existing `OrcaProfileDataProvider` and `OrcaProfileDataCache`. No production indicator discovers their private registry. No hidden-series reduction or startup improvement is established.
 
@@ -34,4 +34,8 @@ The latest diagnostic capture showed two `Disconnected->Connecting->Connected` p
 
 The next direct-monitor capture showed only successful detachment and a Disconnected->Connecting fault at 2026-09-08T18:09:59.6127379Z. No startup line was visible. This does not prove whether the callback ran during attachment. The follow-up explicitly separates setup from active admission and prints its count, while preserving terminal handling for every post-activation notification.
 
-The revised canonical probe needs F5/load and one live run, then removal to capture the final live tail and handler-removal line. Expected startup marker: `connectionGuard=DirectPlatformEventsAfterAttach`. Capture the activation/count line too. Transition/active-direct-connection/reset faults must remain visible and must not be bypassed to obtain PASS. A standalone market-data subscriber still needs a documented snapshot/incremental boundary; consumer shadow comparison, cross-chart sharing, historical provenance and measured performance remain later gates. Full_Suite is not eligible for promotion.
+On 2026-09-09 Julian supplied two successful revised-probe captures. The first compared 2,174,855 historical events plus one live event. A separate full run (`6a1780225f5d43988357277c31c29c5c`) compared 2,175,885 historical events plus 75 live events: verified=2,175,960, readerComparison=PASS at elapsed=25.4s, then connection-monitor-detached=True. Both show attachmentNotifications=2 and connectionGuard=DirectPlatformEventsAfterAttach. Script Disconnected->Connecting->Connected observations did not fault the active direct-monitor run. Revised-code load and this bounded historical/live/normal-removal path are runtime-confirmed; the screenshots do not independently record the F5 keystroke/compiler pane.
+
+The full run retained 100,000 events and evicted 2,075,960 already-consumed events. fullPassRetained=False is expected bounded retention, not failed streaming comparison. passComplete=True is completion of the platform callback pass, while UTC-range-confirmed=false remains an explicit completeness limitation. These results do not establish exchange-tape completeness, historical/live source provenance, all connection environments, or absence of future lifecycle faults. See `docs/handoffs/2026-09-09_orca-provider_live-tail-runtime-evidence.md`.
+
+The next lifecycle gate is a deliberately scheduled, user-operated disconnect/reconnect outside trading, to check terminal invalidation/no old-run resurrection and successful fresh-run creation. Do not change connections automatically. Transition/active-direct-connection/reset faults must remain visible and must not be bypassed to obtain PASS. A standalone market-data subscriber still needs a documented snapshot/incremental boundary; consumer shadow comparison, cross-chart sharing, historical provenance and measured performance remain later gates. Full_Suite is not eligible for promotion.
