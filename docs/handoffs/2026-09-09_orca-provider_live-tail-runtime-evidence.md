@@ -52,3 +52,7 @@ Do not disconnect any account or data connection automatically. Julian must choo
 If an active notification is not observed, keep that exact path unverified; do not weaken the guard, inject fake platform events into live NinjaTrader, or modify connection settings to manufacture a PASS. No repeated full workspace restart is required.
 
 After this lifecycle gate, continue the existing source-contract/subscription plan: resolve standalone snapshot-versus-incremental semantics and historical merge/adjustment/provenance before cross-chart discovery or Rolling Profiles shadow migration. Preserve all existing consumer output and local series until independent parity permits a separately authorized removal.
+
+## Later 2026-09-09 interruption result
+
+Julian performed the manual interruption sequence and supplied complete mixed-indicator Output. The active direct-monitor fault and owned-handler detach were observed, with no later PASS for the old ID. Two later IDs passed live delivery and cleanup, but both received zero historical callbacks. The tested lifecycle gate is accepted; historical recovery remains unverified. See `2026-09-09_orca-provider_reconnect-runtime-evidence.md`. The manual steps above are the historical test procedure, not a request to repeat it.
