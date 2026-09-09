@@ -248,6 +248,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				OrderFlowSourceMode  = OrcaOrderFlowSourceMode.Internal;
 
 			}
+			else if (State == State.Configure)
+			{
+				// Preserve continuous market-data processing after saved settings are applied.
+				IsSuspendedWhileInactive = false;
+			}
 			else if (State == State.DataLoaded)
 			{
 				barTickDelta   = new List<double>(4096);
@@ -355,8 +360,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				if (signed != 0 && BarsArray != null && BarsArray.Length > 0 && BarsArray[0] != null && BarsArray[0].Count > 0)
 				{
-					int primaryIdx = BarsArray[0].GetBar(e.Time);
-					if (primaryIdx >= 0)
+					// OnEachTick has already assigned this trade's bar before OnMarketData.
+					// GetBar(time) chooses the first match when range/volume bars share a timestamp.
+					int primaryIdx = Calculate == Calculate.OnEachTick ? CurrentBar : BarsArray[0].GetBar(e.Time);
+					if (primaryIdx >= 0 && primaryIdx < BarsArray[0].Count)
 					{
 						EnsureBarLists(primaryIdx);
 						barTickDelta[primaryIdx] += signed;
