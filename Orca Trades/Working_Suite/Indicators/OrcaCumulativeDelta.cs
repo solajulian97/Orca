@@ -95,7 +95,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IsOverlay					= false;
 				DrawOnPricePanel			= false;
 				DisplayInDataBox			= true;
-				IsSuspendedWhileInactive	= true;
+				IsSuspendedWhileInactive	= false;
 				BarsRequiredToPlot			= 0;
 
 				// Visual parameters — OTM style
@@ -129,6 +129,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			else if (State == State.Configure)
 			{
+				// Delta depends on continuous tick/quote state, including on background tabs.
+				// Enforce this after saved settings are applied as well as for new instances.
+				IsSuspendedWhileInactive = false;
 				if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.Internal)
 					AddDataSeries(BarsPeriodType.Tick, 1);
 			}
