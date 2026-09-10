@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><LangVersion>7.3</LangVersion><UseAppHost>false</UseAppHost></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProvider*Core.cs" />
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderSessionCapture.cs" />
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderHistoryConfigurationCapture.cs" />
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderHistoryProbe.cs" />
+    <Compile Include="../OrcaProviderStream.Tests/ProviderSessionCaptureTests.cs" />
+    <Compile Include="../OrcaProviderStream.Tests/ProviderHistoryConfigurationTests.cs" />
+  </ItemGroup>
+</Project>

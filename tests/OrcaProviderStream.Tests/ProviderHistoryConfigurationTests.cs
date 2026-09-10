@@ -19,7 +19,7 @@ namespace NinjaTrader.Cbi
         public double TickSize = 0.25, PointValue = 50;
         public Collection<Rollover> RolloverCollection = new Collection<Rollover>();
     }
-    public class Instrument
+    public partial class Instrument
     {
         public string FullName = "ES SEP26";
         public DateTime Expiry = new DateTime(2026, 9, 1);
@@ -31,7 +31,7 @@ namespace NinjaTrader.Data
     public enum BarsPeriodType { Tick, Minute }
     public enum MarketDataType { Last, Bid, Ask }
     public class BarsPeriod { public BarsPeriodType BarsPeriodType; public int Value = 1; public MarketDataType MarketDataType; }
-    public class BarsRequest
+    public partial class BarsRequest
     {
         public Instrument Instrument = new Instrument();
         public BarsPeriod BarsPeriod = new BarsPeriod();

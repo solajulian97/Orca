@@ -75,4 +75,18 @@ if (captureClass.Members.OfType<FieldDeclarationSyntax>().Any(f => !f.Modifiers.
     && (f.Declaration.Type.ToString() != "string" || !f.Modifiers.Any(SyntaxKind.ReadOnlyKeyword))))
     throw new Exception("History capture may retain immutable strings only, not mutable platform owners.");
 Console.WriteLine("PASS: history configuration capture retains strings only and makes no data requests or coverage assertions.");
+var historyProbe = trees.Single(t => Path.GetFileName(t.FilePath) == "OrcaProviderHistoryProbe.cs").GetRoot();
+if (historyProbe.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m =>
+    new[] { "OnRender", "OnMarketData", "OnBarUpdate", "OnConnectionStatusUpdate" }.Contains(m.Identifier.Text)))
+    throw new Exception("History observer must not add live chart callbacks or rendering.");
+if (historyProbe.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(i =>
+    new[] { "AddDataSeries", "OnTrade", "Append", "ConfirmHistory", "TryAcquire", "OpenReader" }
+        .Contains((i.Expression as MemberAccessExpressionSyntax)?.Name.Identifier.Text ?? i.Expression.ToString())))
+    throw new Exception("History observer must not add series, publish or certify provider data.");
+if (historyProbe.DescendantNodes().OfType<InvocationExpressionSyntax>().Count(i =>
+    (i.Expression as MemberAccessExpressionSyntax)?.Name.Identifier.Text == "Request") != 1
+    || historyProbe.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(a => a.IsKind(SyntaxKind.AddAssignmentExpression)
+        && (a.Left as MemberAccessExpressionSyntax)?.Name.Identifier.Text == "Update"))
+    throw new Exception("History observer must have one request site and no live Update subscriptions.");
+Console.WriteLine("PASS: history observer has one request site, no live subscriptions, added series, provider publication or renderer.");
 return 0;
