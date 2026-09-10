@@ -21,12 +21,15 @@ static class VolumeTests
             string Identity(PropertyDeclarationSyntax p) => Tokens(p.WithAttributeLists(new SyntaxList<AttributeListSyntax>(p.AttributeLists.Where(a => !a.Attributes.All(x => x.Name.ToString() == "Display")))));
             if (Identity(original) != Identity(current)) throw new Exception("Existing property changed: " + original.Identifier.Text);
         }
-        foreach (var original in baseline.Members.OfType<MethodDeclarationSyntax>().Where(m => m.Identifier.Text == "OnRender" || m.Identifier.Text == "GetRollingWindowStartTimeUnsafe" || m.Identifier.Text == "GetPeriodMinutes"))
+        foreach (var original in baseline.Members.OfType<MethodDeclarationSyntax>().Where(m => m.Identifier.Text == "GetRollingWindowStartTimeUnsafe" || m.Identifier.Text == "GetPeriodMinutes"))
             if (Tokens(original) != Tokens(indicator.Members.OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == original.Identifier.Text))) throw new Exception("Preserved method changed: " + original.Identifier.Text);
-        Console.WriteLine("PASS: existing property identities, renderer, time-window calculation and period mapping preserved.");
-        string[] names = { "ClearProfileDataUnsafe", "AddTradeToRollingProfilesUnsafe", "PruneVolumeWindowUnsafe", "AddActiveTickUnsafe", "SubtractFromMap", "NormalizeToBucketStart", "RebuildTotalProfileFromActiveTicksUnsafe", "PruneActiveTicksUnsafe", "SubtractTickFromTotalUnsafe" };
+        var step = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root, "Orca Trades/Working_Suite/Indicators/OrcaStepProfile.cs"))).GetRoot();
+        foreach (string name in new[] { "CalculateFinishDelta", "FormatSignedValue", "FormatCompactVolume", "AppendStatisticsToken" })
+            if (Tokens(step.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == name)) != Tokens(indicator.Members.OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == name))) throw new Exception("Step statistics formula/format mismatch: " + name);
+        Console.WriteLine("PASS: existing property identities, time-window calculation and period mapping preserved; statistics formula and value formatting match Step Profile.");
+        string[] names = { "ClearProfileDataUnsafe", "AddTradeToRollingProfilesUnsafe", "PruneVolumeWindowUnsafe", "AddActiveTickUnsafe", "SubtractFromMap", "NormalizeToBucketStart", "RebuildTotalProfileFromActiveTicksUnsafe", "PruneActiveTicksUnsafe", "SubtractTickFromTotalUnsafe", "CalculateFinishDelta", "FormatSignedValue", "FormatCompactVolume", "AppendStatisticsToken", "BuildProfileStatisticsText", "GetSpikeBucketEnd" };
         string methods = string.Join("\n", indicator.Members.OfType<MethodDeclarationSyntax>().Where(m => names.Contains(m.Identifier.Text)));
-        string models = string.Join("\n", syntax.DescendantNodes().OfType<ClassDeclarationSyntax>().Where(c => c.Identifier.Text == "OrcaProfileBucket" || c.Identifier.Text == "OrcaRollingProfileTick"));
+        string models = string.Join("\n", syntax.DescendantNodes().OfType<ClassDeclarationSyntax>().Where(c => c.Identifier.Text == "OrcaProfileBucket" || c.Identifier.Text == "OrcaRollingProfileTick" || c.Identifier.Text == "OrcaRollingStatisticsWindow"));
         string harness = File.ReadAllText(Path.Combine(root, "tests/OrcaRollingVolume.Tests/Harness.txt"));
         var tree = CSharpSyntaxTree.ParseText(harness.Replace("// MODELS", models).Replace("// METHODS", methods));
         var refs = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator).Select(p => MetadataReference.CreateFromFile(p));

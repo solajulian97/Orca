@@ -14,13 +14,28 @@ Volume basis retains the latest selected number of included contracts. New volum
 
 The existing local hidden 1-tick stream remains the default. Volume mode disables time/price spike compaction to preserve trade order and partial-boundary delta. Equal-time records retain their ingestion order. With the optional shared provider, tick buckets are still required, Maximum Provider Backfill limits initial coverage, and equal-time source order is preserved within each batch. Mixed-delta provider records use proportional integer delta when partially removed; their internal trade order cannot be reconstructed. Existing provider retention/cursor limitations remain unchanged.
 
-Current feature checks: `dotnet run --project tests/OrcaRollingVolume.Tests --configuration Release`. These execute production rolling methods against deterministic and randomized reference cases, verify existing property identities and unchanged render/time-window methods, and compile authored source against installed NinjaTrader metadata. Add `--live-generated` for deployed parity and offline compilation including the installed wrappers. The older settings-only test below is a historical baseline check and intentionally rejects subsequent logic changes.
+Current feature checks: `dotnet run --project tests/OrcaRollingVolume.Tests --configuration Release`. These execute production rolling methods against deterministic and randomized reference cases, verify existing property identities and time-window methods, check statistics against Step Profile, and compile authored source against installed NinjaTrader metadata. Add `--live-generated` for deployed parity and offline compilation including the installed wrappers. The older settings-only test below is a historical baseline check and intentionally rejects subsequent logic changes.
 
 NinjaTrader F5, generated settings wrappers, saved-template load and live behavior require platform validation. See `docs/handoffs/2026-09-10_orca-rolling-profiles_volume-basis.md`.
 
+## Profile statistics (2026-09-10)
+
+Enable **Show Profile Statistics** under **09 Profile Statistics**, then reload. Works with Time and Volume rolling bases. The row uses Step Profile's compact format, for example `T +570 | F -120 | +8.4% | V 254.1K`, right-aligned to the visible profile edge near the top of the panel.
+
+- Total Delta (`T`): net classified volume in the retained window.
+- Finish Delta (`F`): `TotalDelta - (TotalDelta >= 0 ? MaximumCumulativeDelta : MinimumCumulativeDelta)`, matching Step Profile and Leg-to-Leg, including the zero-final-delta rule. Cumulative extrema are measured from zero at the current rolling start and change as old trades expire.
+- Delta Percent: `TotalDelta / TotalVolume * 100`, with unclassified volume included in the denominator.
+- Total Volume (`V`): actual retained volume; may be below the configured contract amount during warm-up. Uses Step Profile's K/M formatting.
+
+Each metric has its own toggle, default true. The master switch defaults false, font size defaults 12 (range 8–30), and text color defaults white with normal brush serialization. There are no separate active/historical switches because Rolling Profiles displays one current window. Statistics can display independently of the volume/delta shapes; all metric toggles off produces no row.
+
+When enabled, an incremental ordered aggregate tracks totals and cumulative-delta extrema. It adds no data series or provider queries and performs no historical scan or extrema calculation during rendering. Time/price spike coalescing is disabled while statistics are enabled to preserve individual trade order and expiry; Time mode retains its existing coalescing when statistics are off. Optional provider batches preserve equal-time source order with statistics enabled. Statistics require extra per-retained-trade memory and logarithmic update work; busy-chart performance remains a manual validation gate.
+
+See `docs/handoffs/2026-09-10_orca-rolling-profiles_profile-statistics.md` for tests and deployment status. Julian has not yet validated the preceding volume-basis feature or these statistics in NinjaTrader.
+
 ## Settings organization
 
-The settings follow CVP and Step Profile's order and vocabulary. All 52 existing editable settings remain available, plus Rolling Basis and Rolling Volume Amount, with no visibility filter or settings converter added.
+The settings follow CVP and Step Profile's order and vocabulary. All 52 original editable settings remain available, plus Rolling Basis, Rolling Volume Amount, and seven profile-statistics settings, with no visibility filter or settings converter added.
 
 | Group | Controls in display order |
 | --- | --- |
@@ -32,6 +47,7 @@ The settings follow CVP and Step Profile's order and vocabulary. All 52 existing
 | 06 POC & Value Area | Show POC and color; Show Value Area and percentage; shading and color; boundary lines, color and width. |
 | 07 Text - Delta | Show Delta Text, minimum absolute delta, font size, positive/negative colors, background toggle and color. |
 | 08 Advanced - Data | Shared-provider toggle, historical backfill toggle/limit, provider records per update, local tick cache, data-source label and debug signatures. |
+| 09 Profile Statistics | Show Profile Statistics, Show Total Delta, Show Finish Delta, Show Delta Percent, Show Total Volume, Statistics Font Size, Statistics Text Color. |
 
 Six existing properties previously lacked Display metadata: `MinBrightness`, `ValueAreaPercent`, `VALineThickness`, `VolumeOpacity`, `DeltaTextMinThreshold` and `DeltaTextFontSize`. They now have readable names and explicit positions in the groups above; none is a new option.
 

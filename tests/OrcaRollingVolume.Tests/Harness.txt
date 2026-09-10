@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Globalization;
 // MODELS
 enum RollingProfileBasis { Time, Volume }
 enum ProfileOperatingMode { FullSession, RthOnly }
@@ -20,8 +21,12 @@ public class Harness
     int RollingVolumeAmount = 10, VolumeTickCompression = 1;
     double TickSize = 1;
     string diagnosticsInstanceId = "test";
+    readonly OrcaRollingStatisticsWindow statisticsWindow = new OrcaRollingStatisticsWindow();
+    long statisticsTotalVolume, statisticsTotalDelta, statisticsFinishDelta;
+    double statisticsDeltaPercent;
+    bool ShowProfileStatistics = true, ShowTotalDelta = true, ShowFinishDelta = true, ShowDeltaPercent = true, ShowTotalVolume = true;
     DateTime GetRollingWindowStartTimeUnsafe(DateTime time) { return time.AddHours(-1); }
-    DateTime GetSpikeBucketEnd(DateTime time) { return time; }
+    const int SpikeLeanBucketMilliseconds = 250;
     // METHODS
     static void Check(bool valid, string message) { if (!valid) throw new Exception(message); }
     static Harness New(int size = 10) { var h = new Harness { RollingVolumeAmount = size }; h.ClearProfileDataUnsafe(); return h; }
@@ -31,6 +36,7 @@ public class Harness
     long Delta { get { return totalProfile.DeltaByPrice.Values.Sum(); } }
     public static void Run()
     {
+        StatisticsCases();
         var h = New();
         h.Add(0, 100, 6, 6); h.Add(1, 101, 7, -7);
         Check(h.Vol == 10 && h.Delta == -4 && h.totalProfile.VolByPrice[100] == 3, "partial oldest trade");
@@ -77,8 +83,93 @@ public class Harness
                 Check(h.Vol == contracts.Count && h.activeProfileVolume == contracts.Count, "random total");
                 Check(h.totalProfile.VolByPrice.Count == vol.Count && vol.All(k => h.totalProfile.VolByPrice[k.Key] == k.Value), "random price map");
                 Check(delta.All(k => (h.totalProfile.DeltaByPrice.ContainsKey(k.Key) ? h.totalProfile.DeltaByPrice[k.Key] : 0) == k.Value), "random delta map");
+                h.CheckStatistics(contracts.Select(x => x.Item4), contracts.Count);
                 if (i % 101 == 0) h.RebuildTotalProfileFromActiveTicksUnsafe();
             }
         }
+        Console.WriteLine("PASS: rolling statistics rebased through volume/time expiry, partial boundaries, out-of-order records, flat-zero finish delta and all 16 metric combinations.");
     }
+
+    void CheckStatistics(IEnumerable<int> deltas, long volume)
+    {
+        long sum = 0, max = 0, min = 0;
+        foreach (int delta in deltas) { sum += delta; max = Math.Max(max, sum); min = Math.Min(min, sum); }
+        Check(statisticsTotalVolume == volume && statisticsTotalDelta == sum, "statistics totals");
+        Check(statisticsWindow.Maximum == max && statisticsWindow.Minimum == min, "statistics rolling extrema");
+        Check(statisticsFinishDelta == sum - (sum >= 0 ? max : min), "finish delta relative to rolling start");
+        Check(Math.Abs(statisticsDeltaPercent - (volume > 0 ? sum * 100.0 / volume : 0)) < 1e-9, "delta percent");
+    }
+
+    static void StatisticsCases()
+    {
+        var h = New(100);
+        h.Add(0, 100, 10, 10); h.Add(1, 100, 10, -10);
+        Check(h.statisticsFinishDelta == -10 && h.statisticsDeltaPercent == 0, "flat-zero same rule as Step");
+        h = New(15); h.Add(0, 100, 10, 10); h.Add(1, 100, 10, -10);
+        Check(h.statisticsFinishDelta == 0 && h.statisticsTotalDelta == -5, "expired positive extreme rebased");
+        h.Add(2, 101, 10, 10);
+        Check(h.statisticsFinishDelta == 0 && h.statisticsWindow.Minimum == -5, "partial negative trim");
+        h.ClearProfileDataUnsafe(); Check(h.statisticsTotalVolume == 0 && h.statisticsWindow.Maximum == 0, "statistics source reset");
+        h = New(); h.ShowProfileStatistics = false; h.Add(0, 100, 50, 50);
+        Check(h.statisticsWindow.Volume == 0 && h.Vol == 10, "disabled has no statistics tape");
+        h = New(100); h.Add(0, 100, 10, 10); h.Add(1, 100, 10, 0);
+        Check(h.statisticsDeltaPercent == 50, "unclassified volume dilutes percent");
+        h = New(); h.RollingBasis = RollingProfileBasis.Time;
+        h.AddTradeToRollingProfilesUnsafe(Start.AddMilliseconds(50), 100, 5, 5, true);
+        h.AddTradeToRollingProfilesUnsafe(Start.AddMilliseconds(100), 101, 4, -4, true);
+        h.AddTradeToRollingProfilesUnsafe(Start.AddMilliseconds(200), 100, 3, 3, true);
+        Check(h.statisticsFinishDelta == -1 && h.statisticsTotalDelta == 4 && h.spikeCompactedRecords == 0, "statistics retain original subsecond trade order");
+        h.AddTradeToRollingProfilesUnsafe(Start.AddSeconds(3600).AddMilliseconds(300), 102, 1, -1, true);
+        Check(h.statisticsTotalVolume == 1 && h.Vol == 1 && h.statisticsFinishDelta == 0, "subsecond time boundary expires together");
+        h = New(); h.RollingBasis = RollingProfileBasis.Time; h.ShowProfileStatistics = false;
+        h.AddTradeToRollingProfilesUnsafe(Start.AddMilliseconds(50), 100, 5, 5, true);
+        h.AddTradeToRollingProfilesUnsafe(Start.AddMilliseconds(100), 100, 4, -4, true);
+        Check(h.spikeCompactedRecords == 1 && h.Vol == 9, "statistics off preserves time spike compaction");
+        h = New(); h.RollingBasis = RollingProfileBasis.Time;
+        var random = new Random(762);
+        for (int i = 0; i < 3000; i++)
+        {
+            int t = i * 20 - random.Next(60), v = random.Next(1, 12), d = random.Next(-1, 2);
+            h.Add(t, 100, v, v * d, true);
+            // Use individual contracts for a reference independent of tree summaries.
+            if (i == 0) timeContracts.Clear();
+            for (int j = 0; j < v; j++) timeContracts.Add(Tuple.Create(t, i, d));
+            int cutoff = (int)(h.currentWindowStartTime - Start).TotalSeconds;
+            timeContracts = timeContracts.Where(x => x.Item1 > cutoff).OrderBy(x => x.Item1).ThenBy(x => x.Item2).ToList();
+            h.CheckStatistics(timeContracts.Select(x => x.Item3), timeContracts.Count);
+            Check(h.Vol == h.statisticsTotalVolume && h.Delta == h.statisticsTotalDelta, "time maps reconcile with statistics");
+        }
+        h = New();
+        for (int mask = 0; mask < 16; mask++)
+        {
+            h.ShowTotalDelta = (mask & 1) != 0; h.ShowFinishDelta = (mask & 2) != 0;
+            h.ShowDeltaPercent = (mask & 4) != 0; h.ShowTotalVolume = (mask & 8) != 0;
+            var expected = new List<string>();
+            if (h.ShowTotalDelta) expected.Add("T +570"); if (h.ShowFinishDelta) expected.Add("F -120");
+            if (h.ShowDeltaPercent) expected.Add("+8.4%"); if (h.ShowTotalVolume) expected.Add("V 254.1K");
+            Check(h.BuildProfileStatisticsText(254100, 570, -120, 8.4) == string.Join(" | ", expected), "statistics tokens " + mask);
+        }
+        Check(FormatCompactVolume(999) == "999" && FormatCompactVolume(1000) == "1.0K" && FormatCompactVolume(1000000) == "1.0M", "compact boundaries");
+        foreach (bool reverse in new[] { false, true })
+        {
+            var window = new OrcaRollingStatisticsWindow();
+            var reference = new List<Tuple<int,int>>();
+            for (int i = 0; i < 30000; i++)
+            {
+                int time = reverse ? 29999 - i : i, delta = i % 3 - 1;
+                window.Add(Start.AddTicks(time), 1, delta); reference.Add(Tuple.Create(time, delta));
+            }
+            reference = reference.OrderBy(x => x.Item1).ToList();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            object node = typeof(OrcaRollingStatisticsWindow).GetField("root", flags).GetValue(window);
+            int height = (int)node.GetType().GetField("Height", flags).GetValue(node);
+            Check(height < 32, "balanced large statistics tree");
+            window.TrimTime(Start.AddTicks(10000)); reference = reference.Where(x => x.Item1 > 10000).ToList();
+            window.TrimVolume(1234); reference = reference.Skip(reference.Count - 1234).ToList();
+            long cumulative = 0, highest = 0, lowest = 0;
+            foreach (var item in reference) { cumulative += item.Item2; highest = Math.Max(highest, cumulative); lowest = Math.Min(lowest, cumulative); }
+            Check(window.Volume == 1234 && window.Delta == cumulative && window.Maximum == highest && window.Minimum == lowest, "large time and volume trim");
+        }
+    }
+    static List<Tuple<int,int,int>> timeContracts = new List<Tuple<int,int,int>>();
 }

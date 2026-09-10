@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Globalization;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
@@ -63,6 +64,104 @@ namespace NinjaTrader.NinjaScript
 		TowardPriceScale,
 		TowardCandles
 	}
+
+	// Chronological prefix aggregates keep Finish Delta relative to the retained
+	// window without rescanning historical trades when its oldest trade expires.
+	internal sealed class OrcaRollingStatisticsWindow
+	{
+		private sealed class Node
+		{
+			internal DateTime Time;
+			internal long Sequence, Volume, Delta, SumVolume, SumDelta, Maximum, Minimum;
+			internal int Height = 1;
+			internal Node Left, Right;
+		}
+		private Node root;
+		private long sequence;
+		internal long Volume { get { return root == null ? 0 : root.SumVolume; } }
+		internal long Delta { get { return root == null ? 0 : root.SumDelta; } }
+		internal long Maximum { get { return root == null ? 0 : root.Maximum; } }
+		internal long Minimum { get { return root == null ? 0 : root.Minimum; } }
+		internal void Clear() { root = null; sequence = 0; }
+		internal void Add(DateTime time, long volume, long delta)
+		{
+			if (volume <= 0) return;
+			root = Insert(root, new Node { Time = time, Sequence = ++sequence, Volume = volume, Delta = delta });
+		}
+		internal void TrimVolume(long amount)
+		{
+			amount = Math.Max(1L, amount);
+			while (Volume > amount) root = TrimFirst(root, Volume - amount);
+		}
+		internal void TrimTime(DateTime cutoff)
+		{
+			while (root != null)
+			{
+				Node first = root;
+				while (first.Left != null) first = first.Left;
+				if (first.Time > cutoff) break;
+				root = TrimFirst(root, first.Volume);
+			}
+		}
+		private static int Height(Node n) { return n == null ? 0 : n.Height; }
+		private static void Refresh(Node n)
+		{
+			long leftDelta = n.Left == null ? 0 : n.Left.SumDelta;
+			long through = leftDelta + n.Delta;
+			n.SumVolume = (n.Left == null ? 0 : n.Left.SumVolume) + n.Volume + (n.Right == null ? 0 : n.Right.SumVolume);
+			n.SumDelta = through + (n.Right == null ? 0 : n.Right.SumDelta);
+			n.Maximum = Math.Max(n.Left == null ? 0 : n.Left.Maximum, through + (n.Right == null ? 0 : n.Right.Maximum));
+			n.Minimum = Math.Min(n.Left == null ? 0 : n.Left.Minimum, through + (n.Right == null ? 0 : n.Right.Minimum));
+			n.Height = 1 + Math.Max(Height(n.Left), Height(n.Right));
+		}
+		private static Node RotateLeft(Node n)
+		{
+			Node next = n.Right;
+			n.Right = next.Left; next.Left = n;
+			Refresh(n); Refresh(next); return next;
+		}
+		private static Node RotateRight(Node n)
+		{
+			Node next = n.Left;
+			n.Left = next.Right; next.Right = n;
+			Refresh(n); Refresh(next); return next;
+		}
+		private static Node Balance(Node n)
+		{
+			Refresh(n);
+			if (Height(n.Left) - Height(n.Right) > 1)
+			{
+				if (Height(n.Left.Left) < Height(n.Left.Right)) n.Left = RotateLeft(n.Left);
+				return RotateRight(n);
+			}
+			if (Height(n.Right) - Height(n.Left) > 1)
+			{
+				if (Height(n.Right.Right) < Height(n.Right.Left)) n.Right = RotateRight(n.Right);
+				return RotateLeft(n);
+			}
+			return n;
+		}
+		private static Node Insert(Node n, Node value)
+		{
+			if (n == null) { Refresh(value); return value; }
+			int order = value.Time.CompareTo(n.Time);
+			if (order < 0 || (order == 0 && value.Sequence < n.Sequence)) n.Left = Insert(n.Left, value);
+			else n.Right = Insert(n.Right, value);
+			return Balance(n);
+		}
+		private static Node TrimFirst(Node n, long amount)
+		{
+			if (n.Left != null) n.Left = TrimFirst(n.Left, amount);
+			else
+			{
+				if (amount >= n.Volume) return n.Right;
+				long removedDelta = (long)((decimal)n.Delta * amount / n.Volume);
+				n.Volume -= amount;
+				n.Delta -= removedDelta;
+			}
+			return Balance(n);
+		}
+	}
 }
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -75,6 +174,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int activeProfileTickCount;
 		private long activeProfileVolume;
 		private readonly Dictionary<DateTime, int> volumeWindowHeads = new Dictionary<DateTime, int>();
+		private readonly OrcaRollingStatisticsWindow statisticsWindow = new OrcaRollingStatisticsWindow();
+		private long statisticsTotalVolume, statisticsTotalDelta, statisticsFinishDelta;
+		private double statisticsDeltaPercent;
 		private OrcaProfileBucket developingBucket;
 		private OrcaProfileBucket totalProfile;
 		private DateTime currentMinuteToken;
@@ -140,6 +242,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SharpDX.Direct2D1.SolidColorBrush sourceLabelBgBrushDx;
 		private TextFormat deltaTextFormatDx;
 		private TextFormat sourceLabelTextFormatDx;
+		private SharpDX.Direct2D1.SolidColorBrush statisticsTextBrushDx;
+		private TextFormat statisticsTextFormatDx;
+		private int lastStatisticsFontSize = -1;
 		private Dictionary<string, float> textWidthCache = new Dictionary<string, float>();
 
 		// ── 1. Data ──────────────────────────────────────────────────────────────
@@ -151,6 +256,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(1, int.MaxValue)]
 		[Display(Name = "Rolling Volume Amount", Order = -1, GroupName = "01 Display", Description = "Contracts retained when Rolling Basis is Volume, for example 5,000, 10,000, 20,000, 50,000, 100,000 or 200,000. Uses available history until the amount is reached. Reload after changing settings.")]
 		public int RollingVolumeAmount { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Profile Statistics", Order = 0, GroupName = "09 Profile Statistics", Description = "Show the selected statistics for the current rolling window. Reload when changing this setting to rebuild statistics from loaded trades.")]
+		public bool ShowProfileStatistics { get; set; }
+		[NinjaScriptProperty]
+		[Display(Name = "Show Total Delta", Order = 1, GroupName = "09 Profile Statistics")]
+		public bool ShowTotalDelta { get; set; }
+		[NinjaScriptProperty]
+		[Display(Name = "Show Finish Delta", Order = 2, GroupName = "09 Profile Statistics", Description = "Delta gained or surrendered after the strongest same-side cumulative-delta excursion within the retained rolling window.")]
+		public bool ShowFinishDelta { get; set; }
+		[NinjaScriptProperty]
+		[Display(Name = "Show Delta Percent", Order = 3, GroupName = "09 Profile Statistics")]
+		public bool ShowDeltaPercent { get; set; }
+		[NinjaScriptProperty]
+		[Display(Name = "Show Total Volume", Order = 4, GroupName = "09 Profile Statistics")]
+		public bool ShowTotalVolume { get; set; }
+		[NinjaScriptProperty]
+		[Range(8, 30)]
+		[Display(Name = "Statistics Font Size", Order = 5, GroupName = "09 Profile Statistics")]
+		public int StatisticsFontSize { get; set; }
+		[XmlIgnore]
+		[Display(Name = "Statistics Text Color", Order = 6, GroupName = "09 Profile Statistics")]
+		public System.Windows.Media.Brush StatisticsTextBrush { get; set; }
+		[Browsable(false)]
+		public string StatisticsTextBrushSerialize
+		{
+			get { return Serialize.BrushToString(StatisticsTextBrush); }
+			set { StatisticsTextBrush = Serialize.StringToBrush(value); }
+		}
 
 		[NinjaScriptProperty]
 		[Display(Name = "Rolling Period", Order = 0, GroupName = "01 Display", Description = "Rolling lookback window. Day-based choices use Minutes in Trading Day; closed periods defined by the chart Trading Hours template do not consume the window.")]
@@ -473,6 +607,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Period = RollingProfilePeriod.Day1;
 				RollingBasis = RollingProfileBasis.Time;
 				RollingVolumeAmount = 100000;
+				ShowProfileStatistics = false;
+				ShowTotalDelta = true;
+				ShowFinishDelta = true;
+				ShowDeltaPercent = true;
+				ShowTotalVolume = true;
+				StatisticsFontSize = 12;
+				StatisticsTextBrush = Brushes.White;
 				Mode = ProfileOperatingMode.FullSession;
 				UseSharedProfileDataProvider = false;
 				EnableSharedProviderHistoricalBackfill = false;
@@ -666,12 +807,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 			activeProfileTickCount = 0;
 			activeProfileVolume = 0;
 			volumeWindowHeads.Clear();
+			statisticsWindow.Clear();
+			statisticsTotalVolume = statisticsTotalDelta = statisticsFinishDelta = 0;
+			statisticsDeltaPercent = 0;
 			developingBucket = new OrcaProfileBucket();
 			totalProfile = new OrcaProfileBucket();
 		}
 
 		private void DisposeDx()
 		{
+			if (statisticsTextBrushDx != null) statisticsTextBrushDx.Dispose();
+			if (statisticsTextFormatDx != null) statisticsTextFormatDx.Dispose();
+			statisticsTextBrushDx = null;
+			statisticsTextFormatDx = null;
+			lastStatisticsFontSize = -1;
 			if (volBrushDx != null) volBrushDx.Dispose();
 			if (pocBrushDx != null) pocBrushDx.Dispose();
 			if (posDeltaBrushDx != null) posDeltaBrushDx.Dispose();
@@ -879,8 +1028,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (!hasData || snapshot.Buckets == null || snapshot.Buckets.Count == 0)
 				return;
 
-			// Equal-time trades must retain source order at a volume boundary.
-			if (RollingBasis == RollingProfileBasis.Volume)
+			// Equal-time source order matters for volume boundaries and Finish Delta.
+			if (RollingBasis == RollingProfileBasis.Volume || ShowProfileStatistics)
 				snapshot.Buckets = snapshot.Buckets.OrderBy(bucket => bucket == null ? DateTime.MinValue : bucket.Time).ToList();
 			else
 				snapshot.Buckets.Sort(CompareOrderFlowBuckets);
@@ -1150,8 +1299,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (minute > currentMinuteToken)
 				currentMinuteToken = minute;
 			bool volumeBasis = RollingBasis == RollingProfileBasis.Volume;
-			// Time/price compaction loses the trade order needed for exact volume expiry.
-			if (volumeBasis) compactHistory = false;
+			// Exact volume expiry and rolling cumulative-delta extrema both need
+			// individual trade order, including transitions into/out of spike mode.
+			if (volumeBasis || ShowProfileStatistics) compactHistory = false;
 			DateTime rollingWindowStartTime = volumeBasis ? DateTime.MinValue : GetRollingWindowStartTimeUnsafe(time);
 
 			double vKey = NormalizeToBucketStart(price, VolumeTickCompression);
@@ -1198,6 +1348,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				activeProfileVolume += volume;
 				lastPrunedActiveTicks = PruneVolumeWindowUnsafe();
+			}
+			if (ShowProfileStatistics)
+			{
+				statisticsWindow.Add(tick.Time, volume, delta);
+				if (volumeBasis) statisticsWindow.TrimVolume(RollingVolumeAmount);
+				else statisticsWindow.TrimTime(currentWindowStartTime);
+				statisticsTotalVolume = statisticsWindow.Volume;
+				statisticsTotalDelta = statisticsWindow.Delta;
+				statisticsFinishDelta = CalculateFinishDelta(statisticsTotalDelta, statisticsWindow.Maximum, statisticsWindow.Minimum);
+				statisticsDeltaPercent = statisticsTotalVolume > 0 ? statisticsTotalDelta / (double)statisticsTotalVolume * 100.0 : 0.0;
 			}
 
 			profileBuildSequence++;
@@ -1422,7 +1582,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			SubtractFromMap(totalProfile.VolByPrice, tick.VolumePrice, tick.Volume, true);
 			if (tick.Delta != 0)
+			{
+				if (!totalProfile.DeltaByPrice.ContainsKey(tick.DeltaPrice)) totalProfile.DeltaByPrice[tick.DeltaPrice] = 0;
 				SubtractFromMap(totalProfile.DeltaByPrice, tick.DeltaPrice, tick.Delta, false);
+			}
 		}
 
 		private void SubtractFromMap(Dictionary<double, long> map, double key, long value, bool removeWhenNonPositive)
@@ -1490,6 +1653,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DisposeDx();
 
 			if (volBrushDx == null) volBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(VolumeBrush, VolumeOpacity));
+			if (ShowProfileStatistics)
+			{
+				if (statisticsTextBrushDx == null) statisticsTextBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(StatisticsTextBrush, 1f));
+				if (statisticsTextFormatDx == null || lastStatisticsFontSize != StatisticsFontSize)
+				{
+					if (statisticsTextFormatDx != null) statisticsTextFormatDx.Dispose();
+					statisticsTextFormatDx = new TextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8, StatisticsFontSize))
+					{
+						TextAlignment = TextAlignment.Trailing, WordWrapping = WordWrapping.NoWrap, ParagraphAlignment = ParagraphAlignment.Center
+					};
+					lastStatisticsFontSize = StatisticsFontSize;
+				}
+			}
 			if (pocBrushDx == null) pocBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(POCBrush, 1f));
 			if (posDeltaBrushDx == null) posDeltaBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(PositiveDeltaBrush, DeltaOpacity));
 			if (negDeltaBrushDx == null) negDeltaBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(NegativeDeltaBrush, DeltaOpacity));
@@ -1623,6 +1799,53 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+		private void DrawProfileStatistics(float spineX, long totalVolume, long totalDelta, long finishDelta, double deltaPercent)
+		{
+			if (!ShowProfileStatistics || statisticsTextBrushDx == null || statisticsTextFormatDx == null || ChartPanel == null)
+				return;
+			string text = BuildProfileStatisticsText(totalVolume, totalDelta, finishDelta, deltaPercent);
+			if (string.IsNullOrEmpty(text)) return;
+			// Match the visible profile's right edge, allowing text to extend left
+			// within the panel as Step Profile's active statistics do.
+			float rightEdge = spineX + (ShowDelta && DeltaDirection == RollingDeltaDirection.TowardPriceScale ? DeltaWidthPx : 0);
+			float left = (float)Math.Ceiling(ChartPanel.X + 4f);
+			float right = (float)Math.Floor(Math.Min(ChartPanel.X + ChartPanel.W - 4f, rightEdge - 4f));
+			float y = (float)Math.Round(ChartPanel.Y + 4f);
+			float height = Math.Max(16f, StatisticsFontSize + 6f);
+			if (right <= left || y + height > ChartPanel.Y + ChartPanel.H) return;
+			RenderTarget.DrawText(text, statisticsTextFormatDx, new RectangleF(left, y, right - left, height), statisticsTextBrushDx, DrawTextOptions.Clip);
+		}
+
+		private string BuildProfileStatisticsText(long totalVolume, long totalDelta, long finishDelta, double deltaPercent)
+		{
+			string text = string.Empty;
+			if (ShowTotalDelta) text = AppendStatisticsToken(text, "T " + FormatSignedValue(totalDelta));
+			if (ShowFinishDelta) text = AppendStatisticsToken(text, "F " + FormatSignedValue(finishDelta));
+			if (ShowDeltaPercent) text = AppendStatisticsToken(text, deltaPercent.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture) + "%");
+			if (ShowTotalVolume) text = AppendStatisticsToken(text, "V " + FormatCompactVolume(totalVolume));
+			return text;
+		}
+
+		private static long CalculateFinishDelta(long currentDelta, long maxCumulativeDelta, long minCumulativeDelta)
+		{
+			return currentDelta - (currentDelta >= 0 ? maxCumulativeDelta : minCumulativeDelta);
+		}
+		private static string FormatSignedValue(long value)
+		{
+			return value.ToString("+#;-#;0", CultureInfo.InvariantCulture);
+		}
+		private static string FormatCompactVolume(long volume)
+		{
+			long absoluteVolume = volume == long.MinValue ? long.MaxValue : Math.Abs(volume);
+			if (absoluteVolume >= 1000000) return (volume / 1000000.0).ToString("0.0", CultureInfo.InvariantCulture) + "M";
+			if (absoluteVolume >= 1000) return (volume / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + "K";
+			return volume.ToString(CultureInfo.InvariantCulture);
+		}
+		private static string AppendStatisticsToken(string text, string token)
+		{
+			return string.IsNullOrEmpty(text) ? token : text + " | " + token;
+		}
+
 		private void DrawDataSourceLabel()
 		{
 			if (!ShowDataSourceLabel || string.IsNullOrEmpty(dataSourceLabel) || RenderTarget == null || sourceLabelTextFormatDx == null || sourceLabelBrushDx == null || sourceLabelBgBrushDx == null || ChartPanel == null)
@@ -1666,6 +1889,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				int prunedTickCount;
 				long buildSequence;
 				bool isHydrating;
+				long statVolume, statDelta, statFinish;
+				double statPercent;
 				lock (profileDataSync)
 				{
 					isHydrating = (addLocalTickSeries && localTickSeriesHydrating && !localTickSeriesReady) || (UseSharedProfileDataProvider && sharedProviderHydrating);
@@ -1690,6 +1915,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 					GetActiveTickDiagnosticsUnsafe(windowStartTime, volumeByPrice, out activeMinTime, out activeMaxTime, out activeMinPrice, out activeMaxPrice, out staleTickCount);
 					prunedTickCount = lastPrunedActiveTicks;
 					buildSequence = profileBuildSequence;
+					statVolume = statisticsTotalVolume;
+					statDelta = statisticsTotalDelta;
+					statFinish = statisticsFinishDelta;
+					statPercent = statisticsDeltaPercent;
 				}
 
 				float chartY = ChartPanel.Y;
@@ -1849,6 +2078,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						}
 					}
 				}
+				DrawProfileStatistics(canvasX, statVolume, statDelta, statFinish, statPercent);
 				DrawDataSourceLabel();
 			}
             catch { }
