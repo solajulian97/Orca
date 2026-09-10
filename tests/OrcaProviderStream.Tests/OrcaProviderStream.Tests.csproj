@@ -6,6 +6,7 @@
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderHistoryConfigurationCapture.cs" Link="OrcaProviderHistoryConfigurationCapture.cs" />
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderHistoryAdmissionCore.cs" Link="OrcaProviderHistoryAdmissionCore.cs" />
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderReaderComparisonCore.cs" Link="OrcaProviderReaderComparisonCore.cs" />
     <Compile Include="../../Orca Trades/Working_Suite/Indicators/OrcaProviderFeedLifetimeCore.cs" Link="OrcaProviderFeedLifetimeCore.cs" />

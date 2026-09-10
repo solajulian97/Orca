@@ -20,13 +20,17 @@ var compilation = CSharpCompilation.Create("OrcaProviderPlatformCheck", trees,
     paths.Select(p => MetadataReference.CreateFromFile(p)),
     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
-if (args.Contains("--metadata"))
+if (args.Contains("--metadata") || args.Contains("--history-metadata"))
 {
-    foreach (string name in new[] { "NinjaTrader.Data.TradingHours", "NinjaTrader.Data.Session", "NinjaTrader.Data.PartialHoliday", "NinjaTrader.Data.MarketData", "NinjaTrader.Data.Bars", "NinjaTrader.Data.MarketDataEventArgs", "NinjaTrader.Cbi.Connection", "NinjaTrader.Data.BarsRequest", "NinjaTrader.Cbi.Instrument" })
+    var metadataTypes = args.Contains("--history-metadata")
+        ? new[] { "NinjaTrader.Cbi.MasterInstrument", "NinjaTrader.Cbi.Rollover", "NinjaTrader.Cbi.LookupPolicies", "NinjaTrader.Cbi.MergePolicy", "NinjaTrader.Data.BarsPeriod" }
+        : new[] { "NinjaTrader.Data.TradingHours", "NinjaTrader.Data.Session", "NinjaTrader.Data.PartialHoliday", "NinjaTrader.Data.MarketData", "NinjaTrader.Data.Bars", "NinjaTrader.Data.MarketDataEventArgs", "NinjaTrader.Cbi.Connection", "NinjaTrader.Data.BarsRequest", "NinjaTrader.Cbi.Instrument" };
+    foreach (string name in metadataTypes)
     {
         var type = compilation.GetTypeByMetadataName(name);
         Console.WriteLine(name);
         if (type != null) foreach (var member in type.GetMembers().OfType<IPropertySymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public)) Console.WriteLine(member.Type.ToDisplayString() + " " + member.Name);
+        if (type != null && type.TypeKind == TypeKind.Enum) foreach (var member in type.GetMembers().OfType<IFieldSymbol>().Where(m => m.HasConstantValue)) Console.WriteLine(member.Name + "=" + member.ConstantValue);
         if (type != null) foreach (var member in type.GetMembers().OfType<IMethodSymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public && m.MethodKind == MethodKind.Ordinary && (m.Name.Contains("Connection") || m.Name.Contains("Request")))) Console.WriteLine(member.ToDisplayString());
     }
 }
@@ -60,4 +64,15 @@ if (stateChange.IndexOf("connectionMonitor.Attach()", StringComparison.Ordinal) 
     || !stateChange.Contains("publisherAcquired=False"))
     throw new Exception("Monitor must activate before acquiring any publisher and report setup evidence.");
 Console.WriteLine("PASS: monitor activation precedes publisher acquisition with explicit setup evidence.");
+var historyCapture = trees.Single(t => Path.GetFileName(t.FilePath) == "OrcaProviderHistoryConfigurationCapture.cs").GetRoot();
+if (historyCapture.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(i =>
+    new[] { "Request", "AddDataSeries", "ConfirmHistory", "BeginHistory", "Subscribe", "Print" }
+        .Contains((i.Expression as MemberAccessExpressionSyntax)?.Name.Identifier.Text ?? i.Expression.ToString())))
+    throw new Exception("History configuration capture must not request, subscribe, publish or certify data.");
+var captureClass = historyCapture.DescendantNodes().OfType<ClassDeclarationSyntax>()
+    .Single(c => c.Identifier.Text == "OrcaProviderHistoryConfigurationCapture");
+if (captureClass.Members.OfType<FieldDeclarationSyntax>().Any(f => !f.Modifiers.Any(SyntaxKind.ConstKeyword)
+    && (f.Declaration.Type.ToString() != "string" || !f.Modifiers.Any(SyntaxKind.ReadOnlyKeyword))))
+    throw new Exception("History capture may retain immutable strings only, not mutable platform owners.");
+Console.WriteLine("PASS: history configuration capture retains strings only and makes no data requests or coverage assertions.");
 return 0;

@@ -12,6 +12,8 @@ namespace NinjaTrader.NinjaScript.Indicators
         public readonly OrcaProviderStreamKey Key;
         public readonly Guid ConnectionEpoch;
         public readonly OrcaProviderEnvironment Environment;
+        public readonly Guid HistoricalSnapshotId;
+        public readonly bool HasHistoricalConfiguration;
 
         public OrcaProviderSourceIdentity(string fullContract, OrcaProviderEnvironment environment,
             Guid connectionEpoch, string sessionDefinitionSnapshot, string timezoneRulesSnapshot,
@@ -43,6 +45,27 @@ namespace NinjaTrader.NinjaScript.Indicators
             string session = "session-v1:" + Part(sessionDefinitionSnapshot) + Part(timezoneRulesSnapshot)
                 + (resetClassificationOnSessionBreak ? "reset" : "continuous");
             Key = new OrcaProviderStreamKey(fullContract, data, session, "UTC", policy);
+        }
+
+        // The snapshot ID belongs to one explicitly owned history load/lineage, not a
+        // connection name or the current route. Configuration is not coverage proof.
+        // Keep the original constructor/key unchanged for the private legacy probe.
+        public OrcaProviderSourceIdentity(string fullContract, OrcaProviderEnvironment environment,
+            Guid connectionEpoch, string sessionDefinitionSnapshot, string timezoneRulesSnapshot,
+            bool resetClassificationOnSessionBreak, Guid classifierOrigin,
+            OrcaProviderClassificationPolicy classificationPolicy, string quoteSemantics,
+            Guid historicalSnapshotId, string historicalConfigurationSnapshot)
+            : this(fullContract, environment, connectionEpoch, sessionDefinitionSnapshot, timezoneRulesSnapshot,
+                resetClassificationOnSessionBreak, classifierOrigin, classificationPolicy, quoteSemantics)
+        {
+            if (historicalSnapshotId == Guid.Empty) throw new ArgumentException("Explicit historical snapshot ownership is required.", "historicalSnapshotId");
+            Require(historicalConfigurationSnapshot, "historicalConfigurationSnapshot");
+            HistoricalSnapshotId = historicalSnapshotId;
+            HasHistoricalConfiguration = true;
+            Key = new OrcaProviderStreamKey(Key.Contract,
+                "source-history-v1:" + Part(Key.DataEnvironment) + historicalSnapshotId.ToString("N")
+                    + ":" + Part(historicalConfigurationSnapshot),
+                Key.SessionDefinition, Key.TimeBasis, Key.ClassificationPolicy);
         }
 
         private static void Require(string value, string name)
