@@ -38,7 +38,7 @@ class Program
     {
         string root = Path.Combine(Path.GetTempPath(), "orca-identity-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        try { SavedViewChecks.Run(); TagPerformanceChecks.Run(); ExcursionChecks.Run(); RiskMediaChecks.Run(); ReviewChecks.Run(); Run(root); assertions += SharedIdentityTests.Run(root); Console.WriteLine("PASS: " + assertions + " assertions; disposable artifacts: " + root); return 0; }
+        try { VideoImportChecks.Run(); SavedViewChecks.Run(); TagPerformanceChecks.Run(); ExcursionChecks.Run(); RiskMediaChecks.Run(); ReviewChecks.Run(); Run(root); assertions += SharedIdentityTests.Run(root); Console.WriteLine("PASS: " + assertions + " assertions; disposable artifacts: " + root); return 0; }
         catch (Exception ex) { Console.Error.WriteLine(ex); Console.Error.WriteLine("Fixtures: " + root); return 1; }
     }
     static void Run(string root)

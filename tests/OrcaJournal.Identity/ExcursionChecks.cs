@@ -46,6 +46,13 @@ static class ExcursionChecks
   c2.Detach(a2);Check(instrument.MarketData.Subscribers==1,"other account retains feed");c2.Detach(a3);Check(instrument.MarketData.Subscribers==0,"last account detach releases feed");c2.DetachAll();
   Check(ReviewTagOption.Management=="Risk & Trade Management" && ReviewTagOption.Analysis=="Analysis & Execution","requested category labels");
   var media=new TradeAttachment{FilePath="file.png",Caption="Entry setup"};Check(media.DisplayTitle=="Entry setup","caption is image title");media.Caption=" ";Check(media.DisplayTitle=="file.png","old media title fallback");
+  var jitter=new RoundTripExcursion();jitter.Fill(2,100,t,5);jitter.Observe(102,t.AddMilliseconds(100),5);jitter.Fill(-1,101,t.AddMilliseconds(90),5);jitter.Observe(103,t.AddMilliseconds(150),5);jitter.Fill(-1,102,t.AddMilliseconds(140),5);
+  Check(jitter.Valid && jitter.Samples==2 && jitter.Mfe==20 && jitter.Mae==0,"cross-stream overlap retains callback-order estimate and fill inventory");
+  Check(jitter.CrossStreamOverlaps==2 && jitter.Quality(true).StartsWith("Partial observed") && jitter.Quality(true).Contains("10 ms"),"cross-stream uncertainty is explicit");
+  var beforeFill=new RoundTripExcursion();beforeFill.Fill(1,100,t.AddMilliseconds(100),5);beforeFill.Observe(101,t.AddMilliseconds(90),5);Check(beforeFill.Valid && beforeFill.Quality(true).StartsWith("Partial"),"first price can precede fill timestamp on other source");
+  var badFills=new RoundTripExcursion();badFills.Fill(1,100,t,5);badFills.Fill(1,101,t.AddMilliseconds(-1),5);Check(!badFills.Valid && badFills.FailureReason.Contains("execution timestamps"),"actual execution regression still invalidates");
+  var badPrices=new RoundTripExcursion();badPrices.Fill(1,100,t,5);badPrices.Observe(101,t.AddSeconds(2),5);badPrices.Observe(102,t.AddSeconds(1),5);Check(!badPrices.Valid && badPrices.FailureReason.Contains("price timestamps"),"actual price regression still invalidates");
+  Check(new Trade{HoldSeconds=107}.HoldDuration=="1m 47s" && new Trade{HoldSeconds=4312}.HoldDuration=="1h 11m 52s","spaced compact duration");
   Console.WriteLine("PASS: "+count+" excursion and title checks");
  }
 }

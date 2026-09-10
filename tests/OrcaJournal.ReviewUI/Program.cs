@@ -71,8 +71,10 @@ class Program
                 ((ScrollViewer)mediaReview.Content).ScrollToBottom();mediaReview.UpdateLayout();
                 var mediaBitmap=new RenderTargetBitmap(700,780,96,96,PixelFormats.Pbgra32);mediaBitmap.Render((Visual)mediaReview.Content);var mediaEncoder=new PngBitmapEncoder();mediaEncoder.Frames.Add(BitmapFrame.Create(mediaBitmap));using(var file=File.Create(Path.Combine(args[0],"review-media.png")))mediaEncoder.Save(file);
                 mediaReview.Close();
-                var library=new OrcaJournal.UI.Views.TagLibraryView(db);
+                var library=new OrcaJournal.UI.Views.TagLibraryView(db,null,()=>"Recording refresh completed");
                 var libraryWindow=new Window{Content=library,Width=1200,Height=800,Left=-20000,Top=-20000,ShowActivated=false,ShowInTaskbar=false};libraryWindow.Show();library.UpdateLayout();
+                Find<Button>(library).Single(x=>x.Content as string=="Refresh videos").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));library.UpdateLayout();
+                if(!Find<TextBlock>(library).Any(x=>x.Name=="RecordingImportStatus" && x.Text=="Recording refresh completed"))throw new Exception("Video refresh result not visible");
                 if(Find<Expander>(library).Single().IsExpanded)throw new Exception("Advanced should start collapsed");
                 Find<Button>(library).Single(x=>x.Tag as string=="Risked proper amount").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));library.UpdateLayout();
                 if(!Find<TextBlock>(library).Any(x=>x.Name=="LibraryStatus" && x.Text.StartsWith("1 trades")) || !Find<Image>(library).Any(x=>x.Source!=null) || !Find<Button>(library).Any(x=>x.Content as string=="Play video"))throw new Exception("Library effective tag membership/media failed");
