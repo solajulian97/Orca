@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
@@ -51,6 +52,12 @@ namespace NinjaTrader.NinjaScript
 		Days20 = 20
 	}
 
+	public enum RollingProfileBasis
+	{
+		Time,
+		Volume
+	}
+
 	public enum RollingDeltaDirection
 	{
 		TowardPriceScale,
@@ -66,6 +73,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private Queue<OrcaProfileBucket> rollingHistory;
 		private SortedDictionary<DateTime, List<OrcaRollingProfileTick>> activeProfileTicksByTime;
 		private int activeProfileTickCount;
+		private long activeProfileVolume;
+		private readonly Dictionary<DateTime, int> volumeWindowHeads = new Dictionary<DateTime, int>();
 		private OrcaProfileBucket developingBucket;
 		private OrcaProfileBucket totalProfile;
 		private DateTime currentMinuteToken;
@@ -134,6 +143,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private Dictionary<string, float> textWidthCache = new Dictionary<string, float>();
 
 		// ── 1. Data ──────────────────────────────────────────────────────────────
+		[NinjaScriptProperty]
+		[Display(Name = "Rolling Basis", Order = -2, GroupName = "01 Display", Description = "Time uses Rolling Period. Volume retains the latest selected number of contracts across included sessions, without a daily reset.")]
+		public RollingProfileBasis RollingBasis { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name = "Rolling Volume Amount", Order = -1, GroupName = "01 Display", Description = "Contracts retained when Rolling Basis is Volume, for example 5,000, 10,000, 20,000, 50,000, 100,000 or 200,000. Uses available history until the amount is reached. Reload after changing settings.")]
+		public int RollingVolumeAmount { get; set; }
+
 		[NinjaScriptProperty]
 		[Display(Name = "Rolling Period", Order = 0, GroupName = "01 Display", Description = "Rolling lookback window. Day-based choices use Minutes in Trading Day; closed periods defined by the chart Trading Hours template do not consume the window.")]
 		public RollingProfilePeriod Period { get; set; }
@@ -453,6 +471,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Calculate = Calculate.OnPriceChange;
 				IsOverlay = true;
 				Period = RollingProfilePeriod.Day1;
+				RollingBasis = RollingProfileBasis.Time;
+				RollingVolumeAmount = 100000;
 				Mode = ProfileOperatingMode.FullSession;
 				UseSharedProfileDataProvider = false;
 				EnableSharedProviderHistoricalBackfill = false;
@@ -644,6 +664,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			rollingHistory = new Queue<OrcaProfileBucket>();
 			activeProfileTicksByTime = new SortedDictionary<DateTime, List<OrcaRollingProfileTick>>();
 			activeProfileTickCount = 0;
+			activeProfileVolume = 0;
+			volumeWindowHeads.Clear();
 			developingBucket = new OrcaProfileBucket();
 			totalProfile = new OrcaProfileBucket();
 		}
@@ -857,7 +879,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (!hasData || snapshot.Buckets == null || snapshot.Buckets.Count == 0)
 				return;
 
-			snapshot.Buckets.Sort(CompareOrderFlowBuckets);
+			// Equal-time trades must retain source order at a volume boundary.
+			if (RollingBasis == RollingProfileBasis.Volume)
+				snapshot.Buckets = snapshot.Buckets.OrderBy(bucket => bucket == null ? DateTime.MinValue : bucket.Time).ToList();
+			else
+				snapshot.Buckets.Sort(CompareOrderFlowBuckets);
 			lock (profileDataSync)
 			{
 				for (int index = 0; index < snapshot.Buckets.Count; index++)
@@ -922,6 +948,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			int periodMins = Math.Max(1, GetPeriodMinutes());
 			int lookbackMins = Math.Max(5, Math.Min(Math.Max(5, SharedProviderMaxBackfillMinutes), periodMins + 2));
+			if (RollingBasis == RollingProfileBasis.Volume)
+				lookbackMins = Math.Max(5, SharedProviderMaxBackfillMinutes);
 			if (currentMinuteToken != DateTime.MinValue)
 				return currentMinuteToken.AddMinutes(-2);
 
@@ -1121,22 +1149,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DateTime minute = new DateTime(time.Year, time.Month, time.Day, time.Hour, time.Minute, 0);
 			if (minute > currentMinuteToken)
 				currentMinuteToken = minute;
-			DateTime rollingWindowStartTime = GetRollingWindowStartTimeUnsafe(time);
+			bool volumeBasis = RollingBasis == RollingProfileBasis.Volume;
+			// Time/price compaction loses the trade order needed for exact volume expiry.
+			if (volumeBasis) compactHistory = false;
+			DateTime rollingWindowStartTime = volumeBasis ? DateTime.MinValue : GetRollingWindowStartTimeUnsafe(time);
 
 			double vKey = NormalizeToBucketStart(price, VolumeTickCompression);
 			double rawKey = NormalizeToBucketStart(price, 1);
 			if (currentWindowEndTime == DateTime.MinValue || time > currentWindowEndTime)
 			{
 				currentWindowEndTime = time;
-				currentWindowStartTime = rollingWindowStartTime;
-				lastPrunedActiveTicks = PruneActiveTicksUnsafe(currentWindowStartTime);
+				if (!volumeBasis) currentWindowStartTime = rollingWindowStartTime;
+				lastPrunedActiveTicks = volumeBasis ? 0 : PruneActiveTicksUnsafe(currentWindowStartTime);
 			}
 			else
 			{
 				lastPrunedActiveTicks = 0;
 			}
 
-			if (currentWindowStartTime != DateTime.MinValue && time <= currentWindowStartTime)
+			if (!volumeBasis && currentWindowStartTime != DateTime.MinValue && time <= currentWindowStartTime)
 			{
 				lastDroppedStaleTicks++;
 				profileBuildSequence++;
@@ -1163,8 +1194,69 @@ namespace NinjaTrader.NinjaScript.Indicators
 				else totalProfile.DeltaByPrice[rawKey] = delta;
 			}
 
+			if (volumeBasis)
+			{
+				activeProfileVolume += volume;
+				lastPrunedActiveTicks = PruneVolumeWindowUnsafe();
+			}
+
 			profileBuildSequence++;
             OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, time, null);
+		}
+
+		private int PruneVolumeWindowUnsafe()
+		{
+			long excess = activeProfileVolume - Math.Max(1, RollingVolumeAmount);
+			int pruned = 0;
+			while (activeProfileTicksByTime.Count > 0)
+			{
+				var first = activeProfileTicksByTime.First();
+				currentWindowStartTime = first.Key;
+				if (excess <= 0) break;
+				int head;
+				volumeWindowHeads.TryGetValue(first.Key, out head);
+				while (head < first.Value.Count && excess > 0)
+				{
+					OrcaRollingProfileTick oldest = first.Value[head];
+					long removed = Math.Min(excess, oldest.Volume);
+					// Local trades have +/-volume or zero delta. Mixed provider records
+					// retain proportional signed delta; their internal trade order is unavailable.
+					long removedDelta = removed == oldest.Volume ? oldest.Delta
+						: (long)((decimal)oldest.Delta * removed / oldest.Volume);
+					SubtractFromMap(totalProfile.VolByPrice, oldest.VolumePrice, removed, true);
+					// A zero-net row may have been removed while opposing trades remain.
+					// Expiring one side must recreate the other side's signed delta.
+					if (removedDelta != 0 && !totalProfile.DeltaByPrice.ContainsKey(oldest.DeltaPrice))
+						totalProfile.DeltaByPrice[oldest.DeltaPrice] = 0;
+					SubtractFromMap(totalProfile.DeltaByPrice, oldest.DeltaPrice, removedDelta, false);
+					oldest.Volume -= removed;
+					oldest.Delta -= removedDelta;
+					activeProfileVolume -= removed;
+					excess -= removed;
+					if (oldest.Volume == 0)
+					{
+						first.Value[head++] = null;
+						activeProfileTickCount--;
+						pruned++;
+					}
+				}
+				if (head == first.Value.Count)
+				{
+					activeProfileTicksByTime.Remove(first.Key);
+					volumeWindowHeads.Remove(first.Key);
+				}
+				else
+				{
+					// Amortized compaction avoids shifting a large equal-time list per trade.
+					if (head >= 1024 && head >= first.Value.Count / 2)
+					{
+						first.Value.RemoveRange(0, head);
+						head = 0;
+					}
+					volumeWindowHeads[first.Key] = head;
+				}
+			}
+			return pruned;
 		}
 
 		private int GetPeriodMinutes()
@@ -1303,7 +1395,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (enumerator.MoveNext())
 					{
 						minTime = enumerator.Current.Key;
-						if (minTime <= windowStartTime && enumerator.Current.Value != null)
+						if (RollingBasis != RollingProfileBasis.Volume && minTime <= windowStartTime && enumerator.Current.Value != null)
 							staleTickCount = enumerator.Current.Value.Count;
 					}
 				}

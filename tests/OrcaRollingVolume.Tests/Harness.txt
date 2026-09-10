@@ -1,0 +1,84 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+// MODELS
+enum RollingProfileBasis { Time, Volume }
+enum ProfileOperatingMode { FullSession, RthOnly }
+static class OrcaDiagnosticsCore { public static void ReportModelUpdate(string id, DateTime t, string s) {} }
+public class Harness
+{
+    Queue<OrcaProfileBucket> rollingHistory;
+    SortedDictionary<DateTime, List<OrcaRollingProfileTick>> activeProfileTicksByTime;
+    readonly Dictionary<DateTime,int> volumeWindowHeads = new Dictionary<DateTime,int>();
+    int activeProfileTickCount, lastPrunedActiveTicks, lastDroppedStaleTicks;
+    long activeProfileVolume, profileBuildSequence, spikeCompactedRecords;
+    OrcaProfileBucket developingBucket, totalProfile;
+    DateTime currentMinuteToken, currentWindowStartTime, currentWindowEndTime;
+    RollingProfileBasis RollingBasis = RollingProfileBasis.Volume;
+    ProfileOperatingMode Mode;
+    TimeSpan RthStartTime = TimeSpan.FromHours(9.5), RthEndTime = TimeSpan.FromHours(16);
+    int RollingVolumeAmount = 10, VolumeTickCompression = 1;
+    double TickSize = 1;
+    string diagnosticsInstanceId = "test";
+    DateTime GetRollingWindowStartTimeUnsafe(DateTime time) { return time.AddHours(-1); }
+    DateTime GetSpikeBucketEnd(DateTime time) { return time; }
+    // METHODS
+    static void Check(bool valid, string message) { if (!valid) throw new Exception(message); }
+    static Harness New(int size = 10) { var h = new Harness { RollingVolumeAmount = size }; h.ClearProfileDataUnsafe(); return h; }
+    static DateTime Start = new DateTime(2026, 9, 10, 10, 0, 0);
+    void Add(int seconds, double price, long volume, long delta, bool compact = false) { AddTradeToRollingProfilesUnsafe(Start.AddSeconds(seconds), price, volume, delta, compact); }
+    long Vol { get { return totalProfile.VolByPrice.Values.Sum(); } }
+    long Delta { get { return totalProfile.DeltaByPrice.Values.Sum(); } }
+    public static void Run()
+    {
+        var h = New();
+        h.Add(0, 100, 6, 6); h.Add(1, 101, 7, -7);
+        Check(h.Vol == 10 && h.Delta == -4 && h.totalProfile.VolByPrice[100] == 3, "partial oldest trade");
+        h.RebuildTotalProfileFromActiveTicksUnsafe();
+        Check(h.Vol == 10 && h.Delta == -4, "hydration rebuild");
+        h.Add(2, 102, 50, 50);
+        Check(h.Vol == 10 && h.Delta == 10 && h.activeProfileTickCount == 1, "oversized trade");
+        h = New(); h.Add(0, 100, 10, 0); h.Add(0, 101, 6, 6, true);
+        Check(h.totalProfile.VolByPrice[100] == 4 && h.Delta == 6 && h.spikeCompactedRecords == 0, "equal timestamp and no compaction");
+        h.Add(-1, 99, 2, -2);
+        Check(h.Vol == 10 && !h.totalProfile.VolByPrice.ContainsKey(99), "late oldest event");
+        h = New(); h.Mode = ProfileOperatingMode.RthOnly;
+        h.Add(-3600, 100, 10, 10); Check(h.Vol == 0, "RTH excludes overnight");
+        h.Add(0, 100, 6, 6); h.Add(86400, 101, 4, -4);
+        Check(h.Vol == 10 && h.Delta == 2, "carry across sessions");
+        h = New(); h.Add(0, 100, 6, 2); h.Add(1, 101, 7, -7);
+        Check(h.Vol == 10 && h.Delta == -6, "mixed provider proportional delta");
+        h.ClearProfileDataUnsafe(); Check(h.activeProfileVolume == 0 && h.volumeWindowHeads.Count == 0, "source reset");
+        h = New(); h.RollingBasis = RollingProfileBasis.Time;
+        h.Add(0, 100, 20, 20); h.Add(3601, 101, 30, -30);
+        Check(h.Vol == 30 && h.Delta == -30, "time mode still expires by time, not volume");
+        foreach (int size in new[] { 1, 5000, 10000, 20000, 50000, 100000, 200000, int.MaxValue })
+        {
+            h = New(size); h.Add(0, 100, (long)size + 17, -(long)size - 17);
+            Check(h.Vol == size && h.Delta == -size, "size " + size);
+        }
+        h = New(10);
+        for (int i = 0; i < 5000; i++) h.Add(0, 100 + i % 2, 1, i % 2 == 0 ? 1 : -1);
+        Check(h.Vol == 10 && h.Delta == 0 && h.activeProfileTickCount == 10 && h.activeProfileTicksByTime.First().Value.Count < 1100, "equal-time storage stays bounded");
+        for (int pass = 0; pass < 2; pass++)
+        {
+            h = New(73);
+            var random = new Random(810 + pass);
+            var contracts = new List<Tuple<int,int,int,int>>();
+            for (int i = 0; i < 10000; i++)
+            {
+                int time = pass == 0 ? i / 4 : i / 4 - random.Next(8);
+                int price = 100 + random.Next(6), count = random.Next(1, 100), side = random.Next(-1, 2);
+                h.Add(time, price, count, count * side, true);
+                for (int j = 0; j < count; j++) contracts.Add(Tuple.Create(time, i, price, side));
+                contracts = contracts.OrderBy(x => x.Item1).ThenBy(x => x.Item2).Skip(Math.Max(0, contracts.Count - 73)).ToList();
+                var vol = contracts.GroupBy(x => x.Item3).ToDictionary(g => (double)g.Key, g => (long)g.Count());
+                var delta = contracts.GroupBy(x => x.Item3).ToDictionary(g => (double)g.Key, g => (long)g.Sum(x => x.Item4));
+                Check(h.Vol == contracts.Count && h.activeProfileVolume == contracts.Count, "random total");
+                Check(h.totalProfile.VolByPrice.Count == vol.Count && vol.All(k => h.totalProfile.VolByPrice[k.Key] == k.Value), "random price map");
+                Check(delta.All(k => (h.totalProfile.DeltaByPrice.ContainsKey(k.Key) ? h.totalProfile.DeltaByPrice[k.Key] : 0) == k.Value), "random delta map");
+                if (i % 101 == 0) h.RebuildTotalProfileFromActiveTicksUnsafe();
+            }
+        }
+    }
+}
