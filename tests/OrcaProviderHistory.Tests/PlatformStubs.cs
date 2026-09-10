@@ -16,7 +16,7 @@ namespace System.Windows.Threading
         public void InvokeAsync(Action action) { if (ThrowQueue) throw new Exception("queue failure"); queue.Enqueue(action); }
         public bool CheckAccess() { return OnDispatcher; }
         public void Drain()
-        { OnDispatcher = true; try { Action action; while (queue.TryDequeue(out action)) action(); } finally { OnDispatcher = false; } }
+        { bool prior = OnDispatcher; OnDispatcher = true; try { Action action; while (queue.TryDequeue(out action)) action(); } finally { OnDispatcher = prior; } }
         public void Shutdown()
         { OnDispatcher = true; HasShutdownStarted = true; shutdown?.Invoke(this, EventArgs.Empty); HasShutdownFinished = true; OnDispatcher = false; }
     }

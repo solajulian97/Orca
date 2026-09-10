@@ -52,10 +52,13 @@ namespace NinjaTrader.NinjaScript.Indicators
             private Instrument instrument;
             private TradingHours hours;
             private BarsRequest request;
+            private BarsRequest deferredCompletion;
+            private ErrorCode deferredError;
+            private string deferredMessage;
             private OrcaProviderHistoryConfigurationCapture configuration;
             private DispatcherTimer timer;
             private int stopRequested, completionQueued;
-            private bool issuing, inspecting, hooked, cleaned;
+            private bool issuing, inspecting, completionDeferred, hooked, cleaned;
             private long started;
 
             internal Observation(Instrument instrument, TradingHours hours, TimeZoneInfo eventTimezone)
@@ -106,6 +109,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     try { request.Request(OnCompleted); }
                     finally { issuing = false; }
                     if (Volatile.Read(ref stopRequested) != 0) Cleanup("CANCELLED_DURING_REQUEST");
+                    else if (completionDeferred) Complete(deferredCompletion, deferredError, deferredMessage);
                 }
                 catch (Exception ex) { Output("REQUEST_FAILED " + Brief(ex.Message)); Cleanup("REQUEST_FAILED"); }
             }
@@ -123,6 +127,13 @@ namespace NinjaTrader.NinjaScript.Indicators
             private void Complete(BarsRequest completed, ErrorCode error, string message)
             {
                 if (Volatile.Read(ref stopRequested) != 0 || cleaned) return;
+                // A platform call may pump a nested dispatcher frame. Queuing alone
+                // is not proof that Request has returned; retain this one completion.
+                if (issuing)
+                {
+                    deferredCompletion = completed; deferredError = error; deferredMessage = message;
+                    completionDeferred = true; return;
+                }
                 string outcome = "ERROR";
                 inspecting = true;
                 try
@@ -175,7 +186,8 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
             private static bool Finite(double value)
             { return !double.IsNaN(value) && !double.IsInfinity(value) && value != double.MinValue && value != double.MaxValue; }
-            private void OnTimeout(object sender, EventArgs e) { Cleanup("TIMEOUT"); }
+            private void OnTimeout(object sender, EventArgs e)
+            { Interlocked.Exchange(ref stopRequested, 1); if (!issuing && !inspecting) Cleanup("TIMEOUT"); }
             private void OnShutdown(object sender, EventArgs e)
             { Interlocked.Exchange(ref stopRequested, 1); if (!issuing && !inspecting) Cleanup("DISPATCHER_SHUTDOWN"); }
             private void Cleanup(string reason)
@@ -189,7 +201,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (released)
                 {
                     if (hooked) { dispatcher.ShutdownStarted -= OnShutdown; hooked = false; }
-                    configuration = null; instrument = null; hours = null; cleaned = true;
+                    configuration = null; instrument = null; hours = null;
+                    deferredCompletion = null; deferredMessage = null; completionDeferred = false; cleaned = true;
                 }
                 Output("cleanup reason=" + reason + " requestReleased=" + released
                     + " elapsed=" + (started == 0 ? 0 : (Stopwatch.GetTimestamp() - started) / (double)Stopwatch.Frequency).ToString("F2", CultureInfo.InvariantCulture)

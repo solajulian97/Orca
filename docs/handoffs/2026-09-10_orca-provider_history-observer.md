@@ -23,6 +23,8 @@ Request is called once. Completion is always queued, even if synchronous. Inspec
 
 A 30-second dispatcher timer disposes a pending request; it is not a hard wall-clock deadline if the dispatcher/platform blocks. Completion, request failure, removal and shutdown also dispose it. Removal/shutdown during Request defers disposal until Request returns; during inspection cancellation defers disposal until inspection unwinds. Late/duplicate callbacks are ignored. The owner retains no chart/indicator reference. Cleanup clears request/instrument/session/configuration references and timer/shutdown handlers. Dispose failure reports requestReleased=False and retains the shutdown hook/owner for a later removal/shutdown retry.
 
+Final review added explicit nested-dispatcher guards: if a platform Request pumps queued work before returning, one completion is deferred and timeout marks cancellation without disposing inside Request. Deferred completion references are cleared on successful cleanup. Two additional linked scenarios prove that neither path inspects/disposes during the simulated Request call; actual platform scheduling remains unverified.
+
 ## Platform evidence and limitations
 
 [BarsRequest documentation](https://docs.ninjatrader.com/ninjascript/barsrequest) documents count-back requests, independent chart-series timing, Repository versus Provider lookup and disposal. [Request callback documentation](https://ninjatrader.com/support/helpguides/nt8/request.htm) demonstrates inspection of returned Bars. Offline compilation confirms API binding, not runtime scheduling.
@@ -42,12 +44,12 @@ Repository-only intent avoids an explicit provider download request. NinjaTrader
 
 ## Tests and release gates
 
-- 139 linked observer checks passed: request/configuration, sync/foreign-thread/duplicate/late callbacks, empty/overreturned/identical rows, malformed values/clock kinds, wide volume sum, cancellation before/during Request/queued completion/inspection, timeout, shutdown, platform error, thrown request/read, mutated config, foreign result, failed completion queue and disposal retry.
+- 153 linked observer checks passed: request/configuration, sync/foreign-thread/duplicate/late/nested-dispatcher callbacks, empty/overreturned/identical rows, malformed values/clock kinds, wide volume sum, cancellation before/during Request/queued completion/inspection, timeout, shutdown, platform error, thrown request/read, mutated config, foreign result, failed completion queue and disposal retry.
 - Regression: 473 core, 243 canonical-probe, 14 subscription-observer checks passed.
 - Offline C# 7.3 semantic check: zero errors across 14 provider sources. Structural guards: one Request site, no Update subscription, added series, publication/coverage assertion or rendering.
 - Source: complete. Guarded three-file deployment completed at approximately 09:43 ET, using the targeted Working_Suite deployment script. Preflight matched the old live identity to its pre-18cdfa4 version and all ten other live provider files to their current authored source. All ten non-target provider files remained unchanged after deployment.
 - Backup: `.codex-backups/provider-history-observer-20260910-094321/` contains the old live identity and three source snapshots. An earlier sandbox-denied attempt left a separate backup at `provider-history-observer-20260910-094305/`; no live write succeeded in that attempt.
-- Normalized authored source/live SHA-256 parity passed: identity `3353059D062271DCEE09B815571AE9E0C0D171ED91EA05A98390A97ED708EB06`; configuration capture `8D9706D95038DA35ED05BF41773D16B049230610FFCD9406A115743782339D6D`; observer `E44CB1C6B98120F5882254BD785C652E5F9633613F614FE59FFCC3BDA9019DA4`.
+- Normalized authored source/live SHA-256 parity passed: identity `3353059D062271DCEE09B815571AE9E0C0D171ED91EA05A98390A97ED708EB06`; configuration capture `8D9706D95038DA35ED05BF41773D16B049230610FFCD9406A115743782339D6D`; final observer `0F290EDF23224380059B86BF9B4D57F992D8722B7F403A71D2D809A26CD122A7`. The nested-dispatcher revision was deployed only to the observer after backing up its initial live version in the same backup directory.
 - NinjaTrader F5 / Custom-assembly load: not performed for this change.
 - NinjaTrader tests/manual validation: not performed. Fixtures do not prove actual request/dispatch/disposal behavior or repository results.
 - Full_Suite: untouched, not eligible. Existing canonical probe, local-series ownership and production consumer settings unchanged.

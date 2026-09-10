@@ -48,6 +48,17 @@ static class Program
         probe.SetState(State.Realtime); probe.Instrument.Dispatcher.Drain();
         Check(BarsRequest.All.Count == 1, "no automatic rerun"); Released(probe, request);
 
+        foreach (bool timeout in new[] { false, true })
+        {
+            probe = Create(); var captured = probe;
+            BarsRequest.OnCreate = r => r.OnRequest = b =>
+            {
+                if (timeout) DispatcherTimer.All.Single().Fire(); else { b.Complete(); captured.Instrument.Dispatcher.Drain(); }
+                Check(b.Disposals == 0 && !Has("sample-summary"), "nested dispatcher must not inspect/dispose before Request returns");
+            };
+            probe.Instrument.Dispatcher.Drain(); request = BarsRequest.All.Single(); Released(probe, request);
+        }
+
         probe = Create(); probe.Instrument.Dispatcher.Drain(); request = BarsRequest.All.Single();
         Task.Run(() => request.Complete()).GetAwaiter().GetResult();
         Check(request.Disposals == 0, "foreign callback only queues owned dispatcher work");
