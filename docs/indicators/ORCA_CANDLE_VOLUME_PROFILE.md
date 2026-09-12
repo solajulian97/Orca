@@ -35,7 +35,7 @@ Enhanced controls are contextual and ordered into Profile, Data Quality, Rows, S
 | Display Row Size / Dynamic Order Flow Aggregation | Existing presentation controls; do not change analysis rows. |
 | Normalization | Per Bar, Visible Range, Session Global, Fixed. |
 | Fixed Scale Volume | Enter a positive contract count before Fixed becomes a dropdown choice. Zero in a restored Fixed configuration reports N/A. |
-| Candle Display | Off, OHLC Spine, Full Candle. The default narrow spine preserves prior Bid x Ask appearance; Full Candle reserves Candle Width plus twice Candle/Profile Gap between Bid and Ask. |
+| Candle Display | Off, OHLC Spine, Full Candle, Hollow Body Delta. The default narrow spine preserves prior Bid x Ask appearance. Full Candle reserves Candle Width; Hollow Body Delta auto-expands a hollow center column for signed strict delta. |
 | POC Outline | Existing ShowPOC setting; neutral outline in enhanced mode. Lowest-price tie retained, tie count on hover. Developing POC is provisional. |
 | Cell Values | Bid x Ask, Total Volume, Strict Delta, Strict Delta %. |
 | Number Format | Full, Compact, Auto. Auto tries full then compact, otherwise hides text that cannot fit. |
@@ -63,6 +63,10 @@ Hovering within a qualified Volume row shows two compact unlabeled lines: `Bid x
 Winner emphasis also applies when Enhanced Footprint is off and Profile Display is Bid x Ask. Histogram preserves its bid-left/ask-right columns. Cluster preserves the `Bid x Ask` reading order while weighting only the qualifying side. The same settings and strict same-row ratio are shared across both renderers; Volume, Delta and combined modes remain unaffected.
 
 `Candle Display` also applies to both Bid x Ask renderers. `Full Candle` uses the configured bullish/bearish body colors and Candle Width, with Bid shifted left and Ask shifted right. Normal Histogram and Cluster leave the center lane open and redraw the actual candle in the foreground. Enhanced Histogram and Cluster reserve the same center lane in their prepared geometry and render the full OHLC candle there. POC outlines split around that lane so they do not cover the candle.
+
+`Hollow Body Delta` is the opt-in quick-read alternative. It reserves a center column only for price rows intersecting the open-to-close body and leaves the high/low extension empty; no wick or OHLC spine is drawn through the delta labels. Each body-row cell is transparent with a colored outline and centered strict `Ask - Bid` value. Positive, negative and zero/unknown rows reuse Bid x Ask Positive, Negative and Neutral colors. Opacity is normalized within the candle body from Bid x Ask Min Opacity to Max Opacity, so the strongest absolute body-row delta is brightest. The column automatically uses at least enough width for a signed label, while Candle Width remains a larger user-selected minimum. Candle/Profile Gap remains outside the column.
+
+The body-delta label uses the Bid x Ask font, font size, number-format fallback and minimum row-volume threshold, but it does not depend on `Show Bid x Ask Text`. This allows the left/right Bid and Ask numbers to be hidden while retaining only the cleaner body-delta read. When strict Bid/Ask is unavailable for a body row, the center displays `N/A`; no inferred delta is substituted. Both normal and Enhanced Bid x Ask split POC outlines around the reserved center column.
 
 ## Enhanced Versus Normal Bid x Ask
 

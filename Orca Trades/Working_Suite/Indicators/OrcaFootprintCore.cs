@@ -7,7 +7,7 @@ using System.Threading;
 namespace NinjaTrader.NinjaScript.Indicators
 {
     public enum FootprintScaleMode { PerBar, VisibleRange, SessionGlobal, Fixed }
-    public enum FootprintScaffoldMode { Off, OhlcSpine, OhlcSpineAndBody }
+    public enum FootprintScaffoldMode { Off, OhlcSpine, OhlcSpineAndBody, HollowBodyDelta }
     public enum FootprintNumberFormat { Full, Compact, Auto }
     public enum FootprintCellView { BidAsk, Total, Delta, DeltaPercent }
 
@@ -324,6 +324,23 @@ namespace NinjaTrader.NinjaScript.Indicators
     {
         public static double Fraction(long value, long denominator)
         { return denominator <= 0 ? 0 : Math.Max(0, Math.Min(1, value / (double)denominator)); }
+
+		public static double VolumeTextIntensity(long volume, long candleMaximum)
+		{
+			return Math.Sqrt(Fraction(volume, candleMaximum));
+		}
+
+		public static bool IsDeltaEmphasis(long delta, long volume, long minimumAbsoluteDelta, double minimumDeltaPercent)
+		{
+			if (delta == 0 || volume <= 0 || minimumAbsoluteDelta < 0 || minimumDeltaPercent < 0
+				|| double.IsNaN(minimumDeltaPercent) || double.IsInfinity(minimumDeltaPercent))
+				return false;
+
+			double absoluteDelta = Math.Abs((double)delta);
+			return absoluteDelta >= minimumAbsoluteDelta
+				&& absoluteDelta * 100.0 / volume >= minimumDeltaPercent;
+		}
+
         public static string Number(long value, bool compact)
         {
             if (!compact) return value.ToString("N0", CultureInfo.InvariantCulture);
@@ -333,11 +350,28 @@ namespace NinjaTrader.NinjaScript.Indicators
             string suffix = divisor == 1000000000 ? "B" : divisor == 1000000 ? "M" : "K";
             return (v / divisor).ToString("0.##", CultureInfo.InvariantCulture) + suffix;
         }
+        public static string SignedNumber(long value, bool compact)
+        { return (value > 0 ? "+" : "") + Number(value, compact); }
+        public static long Magnitude(long value)
+        { return value == long.MinValue ? long.MaxValue : Math.Abs(value); }
+        public static bool IntersectsBody(double rowLow, double rowHigh, double open, double close)
+        {
+            if (double.IsNaN(rowLow) || double.IsNaN(rowHigh) || double.IsNaN(open) || double.IsNaN(close)
+                || double.IsInfinity(rowLow) || double.IsInfinity(rowHigh) || double.IsInfinity(open) || double.IsInfinity(close)
+                || rowHigh <= rowLow)
+                return false;
+
+            double bodyLow = Math.Min(open, close);
+            double bodyHigh = Math.Max(open, close);
+            return bodyHigh > bodyLow
+                ? rowHigh > bodyLow && rowLow < bodyHigh
+                : rowLow <= bodyLow && rowHigh > bodyLow;
+        }
         public static string Value(FootprintRow row, FootprintCellView view, bool compact)
         {
             if (view == FootprintCellView.Total) return Number(row.Total, compact);
             if (view == FootprintCellView.DeltaPercent) return row.DeltaPercent.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture) + "%";
-            return (row.Delta > 0 ? "+" : "") + Number(row.Delta, compact);
+            return SignedNumber(row.Delta, compact);
         }
         public static bool Fits(float measuredWidth, float measuredHeight, float width, float height)
         { return measuredWidth <= width && measuredHeight <= height && width > 0 && height > 0; }

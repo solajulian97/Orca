@@ -1107,34 +1107,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 						absorptionDxBrush = new SolidColorBrush(RenderTarget, ToDxColor(absorptionBodyBrush, 1f));
 					var activeBodyBrush = absorptionDxBrush ?? bodyBrush;
 					var activeWickBrush = absorptionDxBrush ?? wickBrush;
+					bool hasRenderableProfile = profilesVisible && HasRenderableProfile(barIdx);
+					bool hollowBodyDelta = hasRenderableProfile
+						&& ProfileDisplayMode == CandleProfileDisplayMode.BidAsk
+						&& FootprintScaffold == FootprintScaffoldMode.HollowBodyDelta;
 
 					// --- Draw Wick ---
-					float wickX    = barCenterX;
-					float halfWick = activeWickWidth / 2f;
+					if (!hollowBodyDelta)
+					{
+						float wickX    = barCenterX;
+						float halfWick = activeWickWidth / 2f;
 
-					if (yHigh < bodyTop)
-					{
-						RenderTarget.FillRectangle(
-							new RectangleF(wickX - halfWick, yHigh, activeWickWidth, bodyTop - yHigh),
-							activeWickBrush);
-					}
-					if (yLow > bodyBottom)
-					{
-						RenderTarget.FillRectangle(
-							new RectangleF(wickX - halfWick, bodyBottom, activeWickWidth, yLow - bodyBottom),
-							activeWickBrush);
+						if (yHigh < bodyTop)
+						{
+							RenderTarget.FillRectangle(
+								new RectangleF(wickX - halfWick, yHigh, activeWickWidth, bodyTop - yHigh),
+								activeWickBrush);
+						}
+						if (yLow > bodyBottom)
+						{
+							RenderTarget.FillRectangle(
+								new RectangleF(wickX - halfWick, bodyBottom, activeWickWidth, yLow - bodyBottom),
+								activeWickBrush);
+						}
 					}
 
 					// Keep an absorption brush alive through the optional foreground redraw.
 					try
 					{
 						// --- Draw Body ---
-						RenderTarget.FillRectangle(
-							new RectangleF(candleLeft, bodyTop, activeCandleWidth, bodyHeight),
-							activeBodyBrush);
+						if (!hollowBodyDelta)
+							RenderTarget.FillRectangle(
+								new RectangleF(candleLeft, bodyTop, activeCandleWidth, bodyHeight),
+								activeBodyBrush);
 
 						// --- Draw Profiles ---
-						if (profilesVisible && HasRenderableProfile(barIdx))
+						if (hasRenderableProfile)
 						{
 						bool showBidAsk = ProfileDisplayMode == CandleProfileDisplayMode.BidAsk;
 						bool showVolumeProfile = ProfileDisplayMode == CandleProfileDisplayMode.Volume || ProfileDisplayMode == CandleProfileDisplayMode.VolumeAndDelta;
@@ -1143,9 +1151,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 							if (showBidAsk)
 							{
 								float bidAskWidth = ResolveCenteredProfileWidth(chartControl, barIdx, barCenterX, averageBarSpacing);
+								float bodyDeltaWidth = hollowBodyDelta ? ResolveBodyDeltaColumnWidth(activeCandleWidth) : 0f;
 								float centerGap = FootprintScaffold == FootprintScaffoldMode.OhlcSpineAndBody
-									? activeCandleWidth + 2f * Math.Max(0, CandleProfileGapPx) : 0f;
-								DrawBarBidAskProfile(chartScale, barIdx, barCenterX, panelTop, panelBottom, bidAskWidth, deltaCompressionTicks, centerGap);
+									? activeCandleWidth + 2f * Math.Max(0, CandleProfileGapPx)
+									: hollowBodyDelta ? bodyDeltaWidth + 2f * Math.Max(0, CandleProfileGapPx) : 0f;
+								DrawBarBidAskProfile(chartScale, barIdx, barCenterX, panelTop, panelBottom, bidAskWidth,
+									deltaCompressionTicks, centerGap, bodyDeltaWidth, o, c);
 								if (FootprintScaffold == FootprintScaffoldMode.OhlcSpine)
 									DrawCandleSpine(barCenterX, yHigh, yLow, bodyTop, bodyHeight, activeBodyBrush, activeWickBrush);
 								else if (FootprintScaffold == FootprintScaffoldMode.OhlcSpineAndBody)
@@ -1221,6 +1232,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				resolvedWickWidth, Math.Max(1f, yLow - yHigh)), wickBrush);
 			RenderTarget.FillRectangle(new RectangleF(barCenterX - resolvedCandleWidth / 2f, bodyTop,
 				resolvedCandleWidth, Math.Max(1f, bodyHeight)), bodyBrush);
+		}
+
+		private float ResolveBodyDeltaColumnWidth(float configuredCandleWidth)
+		{
+			float readableMinimum = Math.Max(32f, BidAskTextFontSize * 4.5f + 6f);
+			return Math.Max(2f, Math.Max(configuredCandleWidth, readableMinimum));
 		}
 
 		private float ResolveCenteredProfileWidth(ChartControl chartControl, int barIdx, float barCenterX, float averageBarSpacing)
@@ -1634,7 +1651,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 
 		private void DrawBarBidAskProfile(ChartScale chartScale, int barIdx, float barCenterX, float panelTop, float panelBottom,
-			float drawProfileWidth, int compressionTicks, float requestedCenterGap)
+			float drawProfileWidth, int compressionTicks, float requestedCenterGap, float requestedBodyDeltaWidth, double open, double close)
 		{
 			Dictionary<double, long> askSource;
 			Dictionary<double, long> bidSource;
@@ -1690,6 +1707,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float askRoot = barCenterX + centerGap / 2f;
 			float left = bidRoot - halfWidth;
 			double compHeight = Math.Max(1, compressionTicks) * TickSize;
+			bool drawBodyDelta = FootprintScaffold == FootprintScaffoldMode.HollowBodyDelta && centerGap > 0f;
+			float bodyDeltaWidth = drawBodyDelta
+				? Math.Min(requestedBodyDeltaWidth, Math.Max(1f, centerGap - 2f * Math.Max(0, CandleProfileGapPx)))
+				: 0f;
+			long maxBodyAbsDelta = 0;
+			if (drawBodyDelta)
+			{
+				foreach (double price in prices)
+				{
+					if (!FootprintFormatting.IntersectsBody(price, price + compHeight, open, close))
+						continue;
+					long bodyDelta = GetMapVolume(askMap, price) - GetMapVolume(bidMap, price);
+					maxBodyAbsDelta = Math.Max(maxBodyAbsDelta, FootprintFormatting.Magnitude(bodyDelta));
+				}
+			}
 
 			foreach (double price in prices)
 			{
@@ -1697,6 +1729,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				long bid = GetMapVolume(bidMap, price);
 				long unclassified = GetMapVolume(unclassifiedMap, price);
 				long rowTotal = ask + bid + unclassified;
+				long rowDelta = ask - bid;
 				if (rowTotal <= 0)
 					continue;
 
@@ -1711,7 +1744,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				if (BidAskStyle == CandleProfileBidAskStyle.Cluster)
 				{
-					long rowDelta = ask - bid;
 					SolidColorBrush brush = SelectBidAskBrush(rowDelta, rowTotal, maxRowTotal);
 					if (brush != null)
 					{
@@ -1750,6 +1782,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 					DrawBidAskHistogramText(bid, ask, rowTotal, left, askRoot, halfWidth, drawY, rowHeight);
 				}
 
+				if (drawBodyDelta && FootprintFormatting.IntersectsBody(price, price + compHeight, open, close))
+					DrawHollowBodyDeltaCell(barCenterX, bodyDeltaWidth, drawY, rowHeight, bid, ask,
+						unclassified, rowTotal, rowDelta, maxBodyAbsDelta);
+
 				if (ShowPOC && Math.Abs(price - pocPrice) < TickSize * 0.01 && pocBrushDx != null)
 				{
 					if (centerGap > 0)
@@ -1760,6 +1796,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 					else RenderTarget.DrawRectangle(rowRect, pocBrushDx, 1f);
 				}
 			}
+		}
+
+		private void DrawHollowBodyDeltaCell(float barCenterX, float width, float drawY, float rowHeight,
+			long bid, long ask, long unclassified, long rowTotal, long rowDelta, long maxBodyAbsDelta)
+		{
+			if (width < 2f || rowHeight < 1f)
+				return;
+
+			SolidColorBrush brush = SelectBidAskBrush(rowDelta, FootprintFormatting.Magnitude(rowDelta), maxBodyAbsDelta);
+			if (brush == null)
+				return;
+
+			RectangleF rectangle = new RectangleF(barCenterX - width / 2f, drawY, width, rowHeight);
+			RenderTarget.DrawRectangle(rectangle, brush, 1f);
+			if (rowTotal < BidAskTextMinThreshold)
+				return;
+
+			float fontSize = ResolveProfileTextFontSize(rowHeight, BidAskTextFontSize);
+			if (rowHeight < Math.Max(5f, fontSize - 1f))
+				return;
+
+			string label = bid == 0 && ask == 0 && unclassified > 0
+				? "N/A"
+				: FootprintFormatting.SignedNumber(rowDelta, false);
+			DrawTextInRectangle(label, brush,
+				new RectangleF(rectangle.Left + 1f, rectangle.Top - 1f, Math.Max(2f, rectangle.Width - 2f), rectangle.Height + 2f),
+				fontSize, TextAlignment.Center);
 		}
 
 		private static long GetMapVolume(Dictionary<double, long> map, double price)
@@ -2434,7 +2497,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public long FootprintFixedVolume { get; set; }
 
 		[TypeConverter(typeof(FootprintScaffoldModeConverter))]
-		[Display(Name = "Candle Display", Description = "Off hides the foreground candle, OHLC Spine keeps a narrow spine, and Full Candle reserves the configured candle width between Bid and Ask.", GroupName = "03 Candles", Order = 0)]
+		[Display(Name = "Candle Display", Description = "Off hides the center candle, OHLC Spine draws a narrow spine, Full Candle draws the configured candle, and Hollow Body Delta reserves a wider body-only delta column with no wick line through its labels.", GroupName = "03 Candles", Order = 0)]
 		public FootprintScaffoldMode FootprintScaffold { get; set; }
 
 		[TypeConverter(typeof(FootprintCellViewConverter))]

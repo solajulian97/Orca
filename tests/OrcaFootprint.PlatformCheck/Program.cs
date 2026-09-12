@@ -89,6 +89,24 @@ if (earlyBranch == null) throw new Exception("Enhanced render branch missing.");
 var bidAskProfile = Method(newRoot, "DrawBarBidAskProfile");
 if (!Tokens(bidAskProfile).Contains("centerGap") || !Tokens(render).Contains("FootprintScaffold"))
     throw new Exception("Bid x Ask candle reservation is missing.");
+var coreRoot = trees[0].GetRoot();
+var scaffoldEnum = coreRoot.DescendantNodes().OfType<EnumDeclarationSyntax>()
+    .Single(e => e.Identifier.Text == "FootprintScaffoldMode");
+var scaffoldMembers = scaffoldEnum.Members.Select(m => m.Identifier.Text).ToArray();
+if (!scaffoldMembers.SequenceEqual(new[] { "Off", "OhlcSpine", "OhlcSpineAndBody", "HollowBodyDelta" }))
+    throw new Exception("Candle Display enum values were reordered or Hollow Body Delta is missing.");
+if (!Tokens(render).Contains("if ( ! hollowBodyDelta )")
+    || !Tokens(render).Contains("DrawBarBidAskProfile ( chartScale , barIdx , barCenterX , panelTop , panelBottom , bidAskWidth , deltaCompressionTicks , centerGap , bodyDeltaWidth , o , c )"))
+    throw new Exception("Normal Bid x Ask hollow body must suppress the filled candle and pass OHLC body bounds to the center column.");
+if (!Tokens(bidAskProfile).Contains("FootprintFormatting . IntersectsBody")
+    || !Tokens(bidAskProfile).Contains("DrawHollowBodyDeltaCell"))
+    throw new Exception("Normal Bid x Ask body-row selection or center delta drawing is missing.");
+var hollowBodyCell = Method(newRoot, "DrawHollowBodyDeltaCell");
+if (!Tokens(hollowBodyCell).Contains("FootprintFormatting . SignedNumber")
+    || !Tokens(hollowBodyCell).Contains("SelectBidAskBrush")
+    || !Tokens(hollowBodyCell).Contains("RenderTarget . DrawRectangle")
+    || Tokens(hollowBodyCell).Contains("FillRectangle"))
+    throw new Exception("Normal hollow body delta must use opacity-colored outlines and signed text without a fill.");
 foreach (var oldEnum in oldRoot.DescendantNodes().OfType<EnumDeclarationSyntax>())
 {
     var newEnum = newRoot.DescendantNodes().OfType<EnumDeclarationSyntax>().Single(e => e.Identifier.Text == oldEnum.Identifier.Text);
@@ -175,6 +193,26 @@ foreach (string name in new[] { "DrawBidAskClusterText", "DrawBidAskHistogramTex
         throw new Exception("Normal Bid x Ask winner emphasis missing: " + name);
 Console.WriteLine("PASS: backup classifier, attribution, migration, enums, defaults, shared publication, and legacy render token parity.");
 var enhancedRender = Method(trees[2].GetRoot(), "RenderEnhancedFootprint");
+var enhancedPrepare = Method(trees[2].GetRoot(), "PrepareFootprintFrame");
+var centerGutter = Method(trees[2].GetRoot(), "ResolveFootprintCenterGutter");
+if (!Tokens(enhancedPrepare).Contains("BodyDeltaRow")
+    || !Tokens(enhancedPrepare).Contains("FootprintFormatting . IntersectsBody")
+    || !Tokens(enhancedPrepare).Contains("FootprintFormatting . SignedNumber")
+    || !Tokens(centerGutter).Contains("FootprintScaffoldMode . HollowBodyDelta"))
+    throw new Exception("Enhanced hollow body delta preparation or automatic center reservation is missing.");
+var bodyDeltaLayout = enhancedPrepare.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+    .Single(a => a.Left.ToString() == "paint.BodyDelta");
+if (bodyDeltaLayout.Ancestors().OfType<IfStatementSyntax>().Any(i => i.Condition.ToString().Contains("ShowBidAskText"))
+    || Tokens(hollowBodyCell).Contains("ShowBidAskText"))
+    throw new Exception("Hollow body delta must remain visible when side Bid x Ask text is hidden.");
+if (!Tokens(enhancedRender).Contains("FootprintFormatting . Magnitude ( row . Delta )")
+    || !Tokens(enhancedRender).Contains("RenderTarget . DrawRectangle")
+    || !Tokens(enhancedRender).Contains("&& ! hollowBodyDelta"))
+    throw new Exception("Enhanced hollow body delta opacity, outlines, or wick suppression is missing.");
+var scaffoldConverter = trees[2].GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>()
+    .Single(c => c.Identifier.Text == "FootprintScaffoldModeConverter");
+if (!Tokens(scaffoldConverter).Contains("\"Hollow Body Delta\""))
+    throw new Exception("Hollow Body Delta is missing from the Candle Display dropdown.");
 var semantics = compilation.GetSemanticModel(trees[2]);
 foreach (var allocation in enhancedRender.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
     if (semantics.GetTypeInfo(allocation).Type?.IsValueType != true) throw new Exception("Managed allocation in enhanced render: " + allocation);

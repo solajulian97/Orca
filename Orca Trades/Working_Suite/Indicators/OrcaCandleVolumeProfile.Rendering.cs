@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private ToolTip footprintTooltip;
         private FootprintFrame footprintFrame;
         private readonly List<FootprintFrame> footprintRetired = new List<FootprintFrame>();
-        private SolidColorBrush footprintNeutralDx, footprintTextDx;
+        private SolidColorBrush footprintNeutralDx, footprintTextDx, footprintBullCandleDx, footprintBearCandleDx;
         private SolidColorBrush[] footprintAskDx, footprintBidDx, footprintUnknownDx;
         private string footprintDiagnosticsId;
         private string footprintNumeralFamily, footprintFontSignature;
@@ -56,13 +56,14 @@ namespace NinjaTrader.NinjaScript.Indicators
         private sealed class FootprintPaintRow
         {
             public FootprintRow Evidence;
-            public TextLayout Left, Right, Center;
+            public TextLayout Left, Right, Center, BodyDelta;
+            public bool BodyDeltaRow;
         }
         private sealed class FootprintPaintBar
         {
             public FootprintBarSnapshot Evidence;
             public FootprintPaintRow[] Rows;
-            public long SideDenominator, TotalDenominator;
+            public long SideDenominator, TotalDenominator, BodyMaxAbsDelta;
             public double Open, High, Low, Close;
             public bool Developing;
         }
@@ -151,15 +152,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void StartEnhancedFootprintObserver()
         {
-            if (!IsEnhancedFootprintActive || ChartControl == null) return;
+			bool enhanced = IsEnhancedFootprintActive;
+			if ((!enhanced && !IsDeltaColoredVolumeTextActive) || ChartControl == null) return;
             footprintChart = ChartControl;
             footprintChart.Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (footprintStopped || footprintTimer != null) return;
+				if (footprintStopped || footprintTooltip != null) return;
                 footprintTooltip = new ToolTip { PlacementTarget = footprintChart,
                     Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse, MaxWidth = 560 };
                 footprintChart.MouseMove += FootprintMouseMove;
                 footprintChart.MouseLeave += FootprintMouseLeave;
+				if (!enhanced) return;
                 footprintTimer = new DispatcherTimer(DispatcherPriority.Background, footprintChart.Dispatcher);
                 footprintTimer.Interval = TimeSpan.FromMilliseconds(100);
                 footprintTimer.Tick += FootprintTimerTick;
@@ -217,7 +220,9 @@ namespace NinjaTrader.NinjaScript.Indicators
             FootprintRequest request = ReadFootprintViewport();
             if (request == null) return;
             string key = string.Join("|", request.From, request.To, request.Display, request.Width, request.Height,
-                request.Min, request.Max, request.Dpi, request.ActiveBar, request.PanelWidth, footprintDataFailed, footprintConnectionGap);
+                request.Min, request.Max, request.Dpi, request.ActiveBar, request.PanelWidth, footprintDataFailed, footprintConnectionGap,
+                (int)FootprintScaffold, CandleWidthPx, CandleProfileGapPx, BidAskTextFontSize, BidAskTextMinThreshold,
+                UseDynamicTextSizing, DynamicTextMaxFontSize, (int)FootprintNumbers, TextFontFamily, (int)TextFontWeight);
             if (key != footprintViewportKey)
             { footprintViewportKey = key; footprintGeneration++; footprintAppliedRevision = -1; }
             request.Generation = footprintGeneration;
@@ -331,11 +336,21 @@ namespace NinjaTrader.NinjaScript.Indicators
                         Open = BarsArray[0].GetOpen(evidence.BarIndex), High = BarsArray[0].GetHigh(evidence.BarIndex),
                         Low = BarsArray[0].GetLow(evidence.BarIndex), Close = BarsArray[0].GetClose(evidence.BarIndex) };
                     var rows = new List<FootprintPaintRow>();
-                    float available = Math.Max(0, request.Width / 2 - FootprintGutterPx / 2f - 2);
+                    float effectiveGutter = ResolveFootprintCenterGutter(request.Width);
+                    float available = Math.Max(0, request.Width / 2 - effectiveGutter / 2f - 2);
+                    bool hollowBodyDelta = FootprintScaffold == FootprintScaffoldMode.HollowBodyDelta;
+                    float bodyDeltaWidth = hollowBodyDelta
+                        ? Math.Min(ResolveBodyDeltaColumnWidth(CandleWidthPx), Math.Max(1f, effectiveGutter - 2f * Math.Max(0, CandleProfileGapPx)))
+                        : 0f;
                     foreach (FootprintRow row in evidence.Rows)
                     {
+                        double rowLow = (row.Tick - .5) * TickSize;
+                        double rowHigh = (row.Tick + request.Display - .5) * TickSize;
+                        bool bodyDeltaRow = hollowBodyDelta && FootprintFormatting.IntersectsBody(rowLow, rowHigh, bar.Open, bar.Close);
+                        if (bodyDeltaRow)
+                            bar.BodyMaxAbsDelta = Math.Max(bar.BodyMaxAbsDelta, FootprintFormatting.Magnitude(row.Delta));
                         if ((row.Tick + request.Display) * TickSize < request.Min || row.Tick * TickSize > request.Max) continue;
-                        var paint = new FootprintPaintRow { Evidence = row };
+                        var paint = new FootprintPaintRow { Evidence = row, BodyDeltaRow = bodyDeltaRow };
                         frame.EstimatedBytes += 96;
                         if (frame.EstimatedBytes > 8L * 1024 * 1024 - 65536)
                             throw new InvalidOperationException("Presentation budget exceeded; reduce visible bars or increase display row size. Evidence retained.");
@@ -361,6 +376,14 @@ namespace NinjaTrader.NinjaScript.Indicators
                             }
                         }
                         clipped |= BidAskStyle == CandleProfileBidAskStyle.Histogram ? Math.Max(row.Ask, row.Bid) > bar.SideDenominator : row.Total > bar.TotalDenominator;
+                        if (paint.BodyDeltaRow && row.Total >= BidAskTextMinThreshold)
+                        {
+                            bool unavailable = row.Bid == 0 && row.Ask == 0 && row.Unclassified > 0;
+                            paint.BodyDelta = PrepareFootprintText(frame, cache, cellFormat, typography,
+                                unavailable ? "N/A" : FootprintFormatting.SignedNumber(row.Delta, false),
+                                unavailable ? "N/A" : FootprintFormatting.SignedNumber(row.Delta, true),
+                                Math.Max(0, bodyDeltaWidth - 2f), cellHeight + 2, TextAlignment.Center);
+                        }
                         if (ShowBidAskText && row.Total >= BidAskTextMinThreshold)
                         {
                             if (FootprintValues == FootprintCellView.BidAsk)
@@ -467,15 +490,29 @@ namespace NinjaTrader.NinjaScript.Indicators
             return current >= FontWeight.SemiBold ? FontWeight.ExtraBold : FontWeight.Bold;
         }
 
+        private float ResolveFootprintCenterGutter(float width)
+        {
+            float desired = FootprintGutterPx;
+            if (FootprintScaffold == FootprintScaffoldMode.OhlcSpineAndBody)
+                desired = Math.Max(desired, CandleWidthPx + 2f * Math.Max(0, CandleProfileGapPx));
+            else if (FootprintScaffold == FootprintScaffoldMode.HollowBodyDelta)
+                desired = Math.Max(desired, ResolveBodyDeltaColumnWidth(CandleWidthPx) + 2f * Math.Max(0, CandleProfileGapPx));
+            return Math.Max(0, Math.Min(desired, Math.Max(0, width - 2)));
+        }
+
         private void ResetEnhancedRenderTarget()
         {
             DisposeBrushPalette(ref footprintAskDx); DisposeBrushPalette(ref footprintBidDx); DisposeBrushPalette(ref footprintUnknownDx);
             if (footprintNeutralDx != null) footprintNeutralDx.Dispose();
             if (footprintTextDx != null) footprintTextDx.Dispose();
-            footprintNeutralDx = null; footprintTextDx = null;
+            if (footprintBullCandleDx != null) footprintBullCandleDx.Dispose();
+            if (footprintBearCandleDx != null) footprintBearCandleDx.Dispose();
+            footprintNeutralDx = null; footprintTextDx = null; footprintBullCandleDx = null; footprintBearCandleDx = null;
             if (RenderTarget == null || !IsEnhancedFootprintActive || footprintStopped) return;
             footprintNeutralDx = new SolidColorBrush(RenderTarget, new Color4(.75f, .75f, .75f, .8f));
             footprintTextDx = new SolidColorBrush(RenderTarget, ToDxColor(BidAskTextBrush, 1));
+            footprintBullCandleDx = new SolidColorBrush(RenderTarget, ToDxColor(BullishBodyBrush, 1));
+            footprintBearCandleDx = new SolidColorBrush(RenderTarget, ToDxColor(BearishBodyBrush, 1));
             footprintAskDx = new SolidColorBrush[32]; footprintBidDx = new SolidColorBrush[32]; footprintUnknownDx = new SolidColorBrush[32];
             for (int i = 0; i < 32; i++)
             {
@@ -499,7 +536,13 @@ namespace NinjaTrader.NinjaScript.Indicators
                     || scale.MinValue != frame.Request.Min || scale.MaxValue != frame.Request.Max
                     || ChartPanel.H != frame.Request.Height || ChartPanel.W != frame.Request.PanelWidth
                     || ChartBars.FromIndex != frame.Request.From || Math.Min(ChartBars.ToIndex, ChartBars.Count - 1) != frame.Request.To) return;
-                float width = frame.Request.Width, gutter = Math.Min(FootprintGutterPx, width), half = Math.Max(0, (width - gutter) / 2);
+                float width = frame.Request.Width, gutter = ResolveFootprintCenterGutter(width), half = Math.Max(0, (width - gutter) / 2);
+                bool fullCandle = FootprintScaffold == FootprintScaffoldMode.OhlcSpineAndBody;
+                bool hollowBodyDelta = FootprintScaffold == FootprintScaffoldMode.HollowBodyDelta;
+                bool reserveCenter = fullCandle || hollowBodyDelta;
+                float bodyDeltaWidth = hollowBodyDelta
+                    ? Math.Min(ResolveBodyDeltaColumnWidth(CandleWidthPx), Math.Max(1f, gutter - 2f * Math.Max(0, CandleProfileGapPx)))
+                    : 0f;
                 float healthHeight = FootprintShowHealth ? Math.Min(frame.StatusHeight, ChartPanel.H) : 0;
                 RenderTarget.PushAxisAlignedClip(new RectangleF(ChartPanel.X, ChartPanel.Y + healthHeight, ChartPanel.W, Math.Max(0, ChartPanel.H - healthHeight)), AntialiasMode.Aliased);
                 clipped = true;
@@ -521,7 +564,12 @@ namespace NinjaTrader.NinjaScript.Indicators
                         if (cluster)
                         {
                             SolidColorBrush fill = row.Delta > 0 ? footprintAskDx[intensity] : row.Delta < 0 ? footprintBidDx[intensity] : footprintUnknownDx[intensity];
-                            RenderTarget.FillRectangle(new RectangleF(x - width / 2, top, width, height), fill);
+                            if (reserveCenter)
+                            {
+                                RenderTarget.FillRectangle(new RectangleF(x - gutter / 2 - half, top, half, height), fill);
+                                RenderTarget.FillRectangle(new RectangleF(x + gutter / 2, top, half, height), fill);
+                            }
+                            else RenderTarget.FillRectangle(new RectangleF(x - width / 2, top, width, height), fill);
                         }
                         else
                         {
@@ -542,21 +590,47 @@ namespace NinjaTrader.NinjaScript.Indicators
                         if (paint.Left != null) RenderTarget.DrawTextLayout(new Vector2(x - width / 2 + 1, top - 1), paint.Left, footprintTextDx, DrawTextOptions.Clip);
                         if (paint.Right != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top - 1), paint.Right, footprintTextDx, DrawTextOptions.Clip);
                         if (paint.Center != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top - 1), paint.Center, footprintTextDx, DrawTextOptions.Clip);
+                        if (hollowBodyDelta && paint.BodyDeltaRow && bodyDeltaWidth >= 2f)
+                        {
+                            int deltaIntensity = (int)Math.Round(31 * FootprintFormatting.Fraction(
+                                FootprintFormatting.Magnitude(row.Delta), bar.BodyMaxAbsDelta));
+                            SolidColorBrush deltaBrush = row.Delta > 0 ? footprintAskDx[deltaIntensity]
+                                : row.Delta < 0 ? footprintBidDx[deltaIntensity] : footprintUnknownDx[deltaIntensity];
+                            RenderTarget.DrawRectangle(new RectangleF(x - bodyDeltaWidth / 2f, top, bodyDeltaWidth, height), deltaBrush, 1f);
+                            if (paint.BodyDelta != null)
+                                RenderTarget.DrawTextLayout(new Vector2(x - bodyDeltaWidth / 2f + 1f, top - 1f), paint.BodyDelta, deltaBrush, DrawTextOptions.Clip);
+                        }
                     }
                     if (ShowPOC)
                     {
                         float top = scale.GetYByValue((bar.Evidence.PocTick + bar.Evidence.AnalysisTicks - .5) * TickSize);
                         float bottom = scale.GetYByValue((bar.Evidence.PocTick - .5) * TickSize);
-                        RenderTarget.DrawRectangle(new RectangleF(x - width / 2, top, width, Math.Max(1, bottom - top)), footprintNeutralDx, bar.Developing ? .5f : 1f);
+                        if (reserveCenter)
+                        {
+                            RenderTarget.DrawRectangle(new RectangleF(x - gutter / 2 - half, top, half, Math.Max(1, bottom - top)), footprintNeutralDx, bar.Developing ? .5f : 1f);
+                            RenderTarget.DrawRectangle(new RectangleF(x + gutter / 2, top, half, Math.Max(1, bottom - top)), footprintNeutralDx, bar.Developing ? .5f : 1f);
+                        }
+                        else RenderTarget.DrawRectangle(new RectangleF(x - width / 2, top, width, Math.Max(1, bottom - top)), footprintNeutralDx, bar.Developing ? .5f : 1f);
                     }
-                    if (FootprintScaffold != FootprintScaffoldMode.Off)
+                    if (FootprintScaffold != FootprintScaffoldMode.Off && !hollowBodyDelta)
                     {
                         float open = scale.GetYByValue(bar.Open), close = scale.GetYByValue(bar.Close);
                         RenderTarget.DrawLine(new Vector2(x, scale.GetYByValue(bar.High)), new Vector2(x, scale.GetYByValue(bar.Low)), footprintNeutralDx, 1);
                         RenderTarget.DrawLine(new Vector2(x - Math.Min(4, gutter / 2), open), new Vector2(x, open), footprintNeutralDx, 1);
                         RenderTarget.DrawLine(new Vector2(x + (bar.Developing ? 2 : 0), close), new Vector2(x + Math.Min(4, gutter / 2), close), footprintNeutralDx, bar.Developing ? 2 : 1);
-                        if (FootprintScaffold == FootprintScaffoldMode.OhlcSpineAndBody)
-                            RenderTarget.DrawRectangle(new RectangleF(x - 1.5f, Math.Min(open, close), 3, Math.Max(1, Math.Abs(open - close))), footprintNeutralDx);
+                        if (fullCandle)
+                        {
+                            SolidColorBrush candleBrush = bar.Close >= bar.Open ? footprintBullCandleDx : footprintBearCandleDx;
+                            float candleWidth = Math.Max(1, Math.Min(CandleWidthPx, Math.Max(1, gutter - 2f * Math.Max(0, CandleProfileGapPx))));
+                            float wickWidth = Math.Max(1, Math.Min(WickWidthPx, candleWidth));
+                            if (candleBrush != null)
+                            {
+                                RenderTarget.FillRectangle(new RectangleF(x - wickWidth / 2f, scale.GetYByValue(bar.High), wickWidth,
+                                    Math.Max(1, scale.GetYByValue(bar.Low) - scale.GetYByValue(bar.High))), candleBrush);
+                                RenderTarget.FillRectangle(new RectangleF(x - candleWidth / 2f, Math.Min(open, close), candleWidth,
+                                    Math.Max(1, Math.Abs(open - close))), candleBrush);
+                            }
+                        }
                     }
                 }
                 RenderTarget.PopAxisAlignedClip(); clipped = false;
@@ -576,6 +650,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void FootprintMouseMove(object sender, MouseEventArgs e)
         {
+			if (TryShowQualifiedVolumeTextTooltip(e)) return;
+			if (!IsEnhancedFootprintActive)
+			{
+				if (footprintTooltip != null) footprintTooltip.IsOpen = false;
+				return;
+			}
+
             FootprintFrame frame = footprintFrame;
             if (frame == null || footprintTooltip == null || footprintStopped || frame.Request.Generation != footprintGeneration) return;
             var point = e.GetPosition(footprintChart);
@@ -624,6 +705,85 @@ namespace NinjaTrader.NinjaScript.Indicators
                 }
             footprintTooltip.IsOpen = false;
         }
+
+		private bool TryShowQualifiedVolumeTextTooltip(MouseEventArgs e)
+		{
+			if (!IsDeltaColoredVolumeTextActive || footprintTooltip == null || footprintChart == null
+				|| ChartPanel == null || ChartBars == null)
+				return false;
+
+			ChartScale scale = null;
+			foreach (ChartScale candidate in ChartPanel.Scales)
+			{
+				foreach (object chartObject in candidate.ChartObjects)
+					if (ReferenceEquals(chartObject, this)) { scale = candidate; break; }
+				if (scale != null) break;
+			}
+			if (scale == null)
+				foreach (ChartScale candidate in ChartPanel.Scales)
+					if (candidate.ScaleJustification == ScaleJustification) { scale = candidate; break; }
+			if (scale == null)
+				return false;
+
+			System.Windows.Point point = e.GetPosition(footprintChart);
+			System.Windows.PresentationSource source = System.Windows.PresentationSource.FromVisual(footprintChart);
+			float dpi = source == null || source.CompositionTarget == null
+				? 1f : (float)source.CompositionTarget.TransformToDevice.M11;
+			float px = (float)point.X * dpi;
+			float py = (float)point.Y * dpi;
+			if (py < ChartPanel.Y || py > ChartPanel.Y + ChartPanel.H)
+				return false;
+
+			int from = Math.Max(0, ChartBars.FromIndex);
+			int to = Math.Min(ChartBars.ToIndex, ChartBars.Count - 1);
+			if (to < from)
+				return false;
+
+			int barIndex = -1;
+			float nearestDistance = float.MaxValue;
+			for (int index = from; index <= to; index++)
+			{
+				float distance = Math.Abs(px - footprintChart.GetXByBarIndex(ChartBars, index));
+				if (distance < nearestDistance) { nearestDistance = distance; barIndex = index; }
+			}
+			if (barIndex < 0)
+				return false;
+
+			float spacing = GetAverageVisibleBarSpacing(footprintChart, from, to);
+			bool profilesVisible = !AutoHideProfilesWhenCompressed || spacing <= 0 || spacing >= MinBarSpacingToShowProfilesPx;
+			if (!profilesVisible)
+				return false;
+
+			float barCenterX = footprintChart.GetXByBarIndex(ChartBars, barIndex);
+			float candleWidth = Math.Max(CandleWidthPx, UseAbsorptionColorsWhenCompressed ? AbsorptionCandleMinWidthPx : 1f);
+			float halfCandle = candleWidth / 2f;
+			bool flowsRight = ProfileArrangement == CandleProfileSideArrangement.DeltaLeft_VolumeRight;
+			float availableWidth = ResolveAvailableProfileWidth(footprintChart, barIndex, barCenterX, halfCandle, candleWidth, flowsRight);
+			float drawWidth = ResolveSideProfileWidth(availableWidth, ProfileWidthPx,
+				(float)Math.Max(0.1, Math.Min(1.0, ProfileWidthScale)), false);
+			float root = flowsRight ? barCenterX + halfCandle + CandleProfileGapPx : barCenterX - halfCandle - CandleProfileGapPx;
+			float left = flowsRight ? root : root - drawWidth;
+			if (px < left || px > left + drawWidth)
+				return false;
+
+			int compressionTicks = ResolveVolumeCompressionTicks(scale);
+			double compression = Math.Max(1, compressionTicks) * TickSize;
+			double bucketPrice = Math.Floor(scale.GetValueByY(py) / compression + 0.000001) * compression;
+			long bid, ask, unclassified;
+			if (!TryGetQualifiedVolumeTextEvidence(barIndex, bucketPrice, compressionTicks, out bid, out ask, out unclassified))
+				return false;
+
+			if (bid + ask > 0)
+			{
+				long strictDelta = ask - bid;
+				footprintTooltip.Content = string.Format(CultureInfo.InvariantCulture,
+					"{0:N0} x {1:N0}\n{2:+#,0;-#,0;0}", bid, ask, strictDelta);
+			}
+			else
+				footprintTooltip.Content = "N/A x N/A\nN/A";
+			footprintTooltip.IsOpen = true;
+			return true;
+		}
 
         private void DisposeRetiredFootprintFrames()
         {
@@ -687,7 +847,7 @@ namespace NinjaTrader.NinjaScript.Indicators
     }
 
     public class FootprintScaffoldModeConverter : FootprintNamedEnumConverter
-    { public FootprintScaffoldModeConverter() : base(typeof(FootprintScaffoldMode), "Off", "OHLC Spine", "OHLC Spine + Body") { } }
+    { public FootprintScaffoldModeConverter() : base(typeof(FootprintScaffoldMode), "Off", "OHLC Spine", "Full Candle", "Hollow Body Delta") { } }
 
     public class FootprintCellViewConverter : FootprintNamedEnumConverter
     { public FootprintCellViewConverter() : base(typeof(FootprintCellView), "Bid x Ask", "Total Volume", "Strict Delta", "Strict Delta %") { } }
