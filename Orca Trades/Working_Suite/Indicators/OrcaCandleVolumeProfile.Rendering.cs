@@ -56,14 +56,14 @@ namespace NinjaTrader.NinjaScript.Indicators
         private sealed class FootprintPaintRow
         {
             public FootprintRow Evidence;
-            public TextLayout Left, Right, Center, BodyDelta;
+            public TextLayout Left, Right, Center, CenterDelta;
             public bool BodyDeltaRow;
         }
         private sealed class FootprintPaintBar
         {
             public FootprintBarSnapshot Evidence;
             public FootprintPaintRow[] Rows;
-            public long SideDenominator, TotalDenominator, BodyMaxAbsDelta;
+            public long SideDenominator, TotalDenominator, CenterMaxAbsDelta;
             public double Open, High, Low, Close;
             public bool Developing;
         }
@@ -347,8 +347,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                         double rowLow = (row.Tick - .5) * TickSize;
                         double rowHigh = (row.Tick + request.Display - .5) * TickSize;
                         bool bodyDeltaRow = hollowBodyDelta && FootprintFormatting.IntersectsBody(rowLow, rowHigh, bar.Open, bar.Close);
-                        if (bodyDeltaRow)
-                            bar.BodyMaxAbsDelta = Math.Max(bar.BodyMaxAbsDelta, FootprintFormatting.Magnitude(row.Delta));
+                        if (hollowBodyDelta)
+                            bar.CenterMaxAbsDelta = Math.Max(bar.CenterMaxAbsDelta, FootprintFormatting.Magnitude(row.Delta));
                         if ((row.Tick + request.Display) * TickSize < request.Min || row.Tick * TickSize > request.Max) continue;
                         var paint = new FootprintPaintRow { Evidence = row, BodyDeltaRow = bodyDeltaRow };
                         frame.EstimatedBytes += 96;
@@ -376,10 +376,10 @@ namespace NinjaTrader.NinjaScript.Indicators
                             }
                         }
                         clipped |= BidAskStyle == CandleProfileBidAskStyle.Histogram ? Math.Max(row.Ask, row.Bid) > bar.SideDenominator : row.Total > bar.TotalDenominator;
-                        if (paint.BodyDeltaRow && row.Total >= BidAskTextMinThreshold)
+                        if (hollowBodyDelta)
                         {
                             bool unavailable = row.Bid == 0 && row.Ask == 0 && row.Unclassified > 0;
-                            paint.BodyDelta = PrepareFootprintText(frame, cache, cellFormat, typography,
+                            paint.CenterDelta = PrepareFootprintText(frame, cache, cellFormat, typography,
                                 unavailable ? "N/A" : FootprintFormatting.SignedNumber(row.Delta, false),
                                 unavailable ? "N/A" : FootprintFormatting.SignedNumber(row.Delta, true),
                                 Math.Max(0, bodyDeltaWidth - 2f), cellHeight + 2, TextAlignment.Center);
@@ -590,15 +590,20 @@ namespace NinjaTrader.NinjaScript.Indicators
                         if (paint.Left != null) RenderTarget.DrawTextLayout(new Vector2(x - width / 2 + 1, top - 1), paint.Left, footprintTextDx, DrawTextOptions.Clip);
                         if (paint.Right != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top - 1), paint.Right, footprintTextDx, DrawTextOptions.Clip);
                         if (paint.Center != null) RenderTarget.DrawTextLayout(new Vector2(x + gutter / 2 + 1, top - 1), paint.Center, footprintTextDx, DrawTextOptions.Clip);
-                        if (hollowBodyDelta && paint.BodyDeltaRow && bodyDeltaWidth >= 2f)
+                        if (hollowBodyDelta && bodyDeltaWidth >= 2f)
                         {
                             int deltaIntensity = (int)Math.Round(31 * FootprintFormatting.Fraction(
-                                FootprintFormatting.Magnitude(row.Delta), bar.BodyMaxAbsDelta));
+                                FootprintFormatting.Magnitude(row.Delta), bar.CenterMaxAbsDelta));
                             SolidColorBrush deltaBrush = row.Delta > 0 ? footprintAskDx[deltaIntensity]
                                 : row.Delta < 0 ? footprintBidDx[deltaIntensity] : footprintUnknownDx[deltaIntensity];
-                            RenderTarget.DrawRectangle(new RectangleF(x - bodyDeltaWidth / 2f, top, bodyDeltaWidth, height), deltaBrush, 1f);
-                            if (paint.BodyDelta != null)
-                                RenderTarget.DrawTextLayout(new Vector2(x - bodyDeltaWidth / 2f + 1f, top - 1f), paint.BodyDelta, deltaBrush, DrawTextOptions.Clip);
+                            RectangleF centerRect = new RectangleF(x - bodyDeltaWidth / 2f, top, bodyDeltaWidth, height);
+                            if (paint.BodyDeltaRow)
+                                RenderTarget.DrawRectangle(centerRect, deltaBrush, 1f);
+                            else if (bodyDeltaWidth >= 6f)
+                                RenderTarget.DrawLine(new Vector2(centerRect.Left + 2f, centerRect.Bottom - 0.5f),
+                                    new Vector2(centerRect.Right - 2f, centerRect.Bottom - 0.5f), footprintUnknownDx[0], 0.5f);
+                            if (paint.CenterDelta != null)
+                                RenderTarget.DrawTextLayout(new Vector2(x - bodyDeltaWidth / 2f + 1f, top - 1f), paint.CenterDelta, deltaBrush, DrawTextOptions.Clip);
                         }
                     }
                     if (ShowPOC)

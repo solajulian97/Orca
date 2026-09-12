@@ -1236,7 +1236,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private float ResolveBodyDeltaColumnWidth(float configuredCandleWidth)
 		{
-			float readableMinimum = Math.Max(32f, BidAskTextFontSize * 4.5f + 6f);
+			// Five ungrouped glyphs cover a signed four-digit delta without reserving a broad candle lane.
+			float readableMinimum = Math.Max(24f, BidAskTextFontSize * 3f + 4f);
 			return Math.Max(2f, Math.Max(configuredCandleWidth, readableMinimum));
 		}
 
@@ -1711,15 +1712,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float bodyDeltaWidth = drawBodyDelta
 				? Math.Min(requestedBodyDeltaWidth, Math.Max(1f, centerGap - 2f * Math.Max(0, CandleProfileGapPx)))
 				: 0f;
-			long maxBodyAbsDelta = 0;
+			long maxCenterAbsDelta = 0;
 			if (drawBodyDelta)
 			{
 				foreach (double price in prices)
 				{
-					if (!FootprintFormatting.IntersectsBody(price, price + compHeight, open, close))
-						continue;
-					long bodyDelta = GetMapVolume(askMap, price) - GetMapVolume(bidMap, price);
-					maxBodyAbsDelta = Math.Max(maxBodyAbsDelta, FootprintFormatting.Magnitude(bodyDelta));
+					long centerDelta = GetMapVolume(askMap, price) - GetMapVolume(bidMap, price);
+					maxCenterAbsDelta = Math.Max(maxCenterAbsDelta, FootprintFormatting.Magnitude(centerDelta));
 				}
 			}
 
@@ -1782,9 +1781,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 					DrawBidAskHistogramText(bid, ask, rowTotal, left, askRoot, halfWidth, drawY, rowHeight);
 				}
 
-				if (drawBodyDelta && FootprintFormatting.IntersectsBody(price, price + compHeight, open, close))
-					DrawHollowBodyDeltaCell(barCenterX, bodyDeltaWidth, drawY, rowHeight, bid, ask,
-						unclassified, rowTotal, rowDelta, maxBodyAbsDelta);
+				if (drawBodyDelta)
+				{
+					bool bodyRow = FootprintFormatting.IntersectsBody(price, price + compHeight, open, close);
+					DrawHollowBodyDeltaRow(barCenterX, bodyDeltaWidth, drawY, rowHeight, bid, ask,
+						unclassified, rowDelta, maxCenterAbsDelta, bodyRow);
+				}
 
 				if (ShowPOC && Math.Abs(price - pocPrice) < TickSize * 0.01 && pocBrushDx != null)
 				{
@@ -1798,20 +1800,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void DrawHollowBodyDeltaCell(float barCenterX, float width, float drawY, float rowHeight,
-			long bid, long ask, long unclassified, long rowTotal, long rowDelta, long maxBodyAbsDelta)
+		private void DrawHollowBodyDeltaRow(float barCenterX, float width, float drawY, float rowHeight,
+			long bid, long ask, long unclassified, long rowDelta, long maxCenterAbsDelta, bool bodyRow)
 		{
 			if (width < 2f || rowHeight < 1f)
 				return;
 
-			SolidColorBrush brush = SelectBidAskBrush(rowDelta, FootprintFormatting.Magnitude(rowDelta), maxBodyAbsDelta);
+			SolidColorBrush brush = SelectBidAskBrush(rowDelta, FootprintFormatting.Magnitude(rowDelta), maxCenterAbsDelta);
 			if (brush == null)
 				return;
 
 			RectangleF rectangle = new RectangleF(barCenterX - width / 2f, drawY, width, rowHeight);
-			RenderTarget.DrawRectangle(rectangle, brush, 1f);
-			if (rowTotal < BidAskTextMinThreshold)
-				return;
+			if (bodyRow)
+				RenderTarget.DrawRectangle(rectangle, brush, 1f);
+			else
+			{
+				SolidColorBrush separator = SelectBidAskBrush(0, 0, 1);
+				if (separator != null && width >= 6f)
+					RenderTarget.DrawLine(new Vector2(rectangle.Left + 2f, rectangle.Bottom - 0.5f),
+						new Vector2(rectangle.Right - 2f, rectangle.Bottom - 0.5f), separator, 0.5f);
+			}
 
 			float fontSize = ResolveProfileTextFontSize(rowHeight, BidAskTextFontSize);
 			if (rowHeight < Math.Max(5f, fontSize - 1f))
@@ -2497,7 +2505,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public long FootprintFixedVolume { get; set; }
 
 		[TypeConverter(typeof(FootprintScaffoldModeConverter))]
-		[Display(Name = "Candle Display", Description = "Off hides the center candle, OHLC Spine draws a narrow spine, Full Candle draws the configured candle, and Hollow Body Delta reserves a wider body-only delta column with no wick line through its labels.", GroupName = "03 Candles", Order = 0)]
+		[Display(Name = "Candle Display", Description = "Off hides the center candle, OHLC Spine draws a narrow spine, Full Candle draws the configured candle, and Hollow Body Delta shows every row delta with boxed body rows and free-floating wick rows.", GroupName = "03 Candles", Order = 0)]
 		public FootprintScaffoldMode FootprintScaffold { get; set; }
 
 		[TypeConverter(typeof(FootprintCellViewConverter))]

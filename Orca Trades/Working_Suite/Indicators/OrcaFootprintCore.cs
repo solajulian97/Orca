@@ -351,7 +351,10 @@ namespace NinjaTrader.NinjaScript.Indicators
             return (v / divisor).ToString("0.##", CultureInfo.InvariantCulture) + suffix;
         }
         public static string SignedNumber(long value, bool compact)
-        { return (value > 0 ? "+" : "") + Number(value, compact); }
+        {
+            string number = compact ? Number(value, true) : value.ToString(CultureInfo.InvariantCulture);
+            return (value > 0 ? "+" : "") + number;
+        }
         public static long Magnitude(long value)
         { return value == long.MinValue ? long.MaxValue : Math.Abs(value); }
         public static bool IntersectsBody(double rowLow, double rowHigh, double open, double close)

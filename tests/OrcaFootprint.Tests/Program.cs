@@ -52,8 +52,9 @@ internal static class Program
 		Equal(false, FootprintFormatting.IsDeltaEmphasis(200, 0, 150, 15), "zero volume remains neutral");
 		Equal(false, FootprintFormatting.IsDeltaEmphasis(200, 1000, -1, 15), "invalid absolute threshold rejected");
 		Equal(false, FootprintFormatting.IsDeltaEmphasis(200, 1000, 150, double.NaN), "invalid percentage threshold rejected");
-		Equal("+1,250", FootprintFormatting.SignedNumber(1250, false), "positive body delta includes sign");
+		Equal("+1250", FootprintFormatting.SignedNumber(1250, false), "positive center delta includes sign without width-expanding grouping");
 		Equal("-1.25K", FootprintFormatting.SignedNumber(-1250, true), "negative body delta compact format");
+		Equal("-9999", FootprintFormatting.SignedNumber(-9999, false), "signed four-digit center delta stays compact");
 		Equal("0", FootprintFormatting.SignedNumber(0, false), "zero body delta has no sign");
 		Equal(long.MaxValue, FootprintFormatting.Magnitude(long.MinValue), "body delta magnitude saturates safely");
 		Equal(true, FootprintFormatting.IntersectsBody(100.0, 100.25, 100.0, 101.0), "first bullish body row included");
