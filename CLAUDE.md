@@ -4,7 +4,16 @@ Read this before editing Orca.
 
 `Orca Trades/Working_Suite` is the editable working copy for the core suite. `Orca Trades/Full_Suite` is the clean validated suite.
 
-Do not edit `Full_Suite` directly for experiments. Do not overwrite `Working_Suite` or `Full_Suite` with files from `Orca Trades/NinjaTrader`, `Stable_Release`, `decompiled`, or live NinjaTrader folders unless Julia explicitly asks.
+Do not edit `Full_Suite` directly for experiments.
+
+### Live NinjaTrader freshness
+
+Before editing a mirrored file, compare mtimes / freshness against the live NinjaTrader Custom copy (`Documents/NinjaTrader 8/bin/Custom`):
+
+- If the live NinjaTrader file is **newer** than `Working_Suite`, copy it into `Working_Suite` and continue work from `Working_Suite`.
+- If `Working_Suite` is newer (or equal), edit `Working_Suite`. Do not overwrite a newer live NinjaTrader file with an older `Working_Suite` version unless intentionally deploying.
+
+Never make retrograde changes by copying `Stable_Release`, `decompiled`, or stale mirrors such as `Orca Trades/NinjaTrader` over newer `Working_Suite` or `Full_Suite` files.
 
 Before editing:
 
@@ -26,5 +35,3 @@ Important docs:
 - `docs/collaboration-workflow.md`
 - `docs/codex-onboarding.md`
 - `docs/engineering-notes.md`
-
-Important rule: never make retrograde changes by copying stale mirror files over newer `Working_Suite` or `Full_Suite` files.
