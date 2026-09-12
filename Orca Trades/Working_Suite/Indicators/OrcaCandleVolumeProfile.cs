@@ -220,8 +220,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SolidColorBrush pocBrushDx;
 		private SolidColorBrush posDeltaBrushDx;
 		private SolidColorBrush negDeltaBrushDx;
-		private SolidColorBrush positiveVolumeTextDeltaBrushDx;
-		private SolidColorBrush negativeVolumeTextDeltaBrushDx;
 		private SolidColorBrush[] volumeTextIntensityBrushes;
 		private int lastBuiltVolumeTextIntensitySteps = -1;
 		private float lastBuiltVolumeTextMinBrightness = -1f;
@@ -463,7 +461,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			get
 			{
 				return ProfileDisplayMode == CandleProfileDisplayMode.Volume
-					&& ShowVolumeText
 					&& ColorVolumeTextByDelta;
 			}
 		}
@@ -513,8 +510,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				pocBrushDx?.Dispose();
 				posDeltaBrushDx?.Dispose();
 				negDeltaBrushDx?.Dispose();
-				positiveVolumeTextDeltaBrushDx?.Dispose();
-				negativeVolumeTextDeltaBrushDx?.Dispose();
 				DisposeBrushPalette(ref volumeTextIntensityBrushes);
 				DisposeBrushPalette(ref positiveDeltaIntensityBrushes);
 				DisposeBrushPalette(ref negativeDeltaIntensityBrushes);
@@ -551,8 +546,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				pocBrushDx         = null;
 				posDeltaBrushDx    = null;
 				negDeltaBrushDx    = null;
-				positiveVolumeTextDeltaBrushDx = null;
-				negativeVolumeTextDeltaBrushDx = null;
 				lastBuiltVolumeTextIntensitySteps = -1;
 				lastBuiltVolumeTextMinBrightness = -1f;
 				lastBuiltDeltaIntensitySteps = -1;
@@ -1376,7 +1369,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			Dictionary<double, long> volumeSource;
 			Dictionary<double, long> deltaSource = null;
-			bool colorVolumeTextByDelta = IsDeltaColoredVolumeTextActive;
+			bool emphasizeVolumeRowsByDelta = IsDeltaColoredVolumeTextActive;
 			double[] cache;
 			lock (barDataSync)
 			{
@@ -1384,7 +1377,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					return;
 
 				volumeSource = new Dictionary<double, long>(barVolumeMaps[barIdx]);
-				if ((ShowDelta || colorVolumeTextByDelta) && barDeltaMaps != null && barIdx < barDeltaMaps.Count && barDeltaMaps[barIdx] != null && barDeltaMaps[barIdx].Count > 0)
+				if ((ShowDelta || emphasizeVolumeRowsByDelta) && barDeltaMaps != null && barIdx < barDeltaMaps.Count && barDeltaMaps[barIdx] != null && barDeltaMaps[barIdx].Count > 0)
 					deltaSource = new Dictionary<double, long>(barDeltaMaps[barIdx]);
 
 				cache = barVACache[barIdx];
@@ -1447,7 +1440,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// Get delta map if needed
 			Dictionary<double, long> deltaMap = null;
 			long maxAbsDelta = 0;
-			if ((ShowDelta || colorVolumeTextByDelta) && deltaSource != null && deltaSource.Count > 0)
+			if ((ShowDelta || emphasizeVolumeRowsByDelta) && deltaSource != null && deltaSource.Count > 0)
 			{
 				deltaMap = BuildAggregatedMap(deltaSource, volumeCompressionTicks, 1);
 				foreach (var kvp in deltaMap)
@@ -1465,6 +1458,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				long   vol   = kvp.Value;
 				long rowDelta = 0;
 				bool hasRowDelta = deltaMap != null && deltaMap.TryGetValue(price, out rowDelta);
+				bool emphasizeRow = emphasizeVolumeRowsByDelta
+					&& hasRowDelta
+					&& FootprintFormatting.IsDeltaEmphasis(rowDelta, vol, VolumeTextDeltaMinAbsolute, VolumeTextDeltaMinPercent);
 
 				int yTop = chartScale.GetYByValue(price + compHeight);
 				int yBot = chartScale.GetYByValue(price);
@@ -1484,12 +1480,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// Determine if this row is inside the Value Area
 				bool insideVA = haveVA && price >= valPrice - TickSize * 0.01 && price <= vahPrice + TickSize * 0.01;
 
-				// Choose brush: POC > Delta > Gradient/Flat
+				// Choose brush: POC > thresholded row emphasis > continuous delta > Gradient/Flat
 				SolidColorBrush brush;
 
 				if (ShowPOC && Math.Abs(price - pocPrice) < TickSize * 0.01)
 				{
 					brush = pocBrushDx;
+				}
+				else if (emphasizeRow)
+				{
+					brush = rowDelta > 0 ? posDeltaBrushDx : negDeltaBrushDx;
 				}
 				else if (ShowDelta && hasRowDelta)
 				{
@@ -1524,7 +1524,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				RenderTarget.FillRectangle(rect, brush);
 
-				DrawVolumeTextLabel(vol, maxVol, rowDelta, hasRowDelta, profileRootX, drawProfileWidth, drawY, rowHeight, flowsRight);
+				DrawVolumeTextLabel(vol, maxVol, profileRootX, drawProfileWidth, drawY, rowHeight, flowsRight);
 			}
 
 			// --- Draw VA boundary lines ---
@@ -1899,27 +1899,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return palette[brushIdx] ?? (delta >= 0 ? posDeltaBrushDx : negDeltaBrushDx);
 		}
 
-		private SolidColorBrush SelectVolumeTextBrush(long volume, long candleMaximum, long delta, bool hasDelta, out bool qualified)
+		private SolidColorBrush SelectVolumeTextBrush(long volume, long candleMaximum)
 		{
-			qualified = IsDeltaColoredVolumeTextActive
-				&& hasDelta
-				&& FootprintFormatting.IsDeltaEmphasis(delta, volume, VolumeTextDeltaMinAbsolute, VolumeTextDeltaMinPercent);
-			if (!qualified)
-			{
-				if (!IsVolumeTextBrightnessActive || volumeTextIntensityBrushes == null || volumeTextIntensityBrushes.Length == 0)
-					return volumeTextBrushDx;
+			if (!IsVolumeTextBrightnessActive || volumeTextIntensityBrushes == null || volumeTextIntensityBrushes.Length == 0)
+				return volumeTextBrushDx;
 
-				double intensity = FootprintFormatting.VolumeTextIntensity(volume, candleMaximum);
-				int brushIndex = (int)Math.Round(intensity * (volumeTextIntensityBrushes.Length - 1));
-				if (brushIndex < 0) brushIndex = 0;
-				if (brushIndex >= volumeTextIntensityBrushes.Length) brushIndex = volumeTextIntensityBrushes.Length - 1;
-				return volumeTextIntensityBrushes[brushIndex] ?? volumeTextBrushDx;
-			}
-
-			return delta > 0 ? positiveVolumeTextDeltaBrushDx : negativeVolumeTextDeltaBrushDx;
+			double intensity = FootprintFormatting.VolumeTextIntensity(volume, candleMaximum);
+			int brushIndex = (int)Math.Round(intensity * (volumeTextIntensityBrushes.Length - 1));
+			if (brushIndex < 0) brushIndex = 0;
+			if (brushIndex >= volumeTextIntensityBrushes.Length) brushIndex = volumeTextIntensityBrushes.Length - 1;
+			return volumeTextIntensityBrushes[brushIndex] ?? volumeTextBrushDx;
 		}
 
-		private void DrawVolumeTextLabel(long volume, long candleMaximum, long delta, bool hasDelta, float profileRootX, float drawProfileWidth, float drawY, float rowHeight, bool flowsRight)
+		private void DrawVolumeTextLabel(long volume, long candleMaximum, float profileRootX, float drawProfileWidth, float drawY, float rowHeight, bool flowsRight)
 		{
 			if (!ShowVolumeText || volumeTextBrushDx == null)
 				return;
@@ -1930,9 +1922,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (rowHeight < Math.Max(5f, fontSize - 1f))
 				return;
 
-			bool qualified;
-			SolidColorBrush textBrush = SelectVolumeTextBrush(volume, candleMaximum, delta, hasDelta, out qualified) ?? volumeTextBrushDx;
-			DrawProfileTextLabel(volume.ToString("N0"), textBrush, profileRootX, drawProfileWidth, drawY, rowHeight, flowsRight, fontSize, TextAlignment.Leading, qualified && BoldQualifiedVolumeText);
+			SolidColorBrush textBrush = SelectVolumeTextBrush(volume, candleMaximum) ?? volumeTextBrushDx;
+			DrawProfileTextLabel(volume.ToString("N0"), textBrush, profileRootX, drawProfileWidth, drawY, rowHeight, flowsRight, fontSize, TextAlignment.Leading);
 		}
 
 		private void DrawDeltaTextLabel(long delta, float profileRootX, float drawProfileWidth, float drawY, float rowHeight, bool flowsRight, TextAlignment textAlignment, bool forceZeroLabel)
@@ -2206,10 +2197,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				posDeltaBrushDx = new SolidColorBrush(RenderTarget, ToDxColor(PositiveDeltaBrush, DeltaOpacity));
 			if (negDeltaBrushDx == null)
 				negDeltaBrushDx = new SolidColorBrush(RenderTarget, ToDxColor(NegativeDeltaBrush, DeltaOpacity));
-			if (positiveVolumeTextDeltaBrushDx == null)
-				positiveVolumeTextDeltaBrushDx = new SolidColorBrush(RenderTarget, ToDxColor(PositiveDeltaBrush, 1f));
-			if (negativeVolumeTextDeltaBrushDx == null)
-				negativeVolumeTextDeltaBrushDx = new SolidColorBrush(RenderTarget, ToDxColor(NegativeDeltaBrush, 1f));
 			int volumeTextIntensitySteps = Math.Max(2, GradientSteps);
 			float volumeTextMinBrightness = (float)Math.Max(0.05, Math.Min(1.0, VolumeTextMinBrightness));
 			if (!IsVolumeTextBrightnessActive)
@@ -2680,21 +2667,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public float VolumeTextMinBrightness { get; set; }
 
 		[RefreshProperties(RefreshProperties.All)]
-		[Display(Name = "Emphasize Volume Text by Delta", Description = "In Volume-only mode, emphasizes rows that meet both the absolute-delta and delta-percent thresholds.", GroupName = "08 Text - Volume", Order = 6)]
+		[Display(Name = "Emphasize Volume Rows by Delta", Description = "In Volume-only mode, colors profile rows that meet both the absolute-delta and delta-percent thresholds while keeping volume text in its selected color.", GroupName = "08 Text - Volume", Order = 6)]
 		public bool ColorVolumeTextByDelta { get; set; }
 
 		[Browsable(false)]
 		public bool ScaleVolumeTextColorByDeltaPercent { get; set; }
 
 		[Range(0, 1000000)]
-		[Display(Name = "Minimum Absolute Delta", Description = "Minimum absolute row delta required before the volume number is emphasized.", GroupName = "08 Text - Volume", Order = 7)]
+		[Display(Name = "Minimum Absolute Delta", Description = "Minimum absolute row delta required before the volume bar is emphasized.", GroupName = "08 Text - Volume", Order = 7)]
 		public int VolumeTextDeltaMinAbsolute { get; set; }
 
 		[Range(0.0, 100.0)]
 		[Display(Name = "Minimum Delta %", Description = "Minimum absolute row delta as a percentage of row volume required for emphasis.", GroupName = "08 Text - Volume", Order = 8)]
 		public double VolumeTextDeltaMinPercent { get; set; }
 
-		[Display(Name = "Bold Qualified Text", Description = "Uses a heavier font weight for volume rows that meet both delta thresholds.", GroupName = "08 Text - Volume", Order = 9)]
+		[Browsable(false)]
+		[Display(Name = "Bold Qualified Text", Description = "Legacy saved value retained for template compatibility.", GroupName = "08 Text - Volume", Order = 9)]
 		public bool BoldQualifiedVolumeText { get; set; }
 
 		[NinjaScriptProperty]
@@ -2953,8 +2941,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (name == "VolumeTextMinBrightness" && !indicator.ScaleVolumeTextBrightnessByVolume) continue;
 				bool volumeOnlyTextSetting = name == "ColorVolumeTextByDelta"
 					|| name == "VolumeTextDeltaMinAbsolute"
-					|| name == "VolumeTextDeltaMinPercent"
-					|| name == "BoldQualifiedVolumeText";
+					|| name == "VolumeTextDeltaMinPercent";
 				if (volumeOnlyTextSetting && indicator.ProfileDisplayMode != CandleProfileDisplayMode.Volume) continue;
 				if (name != "ColorVolumeTextByDelta" && volumeOnlyTextSetting && !indicator.ColorVolumeTextByDelta) continue;
                 bool sharedBidAskSetting = name == "FootprintEmphasizeWinner" || name == "FootprintWinnerRatio" || name == "FootprintScaffold";

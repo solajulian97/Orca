@@ -110,7 +110,7 @@ if (assignments["FootprintEmphasizeWinner"] != "true" || assignments["FootprintW
 if (assignments["ColorVolumeTextByDelta"] != "false" || assignments["ScaleVolumeTextColorByDeltaPercent"] != "true"
     || assignments["VolumeTextDeltaMinAbsolute"] != "150" || assignments["VolumeTextDeltaMinPercent"] != "15.0"
     || assignments["BoldQualifiedVolumeText"] != "true")
-    throw new Exception("Volume text delta-emphasis defaults changed.");
+    throw new Exception("Volume row delta-emphasis compatibility defaults changed.");
 if (assignments["ScaleVolumeTextBrightnessByVolume"] != "false" || assignments["VolumeTextMinBrightness"] != "0.35f")
     throw new Exception("Volume + Delta text-brightness defaults changed.");
 foreach (string name in new[] { "ColorVolumeTextByDelta", "ScaleVolumeTextColorByDeltaPercent", "VolumeTextDeltaMinAbsolute", "VolumeTextDeltaMinPercent", "BoldQualifiedVolumeText", "ScaleVolumeTextBrightnessByVolume", "VolumeTextMinBrightness" })
@@ -121,19 +121,32 @@ foreach (string name in new[] { "ColorVolumeTextByDelta", "ScaleVolumeTextColorB
 }
 var volumeProfile = Method(newRoot, "DrawBarVolumeProfile");
 var volumeTextBrush = Method(newRoot, "SelectVolumeTextBrush");
-if (!Tokens(volumeProfile).Contains("ShowDelta || colorVolumeTextByDelta")
-    || !Tokens(volumeProfile).Contains("DrawVolumeTextLabel ( vol , maxVol , rowDelta , hasRowDelta"))
-    throw new Exception("Volume-only text coloring does not consume the matching aggregated delta row.");
-if (!Tokens(volumeTextBrush).Contains("FootprintFormatting . IsDeltaEmphasis")
-    || !Tokens(volumeTextBrush).Contains("positiveVolumeTextDeltaBrushDx")
-    || !Tokens(volumeTextBrush).Contains("negativeVolumeTextDeltaBrushDx")
-    || !Tokens(volumeTextBrush).Contains("volumeTextBrushDx"))
-    throw new Exception("Volume text delta-emphasis selection lost threshold, full-color, or neutral behavior.");
+var rowEmphasisActive = newRoot.DescendantNodes().OfType<PropertyDeclarationSyntax>()
+    .Single(p => p.Identifier.Text == "IsDeltaColoredVolumeTextActive");
+if (!Tokens(rowEmphasisActive).Contains("ProfileDisplayMode == CandleProfileDisplayMode . Volume")
+    || !Tokens(rowEmphasisActive).Contains("ColorVolumeTextByDelta")
+    || Tokens(rowEmphasisActive).Contains("ShowVolumeText"))
+    throw new Exception("Volume row emphasis must stay Volume-only without depending on volume-text visibility.");
+if (!Tokens(volumeProfile).Contains("ShowDelta || emphasizeVolumeRowsByDelta")
+    || !Tokens(volumeProfile).Contains("FootprintFormatting . IsDeltaEmphasis ( rowDelta , vol , VolumeTextDeltaMinAbsolute , VolumeTextDeltaMinPercent )")
+    || !Tokens(volumeProfile).Contains("brush = rowDelta > 0 ? posDeltaBrushDx : negDeltaBrushDx")
+    || !Tokens(volumeProfile).Contains("DrawVolumeTextLabel ( vol , maxVol , profileRootX"))
+    throw new Exception("Volume-only row emphasis lost matching aggregated delta qualification or row-color selection.");
 if (!Tokens(volumeTextBrush).Contains("FootprintFormatting . VolumeTextIntensity")
-    || !Tokens(volumeTextBrush).Contains("volumeTextIntensityBrushes"))
-    throw new Exception("Volume + Delta text brightness lost its per-candle volume scaling or cached palette.");
-if (!Tokens(Method(newRoot, "DrawVolumeTextLabel")).Contains("qualified && BoldQualifiedVolumeText"))
-    throw new Exception("Qualified volume text no longer uses optional heavier formatting.");
+    || !Tokens(volumeTextBrush).Contains("volumeTextIntensityBrushes")
+    || !Tokens(volumeTextBrush).Contains("volumeTextBrushDx")
+    || Tokens(volumeTextBrush).Contains("DeltaBrush"))
+    throw new Exception("Volume text must remain in its selected color while preserving combined-mode brightness scaling.");
+if (Tokens(Method(newRoot, "DrawVolumeTextLabel")).Contains("BoldQualifiedVolumeText"))
+    throw new Exception("Qualified volume text must remain at its selected normal formatting.");
+var rowEmphasisProperty = newRoot.DescendantNodes().OfType<PropertyDeclarationSyntax>()
+    .Single(p => p.Identifier.Text == "ColorVolumeTextByDelta");
+if (!rowEmphasisProperty.AttributeLists.ToFullString().Contains("Emphasize Volume Rows by Delta"))
+    throw new Exception("Volume row emphasis setting label is missing.");
+var legacyBoldProperty = newRoot.DescendantNodes().OfType<PropertyDeclarationSyntax>()
+    .Single(p => p.Identifier.Text == "BoldQualifiedVolumeText");
+if (!legacyBoldProperty.AttributeLists.SelectMany(a => a.Attributes).Any(a => a.Name.ToString().Contains("Browsable") && a.ArgumentList?.ToString() == "(false)"))
+    throw new Exception("Legacy qualified-text weight setting must stay serialized but hidden.");
 if (!Tokens(Method(newRoot, "EnsureBarMaps")).Contains("ShouldCollectStrictBidAskEvidence")
     || !Tokens(Method(newRoot, "ProcessTradeIntoPrimaryBar")).Contains("ShouldCollectStrictBidAskEvidence"))
     throw new Exception("Qualified Volume-mode hover no longer retains strict Bid/Ask evidence.");
@@ -148,12 +161,12 @@ var volumeHover = Method(renderingRoot, "TryShowQualifiedVolumeTextTooltip");
 if (!Tokens(volumeHover).Contains("{0:N0} x {1:N0}\\n{2:+#,0;-#,0;0}")
     || !Tokens(volumeHover).Contains("N/A x N/A\\nN/A")
     || Tokens(volumeHover).Contains("Unclassified"))
-    throw new Exception("Qualified Volume-mode hover lost its compact two-line value contract.");
+    throw new Exception("Qualified Volume-row hover lost its compact two-line value contract.");
 var settingsConverter = Method(newRoot.DescendantNodes().OfType<ClassDeclarationSyntax>()
     .Single(c => c.Identifier.Text == "OrcaFootprintSettingsConverter"), "GetProperties");
 if (!Tokens(settingsConverter).Contains("indicator . ProfileDisplayMode != CandleProfileDisplayMode . Volume")
     || !Tokens(settingsConverter).Contains("! indicator . ColorVolumeTextByDelta"))
-    throw new Exception("Volume text delta-color settings are not contextual to Volume mode and the main toggle.");
+    throw new Exception("Volume row delta-emphasis settings are not contextual to Volume mode and the main toggle.");
 if (!Tokens(settingsConverter).Contains("indicator . ProfileDisplayMode != CandleProfileDisplayMode . VolumeAndDelta")
     || !Tokens(settingsConverter).Contains("! indicator . ScaleVolumeTextBrightnessByVolume"))
     throw new Exception("Volume text brightness settings are not contextual to Volume + Delta mode and the main toggle.");
