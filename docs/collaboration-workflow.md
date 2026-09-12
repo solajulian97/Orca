@@ -11,15 +11,18 @@ For the core suite, edit only:
 
 `Orca Trades/Full_Suite` is the validated suite. Only promote into it after Julia approves the deployed/tested behavior.
 
-Do not treat `Orca Trades/NinjaTrader`, `Stable_Release`, or `decompiled` as source of truth for overlapping files.
+Do not treat `Orca Trades/NinjaTrader`, `Stable_Release`, or `decompiled` as freshness sources. Those are mirrors/snapshots — not a reason to overwrite `Working_Suite` without an explicit ask.
+
+Live NinjaTrader Custom files are different: if the live NT copy is **newer** than `Working_Suite` (compare mtimes), copy the live file into `Working_Suite` and continue from there. Do not clobber a newer live NT file with an older `Working_Suite` version except when intentionally deploying.
 
 ## Before Editing
 
 1. Run `git status --short --branch`.
 2. Identify the exact files you intend to edit.
-3. Check whether the file also exists in `Orca Trades/NinjaTrader`.
-4. If the same file exists in multiple places, edit the `Working_Suite` copy unless Julia says otherwise.
-5. Do not overwrite another agent's uncommitted work.
+3. If the file also exists under live NinjaTrader Custom, compare mtimes with `Working_Suite` and apply the freshness rule above.
+4. Check whether the file also exists in `Orca Trades/NinjaTrader` (repo mirror only — not a freshness source).
+5. Edit the `Working_Suite` copy (after any newer-live-NT sync).
+6. Do not overwrite another agent's uncommitted work.
 
 ## During Editing
 

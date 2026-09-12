@@ -4,7 +4,7 @@ These instructions apply to Codex, Claude Code, and any other coding assistant w
 
 ## Source Of Truth
 
-`Orca Trades/Working_Suite` is the editable local working copy.
+`Orca Trades/Working_Suite` is the editable local working copy for normal edits.
 
 Edit:
 
@@ -13,7 +13,14 @@ Edit:
 
 `Orca Trades/Full_Suite` is the clean validated suite. Promote into it only after Julia confirms the change compiled and behaved correctly in NinjaTrader.
 
-Do not copy from `Orca Trades/NinjaTrader`, `Stable_Release`, `decompiled`, or local NinjaTrader folders into `Working_Suite` or `Full_Suite` unless Julia explicitly confirms that the source file is newer and intended to replace the current version.
+### Live NinjaTrader freshness
+
+Before editing a file that also exists in the live NinjaTrader Custom tree (`Documents/NinjaTrader 8/bin/Custom`), compare mtimes / freshness:
+
+- If the live NinjaTrader copy is **newer** than `Working_Suite`, treat the live file as source of truth: copy it into `Working_Suite`, then continue all work from `Working_Suite`.
+- If `Working_Suite` is newer (or equal), edit `Working_Suite`. Do not overwrite a newer live NinjaTrader file with an older `Working_Suite` version via reverse sync unless you are intentionally deploying.
+
+Do not make retrograde copies from `Stable_Release`, `decompiled`, or stale mirrors such as `Orca Trades/NinjaTrader` into `Working_Suite` or `Full_Suite`. Those trees are not freshness sources for this rule.
 
 ## Collaboration Safety
 

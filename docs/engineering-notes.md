@@ -40,6 +40,7 @@ For delta-style calculations, use bid/ask data when available. When historical b
 - Dynamic aggregation is used to prevent dense profile/delta rendering from becoming unreadable when zoomed out.
 - `FinishDelta` naming should replace older `DeltaEfficiency` naming in current source.
 - Deployment scripts must not copy from stale `NinjaTrader` mirror files over newer `Working_Suite` or `Full_Suite` files.
+- Before editing a file that also lives under live NinjaTrader Custom, compare mtimes: newer live NT → copy into `Working_Suite` first; newer `Working_Suite` → edit there and do not reverse-sync over a newer live NT file except on intentional deploy.
 
 ## OrcaJournal Note
 
