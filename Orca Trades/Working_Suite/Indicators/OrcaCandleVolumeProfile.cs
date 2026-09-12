@@ -1151,12 +1151,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 							if (showBidAsk)
 							{
 								float bidAskWidth = ResolveCenteredProfileWidth(chartControl, barIdx, barCenterX, averageBarSpacing);
-								float bodyDeltaWidth = hollowBodyDelta ? ResolveBodyDeltaColumnWidth(activeCandleWidth) : 0f;
+								float bodyDeltaWidth = hollowBodyDelta ? activeCandleWidth : 0f;
 								float centerGap = FootprintScaffold == FootprintScaffoldMode.OhlcSpineAndBody
 									? activeCandleWidth + 2f * Math.Max(0, CandleProfileGapPx)
-									: hollowBodyDelta ? bodyDeltaWidth + 2f * Math.Max(0, CandleProfileGapPx) : 0f;
+									: 0f;
 								DrawBarBidAskProfile(chartScale, barIdx, barCenterX, panelTop, panelBottom, bidAskWidth,
-									deltaCompressionTicks, centerGap, bodyDeltaWidth, o, c);
+									deltaCompressionTicks, centerGap, bodyDeltaWidth, o, c, activeBodyBrush);
 								if (FootprintScaffold == FootprintScaffoldMode.OhlcSpine)
 									DrawCandleSpine(barCenterX, yHigh, yLow, bodyTop, bodyHeight, activeBodyBrush, activeWickBrush);
 								else if (FootprintScaffold == FootprintScaffoldMode.OhlcSpineAndBody)
@@ -1234,11 +1234,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				resolvedCandleWidth, Math.Max(1f, bodyHeight)), bodyBrush);
 		}
 
-		private float ResolveBodyDeltaColumnWidth(float configuredCandleWidth)
+		private float ResolveBodyDeltaColumnWidth(float configuredCandleWidth, float measuredTextWidth)
 		{
-			// Five ungrouped glyphs cover a signed four-digit delta without reserving a broad candle lane.
-			float readableMinimum = Math.Max(24f, BidAskTextFontSize * 3f + 4f);
-			return Math.Max(2f, Math.Max(configuredCandleWidth, readableMinimum));
+			return Math.Max(2f, Math.Max(configuredCandleWidth, measuredTextWidth + 4f));
+		}
+
+		private string ResolveHollowDeltaText(long delta, bool unavailable)
+		{
+			if (unavailable)
+				return "N/A";
+			bool compact = FootprintNumbers == FootprintNumberFormat.Compact
+				|| (FootprintNumbers == FootprintNumberFormat.Auto && FootprintFormatting.Magnitude(delta) >= 10000);
+			return FootprintFormatting.SignedNumber(delta, compact);
 		}
 
 		private float ResolveCenteredProfileWidth(ChartControl chartControl, int barIdx, float barCenterX, float averageBarSpacing)
@@ -1652,7 +1659,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 
 		private void DrawBarBidAskProfile(ChartScale chartScale, int barIdx, float barCenterX, float panelTop, float panelBottom,
-			float drawProfileWidth, int compressionTicks, float requestedCenterGap, float requestedBodyDeltaWidth, double open, double close)
+			float drawProfileWidth, int compressionTicks, float requestedCenterGap, float requestedBodyDeltaWidth, double open, double close,
+			SolidColorBrush bodyOutlineBrush)
 		{
 			Dictionary<double, long> askSource;
 			Dictionary<double, long> bidSource;
@@ -1702,25 +1710,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 				maxSideVolume = 1;
 
 			float fullWidth = Math.Max(2f, drawProfileWidth);
-			float centerGap = Math.Max(0f, Math.Min(requestedCenterGap, Math.Max(0f, fullWidth - 2f)));
-			float halfWidth = Math.Max(1f, (fullWidth - centerGap) / 2f);
-			float bidRoot = barCenterX - centerGap / 2f;
-			float askRoot = barCenterX + centerGap / 2f;
-			float left = bidRoot - halfWidth;
 			double compHeight = Math.Max(1, compressionTicks) * TickSize;
-			bool drawBodyDelta = FootprintScaffold == FootprintScaffoldMode.HollowBodyDelta && centerGap > 0f;
-			float bodyDeltaWidth = drawBodyDelta
-				? Math.Min(requestedBodyDeltaWidth, Math.Max(1f, centerGap - 2f * Math.Max(0, CandleProfileGapPx)))
-				: 0f;
+			bool drawBodyDelta = FootprintScaffold == FootprintScaffoldMode.HollowBodyDelta;
 			long maxCenterAbsDelta = 0;
+			float widestCenterLabel = 0f;
 			if (drawBodyDelta)
 			{
 				foreach (double price in prices)
 				{
-					long centerDelta = GetMapVolume(askMap, price) - GetMapVolume(bidMap, price);
+					long ask = GetMapVolume(askMap, price);
+					long bid = GetMapVolume(bidMap, price);
+					long unclassified = GetMapVolume(unclassifiedMap, price);
+					long centerDelta = ask - bid;
 					maxCenterAbsDelta = Math.Max(maxCenterAbsDelta, FootprintFormatting.Magnitude(centerDelta));
+					int yTop = chartScale.GetYByValue(price + compHeight);
+					int yBot = chartScale.GetYByValue(price);
+					int rowHeight = Math.Max(1, Math.Abs(yBot - yTop) - ProfileBarSpacingPx);
+					float fontSize = ResolveProfileTextFontSize(rowHeight, BidAskTextFontSize);
+					string label = ResolveHollowDeltaText(centerDelta, bid == 0 && ask == 0 && unclassified > 0);
+					widestCenterLabel = Math.Max(widestCenterLabel, MeasureProfileTextWidth(label, fontSize));
 				}
 			}
+			float bodyDeltaWidth = drawBodyDelta
+				? ResolveBodyDeltaColumnWidth(requestedBodyDeltaWidth, widestCenterLabel)
+				: 0f;
+			float desiredCenterGap = drawBodyDelta
+				? bodyDeltaWidth + 2f * Math.Max(0, CandleProfileGapPx)
+				: requestedCenterGap;
+			float centerGap = Math.Max(0f, Math.Min(desiredCenterGap, Math.Max(0f, fullWidth - 2f)));
+			bodyDeltaWidth = drawBodyDelta
+				? Math.Min(bodyDeltaWidth, Math.Max(1f, centerGap - 2f * Math.Max(0, CandleProfileGapPx)))
+				: 0f;
+			float halfWidth = Math.Max(1f, (fullWidth - centerGap) / 2f);
+			float bidRoot = barCenterX - centerGap / 2f;
+			float askRoot = barCenterX + centerGap / 2f;
+			float left = bidRoot - halfWidth;
+			float bodyOutlineTop = float.MaxValue;
+			float bodyOutlineBottom = float.MinValue;
 
 			foreach (double price in prices)
 			{
@@ -1784,8 +1810,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (drawBodyDelta)
 				{
 					bool bodyRow = FootprintFormatting.IntersectsBody(price, price + compHeight, open, close);
+					if (bodyRow)
+					{
+						bodyOutlineTop = Math.Min(bodyOutlineTop, drawY);
+						bodyOutlineBottom = Math.Max(bodyOutlineBottom, drawY + rowHeight);
+					}
 					DrawHollowBodyDeltaRow(barCenterX, bodyDeltaWidth, drawY, rowHeight, bid, ask,
-						unclassified, rowDelta, maxCenterAbsDelta, bodyRow);
+						unclassified, rowDelta, maxCenterAbsDelta);
 				}
 
 				if (ShowPOC && Math.Abs(price - pocPrice) < TickSize * 0.01 && pocBrushDx != null)
@@ -1798,10 +1829,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 					else RenderTarget.DrawRectangle(rowRect, pocBrushDx, 1f);
 				}
 			}
+
+			if (drawBodyDelta && bodyOutlineBrush != null && bodyDeltaWidth >= 2f
+				&& bodyOutlineTop != float.MaxValue && bodyOutlineBottom > bodyOutlineTop)
+				RenderTarget.DrawRectangle(new RectangleF(barCenterX - bodyDeltaWidth / 2f, bodyOutlineTop,
+					bodyDeltaWidth, bodyOutlineBottom - bodyOutlineTop), bodyOutlineBrush, 1f);
 		}
 
 		private void DrawHollowBodyDeltaRow(float barCenterX, float width, float drawY, float rowHeight,
-			long bid, long ask, long unclassified, long rowDelta, long maxCenterAbsDelta, bool bodyRow)
+			long bid, long ask, long unclassified, long rowDelta, long maxCenterAbsDelta)
 		{
 			if (width < 2f || rowHeight < 1f)
 				return;
@@ -1811,23 +1847,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 
 			RectangleF rectangle = new RectangleF(barCenterX - width / 2f, drawY, width, rowHeight);
-			if (bodyRow)
-				RenderTarget.DrawRectangle(rectangle, brush, 1f);
-			else
-			{
-				SolidColorBrush separator = SelectBidAskBrush(0, 0, 1);
-				if (separator != null && width >= 6f)
-					RenderTarget.DrawLine(new Vector2(rectangle.Left + 2f, rectangle.Bottom - 0.5f),
-						new Vector2(rectangle.Right - 2f, rectangle.Bottom - 0.5f), separator, 0.5f);
-			}
+			SolidColorBrush separator = SelectBidAskBrush(0, 0, 1);
+			if (separator != null && width >= 6f)
+				RenderTarget.DrawLine(new Vector2(rectangle.Left + 1f, rectangle.Bottom - 0.5f),
+					new Vector2(rectangle.Right - 1f, rectangle.Bottom - 0.5f), separator, 0.5f);
 
 			float fontSize = ResolveProfileTextFontSize(rowHeight, BidAskTextFontSize);
 			if (rowHeight < Math.Max(5f, fontSize - 1f))
 				return;
 
-			string label = bid == 0 && ask == 0 && unclassified > 0
-				? "N/A"
-				: FootprintFormatting.SignedNumber(rowDelta, false);
+			string label = ResolveHollowDeltaText(rowDelta, bid == 0 && ask == 0 && unclassified > 0);
 			DrawTextInRectangle(label, brush,
 				new RectangleF(rectangle.Left + 1f, rectangle.Top - 1f, Math.Max(2f, rectangle.Width - 2f), rectangle.Height + 2f),
 				fontSize, TextAlignment.Center);
@@ -2145,6 +2174,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				width = layout.Metrics.Width;
 				textWidthCache[text] = width;
+				return width;
+			}
+		}
+
+		private float MeasureProfileTextWidth(string text, float fontSize)
+		{
+			TextFormat format = GetProfileTextFormat(fontSize, TextAlignment.Center);
+			if (format == null)
+				return Math.Max(0f, text == null ? 0f : text.Length * fontSize * 0.6f);
+
+			string key = "center|" + fontSize.ToString("0.0", CultureInfo.InvariantCulture) + "|" + text;
+			if (textWidthCache.TryGetValue(key, out float width))
+				return width;
+
+			using (var layout = new TextLayout(Core.Globals.DirectWriteFactory, text, format, 1000, 100))
+			{
+				width = layout.Metrics.WidthIncludingTrailingWhitespace;
+				textWidthCache[key] = width;
 				return width;
 			}
 		}

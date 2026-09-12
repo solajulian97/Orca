@@ -96,22 +96,30 @@ var scaffoldMembers = scaffoldEnum.Members.Select(m => m.Identifier.Text).ToArra
 if (!scaffoldMembers.SequenceEqual(new[] { "Off", "OhlcSpine", "OhlcSpineAndBody", "HollowBodyDelta" }))
     throw new Exception("Candle Display enum values were reordered or Hollow Body Delta is missing.");
 if (!Tokens(render).Contains("if ( ! hollowBodyDelta )")
-    || !Tokens(render).Contains("DrawBarBidAskProfile ( chartScale , barIdx , barCenterX , panelTop , panelBottom , bidAskWidth , deltaCompressionTicks , centerGap , bodyDeltaWidth , o , c )"))
-    throw new Exception("Normal Bid x Ask hollow body must suppress the filled candle and pass OHLC body bounds to the center column.");
+	|| !Tokens(render).Contains("DrawBarBidAskProfile ( chartScale , barIdx , barCenterX , panelTop , panelBottom , bidAskWidth , deltaCompressionTicks , centerGap , bodyDeltaWidth , o , c , activeBodyBrush )"))
+	throw new Exception("Normal Bid x Ask hollow body must suppress the filled candle and pass OHLC body bounds to the center column.");
 if (!Tokens(bidAskProfile).Contains("FootprintFormatting . IntersectsBody")
 	|| !Tokens(bidAskProfile).Contains("DrawHollowBodyDeltaRow"))
 	throw new Exception("Normal Bid x Ask body-row selection or full-height center delta drawing is missing.");
 var hollowBodyRow = Method(newRoot, "DrawHollowBodyDeltaRow");
 var bodyDeltaWidthMethod = Method(newRoot, "ResolveBodyDeltaColumnWidth");
-if (!Tokens(hollowBodyRow).Contains("FootprintFormatting . SignedNumber")
+var hollowDeltaText = Method(newRoot, "ResolveHollowDeltaText");
+if (!Tokens(hollowBodyRow).Contains("ResolveHollowDeltaText")
+	|| !Tokens(hollowDeltaText).Contains("FootprintFormatting . SignedNumber")
 	|| !Tokens(hollowBodyRow).Contains("SelectBidAskBrush")
-	|| !Tokens(hollowBodyRow).Contains("if ( bodyRow ) RenderTarget . DrawRectangle")
 	|| !Tokens(hollowBodyRow).Contains("RenderTarget . DrawLine")
+	|| Tokens(hollowBodyRow).Contains("DrawRectangle")
 	|| Tokens(hollowBodyRow).Contains("FillRectangle")
 	|| Tokens(hollowBodyRow).Contains("BidAskTextMinThreshold"))
-	throw new Exception("Normal center delta must draw every row, box body rows, separate wick rows, and never fill the center.");
-if (!Tokens(bodyDeltaWidthMethod).Contains("Math . Max ( 24f , BidAskTextFontSize * 3f + 4f )"))
-	throw new Exception("Hollow delta automatic width no longer targets a narrow signed four-digit value.");
+	throw new Exception("Normal center delta rows must use colored text and faint separators without per-row boxes or fills.");
+if (!Tokens(bidAskProfile).Contains("bodyOutlineTop")
+	|| !Tokens(bidAskProfile).Contains("bodyOutlineBottom")
+	|| !Tokens(bidAskProfile).Contains("bodyOutlineBrush")
+	|| !Tokens(bidAskProfile).Contains("RenderTarget . DrawRectangle"))
+	throw new Exception("Normal hollow delta must draw one continuous candle-body outline.");
+if (!Tokens(bodyDeltaWidthMethod).Contains("measuredTextWidth + 4f")
+	|| !Tokens(bidAskProfile).Contains("MeasureProfileTextWidth"))
+	throw new Exception("Normal hollow delta width must follow the candle's widest measured center label.");
 foreach (var oldEnum in oldRoot.DescendantNodes().OfType<EnumDeclarationSyntax>())
 {
     var newEnum = newRoot.DescendantNodes().OfType<EnumDeclarationSyntax>().Single(e => e.Identifier.Text == oldEnum.Identifier.Text);
@@ -201,10 +209,12 @@ var enhancedRender = Method(trees[2].GetRoot(), "RenderEnhancedFootprint");
 var enhancedPrepare = Method(trees[2].GetRoot(), "PrepareFootprintFrame");
 var centerGutter = Method(trees[2].GetRoot(), "ResolveFootprintCenterGutter");
 if (!Tokens(enhancedPrepare).Contains("BodyDeltaRow")
-    || !Tokens(enhancedPrepare).Contains("FootprintFormatting . IntersectsBody")
-    || !Tokens(enhancedPrepare).Contains("FootprintFormatting . SignedNumber")
-    || !Tokens(centerGutter).Contains("FootprintScaffoldMode . HollowBodyDelta"))
-    throw new Exception("Enhanced hollow body delta preparation or automatic center reservation is missing.");
+	|| !Tokens(enhancedPrepare).Contains("FootprintFormatting . IntersectsBody")
+	|| !Tokens(enhancedPrepare).Contains("FootprintFormatting . SignedNumber")
+	|| !Tokens(enhancedPrepare).Contains("MeasureFootprintTextWidth")
+	|| !Tokens(enhancedPrepare).Contains("bar . CenterWidth")
+	|| !Tokens(centerGutter).Contains("FootprintScaffoldMode . HollowBodyDelta"))
+	throw new Exception("Enhanced hollow body delta preparation or measured per-candle center reservation is missing.");
 var bodyDeltaLayout = enhancedPrepare.DescendantNodes().OfType<AssignmentExpressionSyntax>()
 	.Single(a => a.Left.ToString() == "paint.CenterDelta");
 if (bodyDeltaLayout.Ancestors().OfType<IfStatementSyntax>().Any(i => i.Condition.ToString().Contains("ShowBidAskText"))
@@ -214,8 +224,10 @@ if (bodyDeltaLayout.Ancestors().OfType<IfStatementSyntax>().Any(i => i.Condition
 if (!Tokens(enhancedRender).Contains("FootprintFormatting . Magnitude ( row . Delta )")
 	|| !Tokens(enhancedRender).Contains("RenderTarget . DrawRectangle")
 	|| !Tokens(enhancedRender).Contains("RenderTarget . DrawLine")
+	|| !Tokens(enhancedRender).Contains("bodyOutlineBrush")
+	|| !Tokens(enhancedRender).Contains("bar . CenterWidth")
 	|| !Tokens(enhancedRender).Contains("&& ! hollowBodyDelta"))
-	throw new Exception("Enhanced hollow body delta opacity, body outlines, wick separators, or wick suppression is missing.");
+	throw new Exception("Enhanced hollow body delta opacity, continuous body outline, row separators, measured width, or wick suppression is missing.");
 var scaffoldConverter = trees[2].GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>()
     .Single(c => c.Identifier.Text == "FootprintScaffoldModeConverter");
 if (!Tokens(scaffoldConverter).Contains("\"Hollow Body Delta\""))
