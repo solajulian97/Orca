@@ -91,10 +91,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private const int SecondarySeriesIndex = 1;
 		private static readonly TimeSpan OrWindow = TimeSpan.FromSeconds(30);
 
+		// Price-scale markers are NinjaTrader plot price markers. Plot lines are never drawn (base.OnRender is
+		// skipped); the plots exist only so NT paints native tags on the right price scale.
+		private const int PlotsPerSession = 3; // High, Low, Mid
+		private const int MaxScaleMarkerLevels = 10; // extension levels per side that get a scale tag
+		private const int ExtUpPlotBase = SessionCount * PlotsPerSession;
+		private const int ExtDnPlotBase = ExtUpPlotBase + MaxScaleMarkerLevels;
+		private const int PlotCount = ExtDnPlotBase + MaxScaleMarkerLevels;
+
 		private OrSession[] sessions;
 		private TimeZoneInfo easternTimeZone;
 		private TimeZoneInfo chartTimeZone;
 		private double resolvedExtensionStep;
+		private DateTime lastPrimaryTime = DateTime.MinValue;
 
 		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
 		private DxSolidBrush[] dxBrushes;
@@ -118,13 +127,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				BarsRequiredToPlot = 0;
 				// Julian's rule: ranges/extensions never pull the chart scale. Levels off-screen stay off-screen.
 				IsAutoScale = false;
-				PaintPriceMarkers = false;
+				// Native right-scale price tags (plot price markers); the plots themselves are never drawn.
+				PaintPriceMarkers = true;
 
 				// Display
 				DisplayStyle = OrcaOrDisplayStyle.Shaded;
 				FillOpacity = 15;
 				ShowMidpoint = false;
-				ShowPriceLabels = false;
+				ShowWordLabels = false;
+				ShowPriceLabels = true;
 				ConnectRanges = false;
 				TimeZoneMode = OrcaOrTimeZoneMode.NewYork;
 				LineWidth = 1;
@@ -135,6 +146,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				// Sessions (defaults follow the TradingView study; times are New York)
 				RthOpenTime = new TimeSpan(9, 30, 0);
+				RthCloseTime = new TimeSpan(16, 15, 0);
 				PmOpenTime = new TimeSpan(13, 30, 0);
 				GlobexOpenTime = new TimeSpan(18, 0, 0);
 				TokyoOpenTime = new TimeSpan(20, 0, 0);
@@ -161,7 +173,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ExtensionUpColor = MakeBrush(0x00, 0xE6, 0x76);
 				ExtensionDownColor = MakeBrush(0xFF, 0x52, 0x52);
 
-				AddPlot(new Stroke(WpfBrushes.Transparent, 1), PlotStyle.Line, "OrcaORDummy");
+				AddScaleMarkerPlots();
 			}
 			else if (State == State.Configure)
 			{
@@ -174,6 +186,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				chartTimeZone = FindChartTimeZone();
 				BuildSessions();
 				resolvedExtensionStep = ResolveExtensionStep();
+				ApplyScaleMarkerBrushes();
 			}
 			else if (State == State.Historical)
 			{
@@ -216,6 +229,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 			sessions[SessionMidnight] = new OrSession { Label = "MIDNIGHT", OpenTime = NormalizeOpenTime(MidnightOpenTime), HlBrush = SessionMidnight * 2, MidBrush = SessionMidnight * 2 + 1 };
 			sessions[SessionLondon]   = new OrSession { Label = "LONDON",   OpenTime = NormalizeOpenTime(LondonOpenTime),   HlBrush = SessionLondon * 2,   MidBrush = SessionLondon * 2 + 1 };
 			sessions[SessionGold]     = new OrSession { Label = "GOLD",     OpenTime = NormalizeOpenTime(GoldOpenTime),     HlBrush = SessionGold * 2,     MidBrush = SessionGold * 2 + 1 };
+		}
+
+		private static readonly string[] SessionPlotNames = { "RTH", "PM", "Globex", "Tokyo", "Midnight", "London", "Gold" };
+
+		private void AddScaleMarkerPlots()
+		{
+			for (int i = 0; i < SessionCount; i++)
+			{
+				AddPlot(new Stroke(WpfBrushes.Transparent, 1), PlotStyle.Line, SessionPlotNames[i] + " OR High");
+				AddPlot(new Stroke(WpfBrushes.Transparent, 1), PlotStyle.Line, SessionPlotNames[i] + " OR Low");
+				AddPlot(new Stroke(WpfBrushes.Transparent, 1), PlotStyle.Line, SessionPlotNames[i] + " OR Mid");
+			}
+			for (int k = 1; k <= MaxScaleMarkerLevels; k++)
+				AddPlot(new Stroke(WpfBrushes.Transparent, 1), PlotStyle.Line, "RTH Ext +" + k);
+			for (int k = 1; k <= MaxScaleMarkerLevels; k++)
+				AddPlot(new Stroke(WpfBrushes.Transparent, 1), PlotStyle.Line, "RTH Ext -" + k);
+		}
+
+		private void ApplyScaleMarkerBrushes()
+		{
+			if (Plots == null || Plots.Length < PlotCount)
+				return;
+
+			WpfBrush[] hl = { RthColor, PmColor, GlobexColor, TokyoColor, MidnightColor, LondonColor, GoldColor };
+			WpfBrush[] mid = { RthMidColor, PmMidColor, GlobexMidColor, TokyoMidColor, MidnightMidColor, LondonMidColor, GoldMidColor };
+			for (int i = 0; i < SessionCount; i++)
+			{
+				Plots[i * PlotsPerSession].Brush = hl[i] ?? WpfBrushes.White;
+				Plots[i * PlotsPerSession + 1].Brush = hl[i] ?? WpfBrushes.White;
+				Plots[i * PlotsPerSession + 2].Brush = mid[i] ?? WpfBrushes.White;
+			}
+			for (int k = 0; k < MaxScaleMarkerLevels; k++)
+			{
+				Plots[ExtUpPlotBase + k].Brush = ExtensionUpColor ?? WpfBrushes.White;
+				Plots[ExtDnPlotBase + k].Brush = ExtensionDownColor ?? WpfBrushes.White;
+			}
 		}
 
 		private static TimeSpan NormalizeOpenTime(TimeSpan value)
@@ -300,6 +349,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DateTime anchor = nyBarOpen.Date + sessionOpen;
 			return nyBarOpen.TimeOfDay < sessionOpen ? anchor.AddDays(-1) : anchor;
 		}
+
+		/// <summary>
+		/// RTH close for a given RTH range, in chart time. Extensions (lines, unlocks, scale tags) stop here
+		/// so they never stretch across Globex.
+		/// </summary>
+		private DateTime GetRthCloseChartTime(OrRange rth)
+		{
+			TimeSpan open = sessions[SessionRth].OpenTime;
+			TimeSpan close = NormalizeOpenTime(RthCloseTime);
+			TimeSpan duration = close - open;
+			if (duration <= TimeSpan.Zero)
+				duration += TimeSpan.FromDays(1);
+			return rth.AnchorTime + duration;
+		}
 		#endregion
 
 		#region OnBarUpdate
@@ -318,7 +381,46 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (BarsInProgress != 0 || CurrentBars[0] < 0)
 				return;
 
+			lastPrimaryTime = Time[0];
 			UpdateExtensionUnlocks(Time[0], High[0], Low[0]);
+			UpdateScaleMarkers(Time[0]);
+		}
+
+		/// <summary>
+		/// Feeds the marker plots so NinjaTrader paints native price tags on the right scale. Values are
+		/// written per primary bar, so the tags follow whatever level was active at the visible bar.
+		/// </summary>
+		private void UpdateScaleMarkers(DateTime barChartTime)
+		{
+			if (Values == null || Values.Length < PlotCount)
+				return;
+
+			for (int i = 0; i < SessionCount; i++)
+			{
+				int b = i * PlotsPerSession;
+				OrRange range = sessions[i].Latest;
+				bool show = ShowPriceLabels && IsSessionEnabled(i) && range != null && range.IsValid;
+				if (show)
+				{
+					Values[b][0] = range.High;
+					Values[b + 1][0] = range.Low;
+					if (ShowMidpoint) Values[b + 2][0] = range.Mid; else Values[b + 2].Reset();
+				}
+				else
+				{
+					Values[b].Reset(); Values[b + 1].Reset(); Values[b + 2].Reset();
+				}
+			}
+
+			OrRange rth = sessions[SessionRth].Latest;
+			double step = resolvedExtensionStep;
+			bool extActive = ShowPriceLabels && ExtensionsEnabled && RthEnabled && rth != null && rth.IsValid && step > 0
+				&& barChartTime > rth.AnchorTime && barChartTime <= GetRthCloseChartTime(rth);
+			for (int k = 0; k < MaxScaleMarkerLevels; k++)
+			{
+				if (extActive && k < rth.ExtUp) Values[ExtUpPlotBase + k][0] = rth.High + (k + 1) * step; else Values[ExtUpPlotBase + k].Reset();
+				if (extActive && k < rth.ExtDn) Values[ExtDnPlotBase + k][0] = rth.Low - (k + 1) * step; else Values[ExtDnPlotBase + k].Reset();
+			}
 		}
 
 		/// <summary>
@@ -376,6 +478,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			OrRange rth = sessions[SessionRth].Latest;
 			if (rth == null || !rth.IsValid || barChartTime <= rth.AnchorTime)
 				return;
+			// Touches after the RTH close (Globex) do not unlock levels; the extensions end at the close.
+			if (barChartTime > GetRthCloseChartTime(rth))
+				return;
 
 			double step = resolvedExtensionStep;
 			if (step <= 0)
@@ -405,7 +510,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			try
 			{
-				base.OnRender(cc, cs);
+				// base.OnRender is intentionally skipped: the plots exist only for native price-scale tags
+				// and must not be drawn as lines in the pane.
 				if (cc == null || cs == null || ChartBars == null || ChartPanel == null || RenderTarget == null || sessions == null)
 					return;
 				EnsureDx();
@@ -501,12 +607,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 							DrawVerticalJoin(startX, cs.GetYByValue(prev.Mid), cs.GetYByValue(range.Mid), midBrush, MidLineWidth, panelTop, panelBottom);
 					}
 
-					if (i == last && ShowPriceLabels && dxLabelFormat != null)
+					if (i == last && ShowWordLabels && dxLabelFormat != null)
 					{
-						DrawLabel(session.Label + " OR-H", range.High, yHigh, hlBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
-						DrawLabel(session.Label + " OR-L", range.Low, yLow, hlBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
+						DrawLabel(session.Label + " OR-H", yHigh, hlBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
+						DrawLabel(session.Label + " OR-L", yLow, hlBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
 						if (ShowMidpoint && midBrush != null)
-							DrawLabel(session.Label + " OR-M", range.Mid, cs.GetYByValue(range.Mid), midBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
+							DrawLabel(session.Label + " OR-M", cs.GetYByValue(range.Mid), midBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
 					}
 				}
 
@@ -535,8 +641,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (!range.IsValid)
 					continue;
 
+				// Extensions live inside RTH only: end at the RTH close (or the next RTH range if that comes first).
+				DateTime closeTime = GetRthCloseChartTime(range);
+				bool closed = lastPrimaryTime != DateTime.MinValue && closeTime <= lastPrimaryTime;
 				float startX = cc.GetXByTime(range.AnchorTime);
-				float endX = i < last ? cc.GetXByTime(ranges[i + 1].AnchorTime) : panelRight;
+				float endX = closed ? cc.GetXByTime(closeTime) : panelRight;
+				if (i < last)
+				{
+					float nextX = cc.GetXByTime(ranges[i + 1].AnchorTime);
+					if (!float.IsNaN(nextX))
+						endX = Math.Min(endX, nextX);
+				}
 				if (float.IsNaN(startX) || float.IsNaN(endX))
 					continue;
 				if (endX < panelLeft || startX > panelRight)
@@ -547,15 +662,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (eX <= sX)
 					continue;
 
-				bool isLatest = i == last;
+				bool isLatest = i == last && !closed;
 				for (int level = 1; level <= range.ExtUp; level++)
 				{
 					double price = range.High + level * step;
 					float y = cs.GetYByValue(price);
 					if (IsYVisible(y, panelTop, panelBottom))
 						RenderTarget.DrawLine(new Vector2(sX, y), new Vector2(eX, y), upBrush, ExtensionLineWidth, stroke);
-					if (isLatest && ShowPriceLabels && dxLabelFormat != null)
-						DrawLabel("RTH EXT +" + level, price, y, upBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
+					if (isLatest && ShowWordLabels && dxLabelFormat != null)
+						DrawLabel("RTH EXT +" + level, y, upBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
 				}
 				for (int level = 1; level <= range.ExtDn; level++)
 				{
@@ -563,8 +678,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					float y = cs.GetYByValue(price);
 					if (IsYVisible(y, panelTop, panelBottom))
 						RenderTarget.DrawLine(new Vector2(sX, y), new Vector2(eX, y), dnBrush, ExtensionLineWidth, stroke);
-					if (isLatest && ShowPriceLabels && dxLabelFormat != null)
-						DrawLabel("RTH EXT -" + level, price, y, dnBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
+					if (isLatest && ShowWordLabels && dxLabelFormat != null)
+						DrawLabel("RTH EXT -" + level, y, dnBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
 				}
 			}
 		}
@@ -610,14 +725,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return panelRight;
 		}
 
-		private void DrawLabel(string name, double price, float y, DxSolidBrush brush, float anchorX, float panelLeft, float panelRight, float panelTop, float panelBottom)
+		// Word labels carry the level name only; prices live on the native right price scale.
+		private void DrawLabel(string text, float y, DxSolidBrush brush, float anchorX, float panelLeft, float panelRight, float panelTop, float panelBottom)
 		{
-			if (brush == null || dxLabelFormat == null || double.IsNaN(price) || float.IsNaN(y))
+			if (brush == null || dxLabelFormat == null || string.IsNullOrEmpty(text) || float.IsNaN(y))
 				return;
 			if (y < panelTop || y > panelBottom)
 				return;
 
-			string text = name + " " + FormatPrice(price);
 			float width = EstimateLabelWidth(text);
 			float height = LabelFontSize + 4f;
 			float x = anchorX;
@@ -626,11 +741,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			RectangleF rect = new RectangleF(x, y - height, width, height);
 			RenderTarget.DrawText(text, dxLabelFormat, rect, brush);
-		}
-
-		private string FormatPrice(double price)
-		{
-			return Instrument != null && Instrument.MasterInstrument != null ? Instrument.MasterInstrument.FormatPrice(price) : price.ToString("F2");
 		}
 
 		private float EstimateLabelWidth(string text)
@@ -747,28 +857,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty][Display(Name="Show Midpoint", Order=3, GroupName="01. Display")]
 		public bool ShowMidpoint { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Show Price Labels", Order=4, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Show Price Labels", Description="Price tags on the native right price scale (like Orca MGI Daily). Requires the indicator's Price markers setting to stay on.", Order=4, GroupName="01. Display")]
 		public bool ShowPriceLabels { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Connect Successive Ranges", Description="When off, each day's opening range is drawn on its own with no vertical join to the prior range.", Order=5, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Show Word Labels", Description="Level names (e.g. RTH OR-H, RTH EXT +1) drawn in the chart pane right of the last bar. Names only; prices come from Show Price Labels.", Order=5, GroupName="01. Display")]
+		public bool ShowWordLabels { get; set; }
+
+		[NinjaScriptProperty][Display(Name="Connect Successive Ranges", Description="When off, each day's opening range is drawn on its own with no vertical join to the prior range.", Order=6, GroupName="01. Display")]
 		public bool ConnectRanges { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Session Time Zone", Description="NewYork converts bar times from the NinjaTrader time zone to America/New_York. ChartTime uses bar times as-is.", Order=6, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Session Time Zone", Description="NewYork converts bar times from the NinjaTrader time zone to America/New_York. ChartTime uses bar times as-is.", Order=7, GroupName="01. Display")]
 		public OrcaOrTimeZoneMode TimeZoneMode { get; set; }
 
-		[NinjaScriptProperty][Range(1, 6)][Display(Name="Line Width", Order=7, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(1, 6)][Display(Name="Line Width", Order=8, GroupName="01. Display")]
 		public int LineWidth { get; set; }
 
-		[NinjaScriptProperty][Range(1, 6)][Display(Name="Midpoint Line Width", Order=8, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(1, 6)][Display(Name="Midpoint Line Width", Order=9, GroupName="01. Display")]
 		public int MidLineWidth { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Draw Behind Candles", Order=9, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Draw Behind Candles", Order=10, GroupName="01. Display")]
 		public bool DrawBehindCandles { get; set; }
 
-		[NinjaScriptProperty][Range(6, 24)][Display(Name="Label Font Size", Order=10, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(6, 24)][Display(Name="Word Label Font Size", Order=11, GroupName="01. Display")]
 		public int LabelFontSize { get; set; }
 
-		[NinjaScriptProperty][Range(0, 200)][Display(Name="Label X Offset", Order=11, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(0, 200)][Display(Name="Word Label X Offset", Order=12, GroupName="01. Display")]
 		public int LabelXOffset { get; set; }
 
 		// --- 02. RTH Open (default 09:30 NY) ---
@@ -776,10 +889,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool RthEnabled { get; set; }
 		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 09:30.", Order=2, GroupName="02. RTH Open")]
 		public TimeSpan RthOpenTime { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="02. RTH Open")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="RTH Close Time (New York)", Description="RTH extensions (lines, unlocks, scale tags) end here and never stretch into Globex. Default 16:15.", Order=3, GroupName="02. RTH Open")]
+		public TimeSpan RthCloseTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=4, GroupName="02. RTH Open")]
 		public WpfBrush RthColor { get; set; }
 		[Browsable(false)] public string RthColorSerializable { get { return Serialize.BrushToString(RthColor); } set { RthColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="02. RTH Open")]
+		[XmlIgnore][Display(Name="Mid Color", Order=5, GroupName="02. RTH Open")]
 		public WpfBrush RthMidColor { get; set; }
 		[Browsable(false)] public string RthMidColorSerializable { get { return Serialize.BrushToString(RthMidColor); } set { RthMidColor = Serialize.StringToBrush(value); } }
 
