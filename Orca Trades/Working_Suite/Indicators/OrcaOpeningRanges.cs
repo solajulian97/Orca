@@ -84,7 +84,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private const int BrushCount = SessionCount * 2 + 2;
 
 		private const int MaxRangesPerSession = 400;
-		private const int MaxSupportedExtensionLevels = 5;
+		// Extensions are unbounded by design (touch level N -> reveal N+1 forever). This is only a
+		// safety guard against a degenerate step (e.g. tiny Custom step on a huge move); rendering is
+		// done in OnRender, so NinjaTrader draw-object limits do not apply.
+		private const int MaxSupportedExtensionLevels = 250;
 		private const int SecondarySeriesIndex = 1;
 		private static readonly TimeSpan OrWindow = TimeSpan.FromSeconds(30);
 
@@ -127,7 +130,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				LabelFontSize = 10;
 				LabelXOffset = 6;
 
-				// Sessions (defaults follow the TradingView study)
+				// Sessions (defaults follow the TradingView study; times are New York)
+				RthOpenTime = new TimeSpan(9, 30, 0);
+				PmOpenTime = new TimeSpan(13, 30, 0);
+				GlobexOpenTime = new TimeSpan(18, 0, 0);
+				TokyoOpenTime = new TimeSpan(20, 0, 0);
+				MidnightOpenTime = new TimeSpan(0, 0, 0);
+				LondonOpenTime = new TimeSpan(3, 0, 0);
+				GoldOpenTime = new TimeSpan(8, 20, 0);
+
 				RthEnabled = true;      RthColor = WpfBrushes.Aqua;                          RthMidColor = WpfBrushes.Yellow;
 				PmEnabled = true;       PmColor = MakeBrush(0x20, 0xB2, 0xAA);               PmMidColor = MakeBrush(0x40, 0xE0, 0xD0);
 				GlobexEnabled = true;   GlobexColor = WpfBrushes.Orange;                     GlobexMidColor = WpfBrushes.Fuchsia;
@@ -142,7 +153,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				CustomExtensionStep = 15.0;
 				ExpansionTrigger = OrcaOrExpansionTrigger.BothSides;
 				InitialExtensionLevels = 2;
-				MaxExtensionLevels = 3;
 				ExtensionLineStyle = OrcaOrLineStyle.Dashed;
 				ExtensionLineWidth = 1;
 				ExtensionUpColor = MakeBrush(0x00, 0xE6, 0x76);
@@ -196,13 +206,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void BuildSessions()
 		{
 			sessions = new OrSession[SessionCount];
-			sessions[SessionRth]      = new OrSession { Label = "RTH",      OpenTime = new TimeSpan(9, 30, 0),  HlBrush = SessionRth * 2,      MidBrush = SessionRth * 2 + 1 };
-			sessions[SessionPm]       = new OrSession { Label = "PM",       OpenTime = new TimeSpan(13, 30, 0), HlBrush = SessionPm * 2,       MidBrush = SessionPm * 2 + 1 };
-			sessions[SessionGlobex]   = new OrSession { Label = "GLOBEX",   OpenTime = new TimeSpan(18, 0, 0),  HlBrush = SessionGlobex * 2,   MidBrush = SessionGlobex * 2 + 1 };
-			sessions[SessionTokyo]    = new OrSession { Label = "TOKYO",    OpenTime = new TimeSpan(20, 0, 0),  HlBrush = SessionTokyo * 2,    MidBrush = SessionTokyo * 2 + 1 };
-			sessions[SessionMidnight] = new OrSession { Label = "MIDNIGHT", OpenTime = new TimeSpan(0, 0, 0),   HlBrush = SessionMidnight * 2, MidBrush = SessionMidnight * 2 + 1 };
-			sessions[SessionLondon]   = new OrSession { Label = "LONDON",   OpenTime = new TimeSpan(3, 0, 0),   HlBrush = SessionLondon * 2,   MidBrush = SessionLondon * 2 + 1 };
-			sessions[SessionGold]     = new OrSession { Label = "GOLD",     OpenTime = new TimeSpan(8, 20, 0),  HlBrush = SessionGold * 2,     MidBrush = SessionGold * 2 + 1 };
+			sessions[SessionRth]      = new OrSession { Label = "RTH",      OpenTime = NormalizeOpenTime(RthOpenTime),      HlBrush = SessionRth * 2,      MidBrush = SessionRth * 2 + 1 };
+			sessions[SessionPm]       = new OrSession { Label = "PM",       OpenTime = NormalizeOpenTime(PmOpenTime),       HlBrush = SessionPm * 2,       MidBrush = SessionPm * 2 + 1 };
+			sessions[SessionGlobex]   = new OrSession { Label = "GLOBEX",   OpenTime = NormalizeOpenTime(GlobexOpenTime),   HlBrush = SessionGlobex * 2,   MidBrush = SessionGlobex * 2 + 1 };
+			sessions[SessionTokyo]    = new OrSession { Label = "TOKYO",    OpenTime = NormalizeOpenTime(TokyoOpenTime),    HlBrush = SessionTokyo * 2,    MidBrush = SessionTokyo * 2 + 1 };
+			sessions[SessionMidnight] = new OrSession { Label = "MIDNIGHT", OpenTime = NormalizeOpenTime(MidnightOpenTime), HlBrush = SessionMidnight * 2, MidBrush = SessionMidnight * 2 + 1 };
+			sessions[SessionLondon]   = new OrSession { Label = "LONDON",   OpenTime = NormalizeOpenTime(LondonOpenTime),   HlBrush = SessionLondon * 2,   MidBrush = SessionLondon * 2 + 1 };
+			sessions[SessionGold]     = new OrSession { Label = "GOLD",     OpenTime = NormalizeOpenTime(GoldOpenTime),     HlBrush = SessionGold * 2,     MidBrush = SessionGold * 2 + 1 };
+		}
+
+		private static TimeSpan NormalizeOpenTime(TimeSpan value)
+		{
+			// Keep the open inside a single day and drop sub-second parts so it lines up with 30s bar boundaries.
+			long ticks = value.Ticks % TimeSpan.TicksPerDay;
+			if (ticks < 0) ticks += TimeSpan.TicksPerDay;
+			ticks -= ticks % TimeSpan.TicksPerSecond;
+			return TimeSpan.FromTicks(ticks);
 		}
 
 		private bool IsSessionEnabled(int idx)
@@ -252,8 +271,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return !string.IsNullOrEmpty(source) && source.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
 		}
 
-		private int ClampedInitialLevels => Math.Max(1, Math.Min(InitialExtensionLevels, ClampedMaxLevels));
-		private int ClampedMaxLevels => Math.Max(1, Math.Min(MaxExtensionLevels, MaxSupportedExtensionLevels));
+		private int ClampedInitialLevels => Math.Max(1, Math.Min(InitialExtensionLevels, MaxSupportedExtensionLevels));
 		#endregion
 
 		#region Time Helpers
@@ -344,8 +362,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		/// <summary>
 		/// Progressive reveal: touching the highest currently revealed level (level N) reveals level N+1,
-		/// up to MaxExtensionLevels. BothSides shares one count across both sides (a touch on either side
-		/// reveals the next level on both); EachSideIndividually tracks the sides separately.
+		/// indefinitely (2 -> 3 -> 4 -> ...). BothSides shares one count across both sides (a touch on
+		/// either side reveals the next level on both); EachSideIndividually tracks the sides separately.
 		/// </summary>
 		private void UpdateExtensionUnlocks(DateTime barChartTime, double high, double low)
 		{
@@ -360,7 +378,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (step <= 0)
 				return;
 
-			int max = ClampedMaxLevels;
+			int max = MaxSupportedExtensionLevels;
 			if (ExpansionTrigger == OrcaOrExpansionTrigger.BothSides)
 			{
 				int count = Math.Max(rth.ExtUp, rth.ExtDn);
@@ -738,73 +756,87 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty][Range(0, 200)][Display(Name="Label X Offset", Order=11, GroupName="01. Display")]
 		public int LabelXOffset { get; set; }
 
-		// --- 02. RTH 09:30 ---
-		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="02. RTH 09:30")]
+		// --- 02. RTH Open (default 09:30 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="02. RTH Open")]
 		public bool RthEnabled { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=2, GroupName="02. RTH 09:30")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 09:30.", Order=2, GroupName="02. RTH Open")]
+		public TimeSpan RthOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="02. RTH Open")]
 		public WpfBrush RthColor { get; set; }
 		[Browsable(false)] public string RthColorSerializable { get { return Serialize.BrushToString(RthColor); } set { RthColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=3, GroupName="02. RTH 09:30")]
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="02. RTH Open")]
 		public WpfBrush RthMidColor { get; set; }
 		[Browsable(false)] public string RthMidColorSerializable { get { return Serialize.BrushToString(RthMidColor); } set { RthMidColor = Serialize.StringToBrush(value); } }
 
-		// --- 03. PM Open 13:30 ---
-		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="03. PM Open 13:30")]
+		// --- 03. PM Open Open (default 13:30 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="03. PM Open Open")]
 		public bool PmEnabled { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=2, GroupName="03. PM Open 13:30")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 13:30.", Order=2, GroupName="03. PM Open Open")]
+		public TimeSpan PmOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="03. PM Open Open")]
 		public WpfBrush PmColor { get; set; }
 		[Browsable(false)] public string PmColorSerializable { get { return Serialize.BrushToString(PmColor); } set { PmColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=3, GroupName="03. PM Open 13:30")]
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="03. PM Open Open")]
 		public WpfBrush PmMidColor { get; set; }
 		[Browsable(false)] public string PmMidColorSerializable { get { return Serialize.BrushToString(PmMidColor); } set { PmMidColor = Serialize.StringToBrush(value); } }
 
-		// --- 04. Globex 18:00 ---
-		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="04. Globex 18:00")]
+		// --- 04. Globex Open (default 18:00 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="04. Globex Open")]
 		public bool GlobexEnabled { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=2, GroupName="04. Globex 18:00")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 18:00.", Order=2, GroupName="04. Globex Open")]
+		public TimeSpan GlobexOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="04. Globex Open")]
 		public WpfBrush GlobexColor { get; set; }
 		[Browsable(false)] public string GlobexColorSerializable { get { return Serialize.BrushToString(GlobexColor); } set { GlobexColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=3, GroupName="04. Globex 18:00")]
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="04. Globex Open")]
 		public WpfBrush GlobexMidColor { get; set; }
 		[Browsable(false)] public string GlobexMidColorSerializable { get { return Serialize.BrushToString(GlobexMidColor); } set { GlobexMidColor = Serialize.StringToBrush(value); } }
 
-		// --- 05. Tokyo 20:00 ---
-		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="05. Tokyo 20:00")]
+		// --- 05. Tokyo Open (default 20:00 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="05. Tokyo Open")]
 		public bool TokyoEnabled { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=2, GroupName="05. Tokyo 20:00")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 20:00.", Order=2, GroupName="05. Tokyo Open")]
+		public TimeSpan TokyoOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="05. Tokyo Open")]
 		public WpfBrush TokyoColor { get; set; }
 		[Browsable(false)] public string TokyoColorSerializable { get { return Serialize.BrushToString(TokyoColor); } set { TokyoColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=3, GroupName="05. Tokyo 20:00")]
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="05. Tokyo Open")]
 		public WpfBrush TokyoMidColor { get; set; }
 		[Browsable(false)] public string TokyoMidColorSerializable { get { return Serialize.BrushToString(TokyoMidColor); } set { TokyoMidColor = Serialize.StringToBrush(value); } }
 
-		// --- 06. Midnight 00:00 ---
-		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="06. Midnight 00:00")]
+		// --- 06. Midnight Open (default 00:00 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="06. Midnight Open")]
 		public bool MidnightEnabled { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=2, GroupName="06. Midnight 00:00")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 00:00.", Order=2, GroupName="06. Midnight Open")]
+		public TimeSpan MidnightOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="06. Midnight Open")]
 		public WpfBrush MidnightColor { get; set; }
 		[Browsable(false)] public string MidnightColorSerializable { get { return Serialize.BrushToString(MidnightColor); } set { MidnightColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=3, GroupName="06. Midnight 00:00")]
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="06. Midnight Open")]
 		public WpfBrush MidnightMidColor { get; set; }
 		[Browsable(false)] public string MidnightMidColorSerializable { get { return Serialize.BrushToString(MidnightMidColor); } set { MidnightMidColor = Serialize.StringToBrush(value); } }
 
-		// --- 07. London 03:00 ---
-		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="07. London 03:00")]
+		// --- 07. London Open (default 03:00 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="07. London Open")]
 		public bool LondonEnabled { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=2, GroupName="07. London 03:00")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 03:00.", Order=2, GroupName="07. London Open")]
+		public TimeSpan LondonOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="07. London Open")]
 		public WpfBrush LondonColor { get; set; }
 		[Browsable(false)] public string LondonColorSerializable { get { return Serialize.BrushToString(LondonColor); } set { LondonColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=3, GroupName="07. London 03:00")]
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="07. London Open")]
 		public WpfBrush LondonMidColor { get; set; }
 		[Browsable(false)] public string LondonMidColorSerializable { get { return Serialize.BrushToString(LondonMidColor); } set { LondonMidColor = Serialize.StringToBrush(value); } }
 
-		// --- 08. Gold 08:20 ---
-		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="08. Gold 08:20")]
+		// --- 08. Gold Open (default 08:20 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="08. Gold Open")]
 		public bool GoldEnabled { get; set; }
-		[XmlIgnore][Display(Name="High/Low Color", Order=2, GroupName="08. Gold 08:20")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 08:20.", Order=2, GroupName="08. Gold Open")]
+		public TimeSpan GoldOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="08. Gold Open")]
 		public WpfBrush GoldColor { get; set; }
 		[Browsable(false)] public string GoldColorSerializable { get { return Serialize.BrushToString(GoldColor); } set { GoldColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="Mid Color", Order=3, GroupName="08. Gold 08:20")]
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="08. Gold Open")]
 		public WpfBrush GoldMidColor { get; set; }
 		[Browsable(false)] public string GoldMidColorSerializable { get { return Serialize.BrushToString(GoldMidColor); } set { GoldMidColor = Serialize.StringToBrush(value); } }
 
@@ -821,23 +853,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty][Display(Name="Expansion Trigger", Description="Both Sides: touching the last revealed level on either side reveals the next level on both sides. Each Side Individually: each side unlocks on its own touches.", Order=4, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public OrcaOrExpansionTrigger ExpansionTrigger { get; set; }
 
-		[NinjaScriptProperty][Range(1, 5)][Display(Name="Initial Levels Per Side", Description="Extension levels shown as soon as the RTH opening range prints.", Order=5, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Range(1, 20)][Display(Name="Initial Levels Per Side", Description="Extension levels shown as soon as the RTH opening range prints. Touching the highest revealed level always reveals the next one; there is no upper limit.", Order=5, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public int InitialExtensionLevels { get; set; }
 
-		[NinjaScriptProperty][Range(1, 5)][Display(Name="Max Levels Per Side", Description="Touching the highest revealed level reveals the next one, up to this many.", Order=6, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
-		public int MaxExtensionLevels { get; set; }
-
-		[NinjaScriptProperty][Display(Name="Line Style", Order=7, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Display(Name="Line Style", Order=6, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public OrcaOrLineStyle ExtensionLineStyle { get; set; }
 
-		[NinjaScriptProperty][Range(1, 4)][Display(Name="Line Width", Order=8, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Range(1, 4)][Display(Name="Line Width", Order=7, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public int ExtensionLineWidth { get; set; }
 
-		[XmlIgnore][Display(Name="Upper Extensions", Order=9, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[XmlIgnore][Display(Name="Upper Extensions", Order=8, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public WpfBrush ExtensionUpColor { get; set; }
 		[Browsable(false)] public string ExtensionUpColorSerializable { get { return Serialize.BrushToString(ExtensionUpColor); } set { ExtensionUpColor = Serialize.StringToBrush(value); } }
 
-		[XmlIgnore][Display(Name="Lower Extensions", Order=10, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[XmlIgnore][Display(Name="Lower Extensions", Order=9, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public WpfBrush ExtensionDownColor { get; set; }
 		[Browsable(false)] public string ExtensionDownColorSerializable { get { return Serialize.BrushToString(ExtensionDownColor); } set { ExtensionDownColor = Serialize.StringToBrush(value); } }
 		#endregion
