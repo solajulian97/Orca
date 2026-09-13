@@ -90,6 +90,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                     dispatcher.ShutdownStarted += OnShutdown; hooked = true;
                     started = Stopwatch.GetTimestamp();
                     request = new BarsRequest(instrument, SampleLimit);
+                    // Count-back construction supplied 2099-12-01 in the observed run;
+                    // Request replaced that unresolved endpoint with its current clock.
+                    // Own an explicit local endpoint before freezing configuration instead.
+                    // Keep comparing it strictly after loading; this is not UTC coverage.
+                    request.ToLocal = DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, localTimezone), DateTimeKind.Unspecified);
                     request.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1, MarketDataType = MarketDataType.Last };
                     request.TradingHours = hours;
                     request.MergePolicy = MergePolicy.DoNotMerge;
@@ -100,6 +105,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                     Output("starting requested=1000 Last-Tick-1; instrument=" + Brief(configuration.FullContract)
                         + "; lookup=Repository; merge=DoNotMerge; timeout=30s; eventClock=" + Brief(eventTimezone.Id)
                         + "; requestClock=" + Brief(localTimezone.Id) + "; published=0; UTC-range-confirmed=false");
+                    Output("request-end explicit=True ToLocal=" + request.ToLocal.ToString("O", CultureInfo.InvariantCulture)
+                        + " kind=" + request.ToLocal.Kind + "; BarsBack=" + request.BarsBack + "; guard=STRICT");
                     timer = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
                     timer.Interval = TimeSpan.FromSeconds(30); timer.Tick += OnTimeout; timer.Start();
                     if (Volatile.Read(ref stopRequested) != 0) { Cleanup("CANCELLED_BEFORE_REQUEST"); return; }

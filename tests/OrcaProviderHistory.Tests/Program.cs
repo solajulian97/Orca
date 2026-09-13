@@ -48,6 +48,26 @@ static class Program
         probe.SetState(State.Realtime); probe.Instrument.Dispatcher.Drain();
         Check(BarsRequest.All.Count == 1, "no automatic rerun"); Released(probe, request);
 
+        probe = Create(); bool constructorPlaceholder = false;
+        DateTime earliestEnd = DateTime.UtcNow;
+        BarsRequest.OnCreate = r =>
+        {
+            constructorPlaceholder = r.ToLocal == new DateTime(2099, 12, 1);
+            r.OnRequest = b =>
+            {
+                // Model the observed sentinel-resolution path, not a universal platform guarantee.
+                if (b.ToLocal == new DateTime(2099, 12, 1)) b.ToLocal = DateTime.SpecifyKind(DateTime.Now, DateTimeKind.Unspecified);
+                b.Bars.Rows.Add(new Row()); b.Complete();
+            };
+        };
+        probe.Instrument.Dispatcher.Drain(); request = BarsRequest.All.Single();
+        DateTime explicitEndUtc = TimeZoneInfo.ConvertTimeToUtc(request.ToLocal, TimeZoneInfo.Local);
+        Check(constructorPlaceholder && request.ToLocal.Kind == DateTimeKind.Unspecified
+            && explicitEndUtc >= earliestEnd && explicitEndUtc <= DateTime.UtcNow, "explicit endpoint replaces constructor sentinel before request");
+        Check(request.BarsBack == 1000 && Has("request-end explicit=True") && Has("guard=STRICT")
+            && Has("configurationUnchanged=True") && Has("returned=1 inspected=1"), "sentinel resolution no longer trips guard when explicit end is honored");
+        Released(probe, request);
+
         foreach (bool timeout in new[] { false, true })
         {
             probe = Create(); var captured = probe;
@@ -91,7 +111,7 @@ static class Program
             probe.Instrument.Dispatcher.Drain(); request = BarsRequest.All.Single();
             Check(!Has("sample-summary") && Has("CANCELLED_DURING_REQUEST"), "reentrant cancellation prevents inspection"); Released(probe, request);
         }
-        foreach (string kind in new[] { "timeout", "remove", "shutdown", "error", "queued-remove", "mutate", "foreign", "read", "read-remove", "queue" })
+        foreach (string kind in new[] { "timeout", "remove", "shutdown", "error", "queued-remove", "mutate", "end-mutate", "foreign", "read", "read-remove", "queue" })
         {
             probe = Create(); probe.Instrument.Dispatcher.Drain(); request = BarsRequest.All.Single();
             if (kind == "timeout") DispatcherTimer.All.Single().Fire();
@@ -99,6 +119,7 @@ static class Program
             else if (kind == "shutdown") probe.Instrument.Dispatcher.Shutdown();
             else if (kind == "error") request.Complete(ErrorCode.Panic);
             else if (kind == "mutate") { request.LookupPolicy = LookupPolicies.Provider; request.Complete(); }
+            else if (kind == "end-mutate") { request.ToLocal = request.ToLocal.AddTicks(1); request.Complete(); }
             else if (kind == "foreign") request.Callback(new BarsRequest(), ErrorCode.NoError, "foreign");
             else if (kind == "read") { request.Bars.Rows.Add(new Row()); request.Bars.ThrowAt = 0; request.Complete(); }
             else if (kind == "read-remove")
@@ -109,6 +130,8 @@ static class Program
             probe.Instrument.Dispatcher.Drain();
             if (kind == "mutate") Check(Has("configuration-change phase=before-inspection field=LookupPolicy before=Repository")
                 && Has("after=Provider") && !Has("sample-summary"), "guard reports exact changed request field before refusing inspection");
+            if (kind == "end-mutate") Check(Has("configuration-change phase=before-inspection field=ToLocal.Ticks")
+                && !Has("sample-summary"), "even one tick change in explicit endpoint remains rejected");
             Check(!Has("configurationUnchanged=True"), "incomplete outcome cannot claim successful observation: " + kind); Released(probe, request);
         }
         probe = Create(); BarsRequest.OnCreate = r => r.OnRequest = b => { b.Complete(); throw new Exception("after callback"); };

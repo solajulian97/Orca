@@ -29,7 +29,7 @@ if (args.Contains("--metadata") || args.Contains("--history-metadata"))
     {
         var type = compilation.GetTypeByMetadataName(name);
         Console.WriteLine(name);
-        if (type != null) foreach (var member in type.GetMembers().OfType<IPropertySymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public)) Console.WriteLine(member.Type.ToDisplayString() + " " + member.Name);
+        if (type != null) foreach (var member in type.GetMembers().OfType<IPropertySymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public)) Console.WriteLine(member.Type.ToDisplayString() + " " + member.Name + " setter=" + (member.SetMethod == null ? "none" : member.SetMethod.DeclaredAccessibility.ToString()));
         if (type != null && type.TypeKind == TypeKind.Enum) foreach (var member in type.GetMembers().OfType<IFieldSymbol>().Where(m => m.HasConstantValue)) Console.WriteLine(member.Name + "=" + member.ConstantValue);
         if (type != null) foreach (var member in type.GetMembers().OfType<IMethodSymbol>().Where(m => m.DeclaredAccessibility == Accessibility.Public && m.MethodKind == MethodKind.Ordinary && (m.Name.Contains("Connection") || m.Name.Contains("Request")))) Console.WriteLine(member.ToDisplayString());
     }

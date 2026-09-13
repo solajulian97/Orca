@@ -71,7 +71,7 @@ namespace NinjaTrader.Data
         public bool InsideRequest, DisposedInsideRequest, ThrowDispose;
         public BarsRequest() { }
         public BarsRequest(NinjaTrader.Cbi.Instrument instrument, int count)
-        { Instrument = instrument; BarsBack = count; All.Add(this); OnCreate?.Invoke(this); }
+        { Instrument = instrument; BarsBack = count; ToLocal = new DateTime(2099, 12, 1); All.Add(this); OnCreate?.Invoke(this); }
         public void Request(Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> callback)
         {
             Requests++; Callback = callback; InsideRequest = true;
