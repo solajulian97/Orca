@@ -107,6 +107,8 @@ static class Program
             { probe.Instrument.Dispatcher.ThrowQueue = true; request.Complete(); probe.Instrument.Dispatcher.ThrowQueue = false; DispatcherTimer.All.Single().Fire(); }
             else { request.Complete(); probe.SetState(State.Terminated); } // cancellation wins over queued completion
             probe.Instrument.Dispatcher.Drain();
+            if (kind == "mutate") Check(Has("configuration-change phase=before-inspection field=LookupPolicy before=Repository")
+                && Has("after=Provider") && !Has("sample-summary"), "guard reports exact changed request field before refusing inspection");
             Check(!Has("configurationUnchanged=True"), "incomplete outcome cannot claim successful observation: " + kind); Released(probe, request);
         }
         probe = Create(); BarsRequest.OnCreate = r => r.OnRequest = b => { b.Complete(); throw new Exception("after callback"); };

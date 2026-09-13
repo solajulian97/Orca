@@ -185,6 +185,20 @@ static class ProviderHistoryConfigurationTests
         Reject(check, () => OrcaProviderHistoryConfigurationCapture.Capture(Request(), null, TimeZoneInfo.Utc));
         Reject(check, () => OrcaProviderHistoryConfigurationCapture.Capture(Request(), TimeZoneInfo.Utc, null));
         Reject(check, () => Identity(frozen, null));
+        var diagnostics = new List<string>();
+        var stable = Request(); var baseline = Capture(stable);
+        baseline.RequireUnchanged(stable, TimeZoneInfo.Utc, TimeZoneInfo.Utc, diagnostics.Add);
+        check(diagnostics.Count == 0, "unchanged configuration emits no difference output");
+        stable.FromLocal = stable.FromLocal.AddDays(-1);
+        stable.ToLocal = DateTime.SpecifyKind(stable.ToLocal, DateTimeKind.Utc);
+        Reject(check, () => baseline.RequireUnchanged(stable, TimeZoneInfo.Utc, TimeZoneInfo.Utc, diagnostics.Add));
+        check(diagnostics.Exists(s => s.Contains("field=FromLocal.Ticks before=2026-09-08") && s.Contains("after=2026-09-07")), "exact count-back/date changes named and formatted");
+        check(diagnostics.Exists(s => s.Contains("field=ToLocal.Kind before=Unspecified after=Utc")), "date kind changes separately visible");
+        check(diagnostics.Count == 3 && diagnostics[2].Contains("changedFields=2 reportedFields=2"), "only changed fields plus bounded summary");
+        diagnostics.Clear(); stable = Request(); baseline = Capture(stable);
+        foreach (var mutate in mutations) mutate(stable);
+        Reject(check, () => baseline.RequireUnchanged(stable, TimeZoneInfo.Utc, TimeZoneInfo.Utc, diagnostics.Add));
+        check(diagnostics.Count <= 13 && diagnostics[diagnostics.Count - 1].Contains("guard=REJECT"), "difference output bounded without relaxing guard");
     }
     static void Reject(Action<bool, string> check, Action action)
     {

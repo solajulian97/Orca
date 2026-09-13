@@ -33,9 +33,73 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
 
         public void RequireUnchanged(BarsRequest request, TimeZoneInfo eventTimezone, TimeZoneInfo requestLocalTimezone)
+        { RequireUnchanged(request, eventTimezone, requestLocalTimezone, null); }
+
+        // Diagnostics only: keep the canonical identity and rejection policy unchanged.
+        // Report from the same two validated snapshots that failed comparison, not a third read.
+        public void RequireUnchanged(BarsRequest request, TimeZoneInfo eventTimezone, TimeZoneInfo requestLocalTimezone,
+            Action<string> reportDifference)
         {
-            if (!string.Equals(Definition, Capture(request, eventTimezone, requestLocalTimezone).Definition, StringComparison.Ordinal))
+            var current = Capture(request, eventTimezone, requestLocalTimezone);
+            if (!string.Equals(Definition, current.Definition, StringComparison.Ordinal))
+            {
+                if (reportDifference != null) ReportDifferences(Definition, current.Definition, reportDifference);
                 throw new InvalidOperationException("Historical request configuration no longer matches its captured identity.");
+            }
+        }
+
+        private static void ReportDifferences(string before, string after, Action<string> report)
+        {
+            string[] names = { "FullContract", "Expiry.Ticks", "Expiry.Kind", "InstrumentType", "TickSize.Bits", "PointValue.Bits",
+                "Series", "MergePolicy", "LookupPolicy", "IsDividendAdjusted", "IsSplitAdjusted", "IsResetOnNewTradingDay",
+                "RequestMode", "BarsBack", "FromLocal.Ticks", "FromLocal.Kind", "ToLocal.Ticks", "ToLocal.Kind",
+                "RequestClockDefinition", "SessionDefinition", "EventClockDefinition", "RolloverCountOrNotApplied" };
+            var oldFields = ReadFields(before); var newFields = ReadFields(after);
+            int changed = 0, emitted = 0, count = Math.Max(oldFields.Count, newFields.Count);
+            for (int i = 0; i < count; i++)
+            {
+                string oldValue = i < oldFields.Count ? oldFields[i] : "<absent>";
+                string newValue = i < newFields.Count ? newFields[i] : "<absent>";
+                if (string.Equals(oldValue, newValue, StringComparison.Ordinal)) continue;
+                changed++;
+                if (emitted >= 12) continue;
+                string name = i < names.Length ? names[i] : "Rollover[" + ((i - names.Length) / 5) + "]."
+                    + new[] { "ContractMonth.Ticks", "ContractMonth.Kind", "Date.Ticks", "Date.Kind", "Offset.Bits" }[(i - names.Length) % 5];
+                report("field=" + name + " before=" + DescribeValue(name, oldValue) + " after=" + DescribeValue(name, newValue));
+                emitted++;
+            }
+            report("changedFields=" + changed.ToString(CultureInfo.InvariantCulture) + " reportedFields=" + emitted.ToString(CultureInfo.InvariantCulture)
+                + "; guard=REJECT; valuesOver160Chars=truncated");
+        }
+
+        private static List<string> ReadFields(string definition)
+        {
+            int offset = "nt-futures-history-config-v1:".Length;
+            var result = new List<string>();
+            while (offset < definition.Length)
+            {
+                int separator = definition.IndexOf(':', offset);
+                int length = int.Parse(definition.Substring(offset, separator - offset), CultureInfo.InvariantCulture);
+                offset = separator + 1;
+                result.Add(definition.Substring(offset, length)); offset += length;
+            }
+            return result;
+        }
+
+        private static string DescribeValue(string name, string value)
+        {
+            long number;
+            if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number))
+            {
+                if (name.EndsWith(".Ticks", StringComparison.Ordinal)) return new DateTime(number).ToString("O", CultureInfo.InvariantCulture) + " ticks=" + value;
+                if (name.EndsWith(".Kind", StringComparison.Ordinal)) return ((DateTimeKind)number).ToString();
+                if (name.EndsWith(".Bits", StringComparison.Ordinal)) return BitConverter.Int64BitsToDouble(number).ToString("R", CultureInfo.InvariantCulture) + " bits=" + value;
+                if (name == "MergePolicy") return ((MergePolicy)number).ToString();
+                if (name == "LookupPolicy") return ((LookupPolicies)number).ToString() + " numeric=" + value;
+                if (name == "InstrumentType") return ((InstrumentType)number).ToString();
+            }
+            string safe = value.Replace('\r', ' ').Replace('\n', ' ');
+            return safe.Length <= 160 ? safe : safe.Substring(0, 160) + "... length=" + safe.Length.ToString(CultureInfo.InvariantCulture);
         }
 
         public OrcaProviderSourceIdentity CreateIdentity(OrcaProviderFeedLifetime owner, Guid historicalSnapshotId,

@@ -140,10 +140,12 @@ namespace NinjaTrader.NinjaScript.Indicators
                 {
                     if (!ReferenceEquals(completed, request)) throw new InvalidOperationException("Completion did not identify the owned request.");
                     if (error != ErrorCode.NoError) throw new InvalidOperationException("Platform error=" + error + "; " + message);
-                    configuration.RequireUnchanged(request, eventTimezone, localTimezone);
+                    configuration.RequireUnchanged(request, eventTimezone, localTimezone,
+                        detail => Output("configuration-change phase=before-inspection " + detail));
                     if (request.Bars == null) throw new InvalidOperationException("No Bars result.");
                     Inspect(request.Bars);
-                    configuration.RequireUnchanged(request, eventTimezone, localTimezone);
+                    configuration.RequireUnchanged(request, eventTimezone, localTimezone,
+                        detail => Output("configuration-change phase=after-inspection " + detail));
                     if (Volatile.Read(ref stopRequested) != 0) throw new OperationCanceledException("Removed during inspection.");
                     outcome = "OBSERVED";
                     Output("configurationUnchanged=True; observation-only; final bar may be developing; quote provenance and atomic snapshot unverified");
