@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using OrcaJournal.Core;
@@ -25,7 +25,7 @@ static class ExcursionChecks
   Price(b,90,10);b.OnFill(Fill("e5",1,92,0,11),"A");Check(trades[2].Mfe==25 && trades[2].Mae==0,"reversal starts fresh short excursion");
   b.OnFill(Fill("gap1",1,100,1,12),"A");Price(b,110,13);b.InvalidateIdentity("disconnect");b.OnFill(Fill("gap2",-1,105,0,14),"A");Check(!trades[3].Mfe.HasValue,"connection gap fails closed");
   b.OnFill(Fill("none1",1,100,1,15),"A");b.OnFill(Fill("none2",-1,105,0,16),"A");Check(!trades[4].Mfe.HasValue,"fills alone are not price coverage");
-  b.OnFill(Fill("late1",1,100,1,17),"A");Price(b,110,19);Price(b,90,18);b.OnFill(Fill("late2",-1,105,0,20),"A");Check(!trades[5].Mfe.HasValue,"out-of-order data fails closed");
+  b.OnFill(Fill("late1",1,100,1,17),"A");Price(b,110,19);Price(b,90,18);b.OnFill(Fill("late2",-1,105,0,20),"A");Check(trades[5].Mfe==50 && trades[5].Mae==0 && trades[5].ExcursionQuality.Contains("1 late price samples skipped"),"late marks skipped without erasing accepted extrema");
   b.OnFill(Fill("scope1",1,100,1,21),"A");b.OnPrice("MES DEC26",999,t.AddSeconds(22));b.OnFill(Fill("scope2",-1,105,0,23),"A");Check(!trades[6].Mfe.HasValue,"wrong contract cannot supply coverage");
   string root=Path.Combine(Path.GetTempPath(),"orca-excursions-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
   using(var db=new DatabaseManager(Path.Combine(root,"fixture.db"))){db.Initialize();var repo=new TradeRepository(db);repo.Insert(trades[1]);var saved=repo.GetById(trades[1].Id);Check(saved.Mfe==200 && saved.Mae==-100 && saved.ExcursionSamples==3,"excursion persistence");Check(saved.ExcursionStart==t.AddSeconds(4)&&saved.ExcursionEnd==t.AddSeconds(8),"coverage timestamps persisted");Check(saved.ExcursionQuality.Contains("sampled"),"quality survives reload");}
@@ -49,10 +49,15 @@ static class ExcursionChecks
   var jitter=new RoundTripExcursion();jitter.Fill(2,100,t,5);jitter.Observe(102,t.AddMilliseconds(100),5);jitter.Fill(-1,101,t.AddMilliseconds(90),5);jitter.Observe(103,t.AddMilliseconds(150),5);jitter.Fill(-1,102,t.AddMilliseconds(140),5);
   Check(jitter.Valid && jitter.Samples==2 && jitter.Mfe==20 && jitter.Mae==0,"cross-stream overlap retains callback-order estimate and fill inventory");
   Check(jitter.CrossStreamOverlaps==2 && jitter.Quality(true).StartsWith("Partial observed") && jitter.Quality(true).Contains("10 ms"),"cross-stream uncertainty is explicit");
-  var beforeFill=new RoundTripExcursion();beforeFill.Fill(1,100,t.AddMilliseconds(100),5);beforeFill.Observe(101,t.AddMilliseconds(90),5);Check(beforeFill.Valid && beforeFill.Quality(true).StartsWith("Partial"),"first price can precede fill timestamp on other source");
+  var beforeFill=new RoundTripExcursion();beforeFill.Fill(1,100,t.AddMilliseconds(100),5);beforeFill.Observe(101,t.AddMilliseconds(90),5);Check(beforeFill.Valid && beforeFill.Samples==0 && beforeFill.SkippedPrices==1,"pre-entry price cannot mark new inventory");
   var badFills=new RoundTripExcursion();badFills.Fill(1,100,t,5);badFills.Fill(1,101,t.AddMilliseconds(-1),5);Check(!badFills.Valid && badFills.FailureReason.Contains("execution timestamps"),"actual execution regression still invalidates");
-  var badPrices=new RoundTripExcursion();badPrices.Fill(1,100,t,5);badPrices.Observe(101,t.AddSeconds(2),5);badPrices.Observe(102,t.AddSeconds(1),5);Check(!badPrices.Valid && badPrices.FailureReason.Contains("price timestamps"),"actual price regression still invalidates");
+  var badPrices=new RoundTripExcursion();badPrices.Fill(1,100,t,5);badPrices.Observe(101,t.AddSeconds(2),5);badPrices.Observe(102,t.AddSeconds(1),5);Check(badPrices.Valid && badPrices.SkippedPrices==1 && badPrices.Mfe==5,"price regression does not change accepted extrema"); badPrices.Observe(999,t.AddMilliseconds(1500),5); Check(badPrices.SkippedPrices==2 && badPrices.Mfe==5,"high-water survives repeated stale samples"); badPrices.Observe(103,t.AddSeconds(3),5); Check(badPrices.Mfe==15 && badPrices.Samples==2,"capture resumes once price time catches up");
   Check(new Trade{HoldSeconds=107}.HoldDuration=="1m 47s" && new Trade{HoldSeconds=4312}.HoldDuration=="1h 11m 52s","spaced compact duration");
+  var mismatch=new TradeBuilder();var mismatchTrades=new List<Trade>();mismatch.TradeCompleted+=mismatchTrades.Add;
+  mismatch.OnFill(Fill("p0",1,100,1,0),"A");Price(mismatch,101,1);mismatch.OnFill(Fill("p1",-1,101,0,2),"A");
+  mismatch.OnFill(Fill("p2",1,100,2,3),"A");Price(mismatch,98,4);mismatch.OnFill(Fill("p3",-1,102,0,5),"A");
+  Check(mismatchTrades[1].Mae==-10 && mismatchTrades[1].Mfe==10 && mismatchTrades[1].ExcursionQuality.Contains("1 execution-position disagreements"),"known-boundary mismatch retains explicitly partial observed-fill estimate");
+  Check(mismatchTrades[1].TradeUid==null,"partial excursion never manufactures identity");
   Console.WriteLine("PASS: "+count+" excursion and title checks");
  }
 }

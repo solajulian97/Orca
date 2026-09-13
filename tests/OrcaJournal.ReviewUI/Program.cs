@@ -47,6 +47,15 @@ class Program
                 keep.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));root.UpdateLayout();
                 if(saves!=2 || new TradeReviewRepository(db).Read(t.Id).Notes!="My unsaved draft" || repo.GetById(t.Id).Notes!="A later chart edit")throw new Exception("Explicit resolution failed");
                 window.Close();
+                var reviewVm=new OrcaJournal.UI.ViewModels.TradesViewModel{ReviewRepository=new TradeReviewRepository(db)};
+                var pendingTrade=new Trade{Id=999,Account="SIM",SessionDate="2026-09-05",Instrument="MES",InstrumentFullName="MES SEP26",Direction="Long"};
+                reviewVm.FilterFrom=new DateTime(2026,9,5);reviewVm.FilterTo=reviewVm.FilterFrom;
+                reviewVm.Load(new[]{repo.GetById(t.Id),pendingTrade},tagRepo,new AttachmentRepository(db),new[]{"All Accounts","SIM"});
+                if(reviewVm.ReviewProgress!="1 / 2 trades have a saved review")throw new Exception("Saved review progress incorrect");
+                reviewVm.NextUnreviewedCommand.Execute(null);if(reviewVm.SelectedTrade!=pendingTrade)throw new Exception("Next review selection incorrect");
+                reviewVm.OnlyUnreviewed=true;if(reviewVm.Trades.Count!=1 || reviewVm.Trades[0]!=pendingTrade)throw new Exception("Unreviewed filter incorrect");
+                reviewVm.FilterAccount="OTHER";reviewVm.ApplyFilters();if(reviewVm.Trades.Count!=0 || reviewVm.NextUnreviewedCommand.CanExecute(null))throw new Exception("Review queue ignored account filter");
+                Console.WriteLine("PASS: saved-review progress and next-review queue respect review persistence and account filters.");
                 var mediaRepo=new AttachmentRepository(db);var attachment=new TradeAttachment{TradeId=t.Id,FilePath=Path.Combine(args[0],"example.png"),Kind="image",CreatedAt=DateTime.Now};mediaRepo.Insert(attachment);
                 var mediaWindow=new TradeMediaWindow(mediaRepo,t.Id,()=>{});
                 mediaWindow.WindowStartupLocation=WindowStartupLocation.Manual;mediaWindow.Left=-20000;mediaWindow.Top=-20000;mediaWindow.ShowActivated=false;mediaWindow.ShowInTaskbar=false;mediaWindow.Show();

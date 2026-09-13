@@ -1,4 +1,4 @@
-#region Using declarations
+﻿#region Using declarations
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -665,6 +665,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private bool disposed;
 		private int reconcileQueued;
 		private int healthCheckQueued;
+        private readonly SemaphoreSlim finalizationGate = new SemaphoreSlim(1, 1);
+        private int finalizationQueued;
+        private DateTime nextFinalizationUtc;
+        private void ScheduleFinalization()
+        {
+            lock(sync) { if(disposed || pendingCaptures.Count==0 || DateTime.UtcNow<nextFinalizationUtc)return; }
+            if(Interlocked.CompareExchange(ref finalizationQueued,1,0)!=0)return;
+            Task.Run(async () => {
+                try { await FinalizePendingCoreAsync(false).ConfigureAwait(false); }
+                catch(Exception ex) { OrcaTradeRecorderDiagnostics.Write("Background finalization: "+ex.Message); }
+                finally { lock(sync) nextFinalizationUtc=DateTime.UtcNow.AddSeconds(60); Interlocked.Exchange(ref finalizationQueued,0); }
+            });
+        }
 
 		public event EventHandler SnapshotChanged;
 
@@ -1130,13 +1143,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (armed) {
 				try {
 					await EnsureReplayBufferRunningAsync().ConfigureAwait(false);
-					SetStatus(OrcaTradeRecorderState.Armed, "Saved " + capture.ResultTitle + " — MP4 pending Disarm; armed for the next position");
+					SetStatus(OrcaTradeRecorderState.Armed, "Saved " + capture.ResultTitle + " — MP4 finalizes automatically; armed for the next position");
 				} catch (Exception ex) {
 					SetError("Trade footage was saved, but the replay buffer could not be rearmed", ex);
 					return;
 				}
 			}
-			OrcaTradeRecorderDiagnostics.Write("Trade capture stopped: " + capture.ResultTitle + "; gross P&L before commissions; raw footage preserved.");
+			ScheduleFinalization();
+            OrcaTradeRecorderDiagnostics.Write("Trade capture stopped: " + capture.ResultTitle + "; gross P&L before commissions; raw footage preserved.");
 		}
 
 		private async Task EnsureReplayBufferRunningAsync()
@@ -1273,22 +1287,37 @@ namespace NinjaTrader.NinjaScript.AddOns
 			string temporary = path + ".tmp";
 			string json = new JavaScriptSerializer { MaxJsonLength = 1024 * 1024 }.Serialize(capture);
 			File.WriteAllText(temporary, json, new UTF8Encoding(false));
-			if (File.Exists(path)) File.Copy(temporary, path, true); else File.Move(temporary, path);
+			if (File.Exists(path)) File.Replace(temporary, path, null); else File.Move(temporary, path);
 			if (File.Exists(temporary)) File.Delete(temporary);
 		}
 
-		private async Task FinalizePendingCoreAsync()
-		{
+		private async Task FinalizePendingCoreAsync(bool scanDisk = true)
+        {
+            await finalizationGate.WaitAsync().ConfigureAwait(false);
+            try { await FinalizePendingLockedAsync(scanDisk).ConfigureAwait(false); }
+            finally { finalizationGate.Release(); }
+        }
+        private async Task FinalizePendingLockedAsync(bool scanDisk)
+        {
 			OrcaTradeRecorderSettings local = GetSettings();
 			List<OrcaRecorderCaptureManifest> captures;
 			lock (sync) captures = pendingCaptures.ToList();
-			foreach (OrcaRecorderCaptureManifest capture in LoadPendingManifests(local.OutputDirectory))
+			foreach (OrcaRecorderCaptureManifest capture in scanDisk ? LoadPendingManifests(local.OutputDirectory) : Enumerable.Empty<OrcaRecorderCaptureManifest>())
 				if (!captures.Any(x => string.Equals(x.CaptureId, capture.CaptureId, StringComparison.OrdinalIgnoreCase))) captures.Add(capture);
 
 			foreach (OrcaRecorderCaptureManifest capture in captures) {
-				if (capture.RawSegments == null || capture.RawSegments.Count == 0)
-					continue;
+				if (capture.StoppedUtc==default(DateTime) || capture.StoppedUtc<=capture.StartedUtc || capture.RawSegments == null || capture.RawSegments.Count == 0 || string.Equals(capture.FinalizationStatus,"Complete",StringComparison.OrdinalIgnoreCase))
+                    continue;
+                // A bundle lease also covers a previous AddOn instance finishing during reload.
+                FileStream lease;
+                try { lease=new FileStream(Path.Combine(capture.BundleDirectory,"finalization.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None); }
+                catch(IOException) { continue; }
+                using(lease) {
 				try {
+                    var latest=new JavaScriptSerializer {MaxJsonLength=1024*1024}.Deserialize<OrcaRecorderCaptureManifest>(File.ReadAllText(Path.Combine(capture.BundleDirectory,"capture.json")));
+                    if(latest!=null && string.Equals(latest.FinalizationStatus,"Complete",StringComparison.OrdinalIgnoreCase)) {
+                        capture.FinalizationStatus=latest.FinalizationStatus;capture.FinalVideoPath=latest.FinalVideoPath;continue;
+                    }
 					await OrcaTradeRecorderFinalizer.FinalizeAsync(capture, local).ConfigureAwait(false);
 					OrcaTradeRecorderDiagnostics.Write("Finalized trade clip: " + capture.FinalVideoPath);
 				} catch (Exception ex) {
@@ -1299,6 +1328,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 					OrcaTradeRecorderDiagnostics.Write("Finalization failed for " + capture.CaptureId + ": " + ex.Message);
 				}
 			}
+            }
 			lock (sync) pendingCaptures.RemoveAll(x => string.Equals(x.FinalizationStatus, "Complete", StringComparison.OrdinalIgnoreCase));
 		}
 
@@ -1316,7 +1346,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 					capture = serializer.Deserialize<OrcaRecorderCaptureManifest>(File.ReadAllText(file));
 					capture.BundleDirectory = Path.GetDirectoryName(file);
 				} catch { }
-				if (capture != null && !string.Equals(capture.FinalizationStatus, "Complete", StringComparison.OrdinalIgnoreCase))
+				if (capture != null && capture.StoppedUtc>capture.StartedUtc && capture.StartedUtc!=default(DateTime) && !string.Equals(capture.FinalizationStatus, "Complete", StringComparison.OrdinalIgnoreCase))
 					yield return capture;
 			}
 		}
@@ -1325,7 +1355,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (disposed)
 				return;
-			bool localArmed;
+			ScheduleFinalization();
+            bool localArmed;
 			OrcaTradeRecorderState localState;
 			DateTime localTail;
 			DateTime healthAt;
@@ -1872,7 +1903,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 				throw new ArgumentNullException("capture");
 			if (string.IsNullOrWhiteSpace(settings.FfmpegPath) || !File.Exists(settings.FfmpegPath))
 				throw new FileNotFoundException("FFmpeg was not found. Raw segments remain preserved.", settings.FfmpegPath);
-			List<string> segments = capture.RawSegments.Where(File.Exists).ToList();
+			if(capture.StoppedUtc<=capture.StartedUtc || capture.StartedUtc==default(DateTime))
+                throw new InvalidDataException("Capture has no verified stop boundary; raw footage preserved.");
+            if(capture.RawSegments==null || capture.RawSegments.Any(path=>!File.Exists(path)))
+                throw new FileNotFoundException("A listed raw segment is missing; refusing to publish an incomplete clip.");
+            List<string> segments = capture.RawSegments.ToList();
 			if (segments.Count == 0)
 				throw new FileNotFoundException("No raw recording segments were found.");
 
@@ -1895,10 +1930,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 			string ffprobe = Path.Combine(Path.GetDirectoryName(settings.FfmpegPath), "ffprobe.exe");
 			if (!File.Exists(ffprobe))
 				throw new FileNotFoundException("ffprobe.exe is required to validate the final recording.", ffprobe);
-			ProcessResult probe = await RunProcessAsync(ffprobe, "-v error -show_entries stream=codec_type -of default=noprint_wrappers=1:nokey=1 " + Quote(partial), TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+			ProcessResult probe = await RunProcessAsync(ffprobe, "-v error -show_entries stream=codec_type:format=duration -of default=noprint_wrappers=1:nokey=1 " + Quote(partial), TimeSpan.FromSeconds(30)).ConfigureAwait(false);
 			if (probe.ExitCode != 0 || probe.Output.IndexOf("video", StringComparison.OrdinalIgnoreCase) < 0 || probe.Output.IndexOf("audio", StringComparison.OrdinalIgnoreCase) < 0)
 				throw new InvalidDataException("Final recording validation did not find both video and microphone audio streams.");
 
+            double duration;
+            if(!probe.Output.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries).Any(line=>double.TryParse(line,NumberStyles.Float,CultureInfo.InvariantCulture,out duration) && duration>0 && !double.IsInfinity(duration)))
+                throw new InvalidDataException("Final recording has no positive finite duration.");
 			if (File.Exists(final))
 				final = Path.Combine(bundle, finalStem + "__" + capture.CaptureId + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4");
 			File.Move(partial, final);
@@ -1923,13 +1961,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 						RedirectStandardError = true
 					};
 					process.Start();
-					string output = process.StandardOutput.ReadToEnd();
-					string error = process.StandardError.ReadToEnd();
+					Task<string> outputTask=process.StandardOutput.ReadToEndAsync();
+                    Task<string> errorTask=process.StandardError.ReadToEndAsync();
 					if (!process.WaitForExit((int)Math.Min(int.MaxValue, timeout.TotalMilliseconds))) {
 						try { process.Kill(); } catch { }
 						throw new TimeoutException(Path.GetFileName(executable) + " did not finish within " + timeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + " seconds.");
 					}
-					return new ProcessResult { ExitCode = process.ExitCode, Output = output ?? string.Empty, Error = error ?? string.Empty };
+					return new ProcessResult { ExitCode = process.ExitCode, Output = outputTask.GetAwaiter().GetResult() ?? string.Empty, Error = errorTask.GetAwaiter().GetResult() ?? string.Empty };
 				}
 			}).ConfigureAwait(false);
 		}
@@ -1940,7 +1978,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			string temporary = path + ".tmp";
 			string json = new JavaScriptSerializer { MaxJsonLength = 1024 * 1024 }.Serialize(capture);
 			File.WriteAllText(temporary, json, new UTF8Encoding(false));
-			if (File.Exists(path)) File.Copy(temporary, path, true); else File.Move(temporary, path);
+			if (File.Exists(path)) File.Replace(temporary, path, null); else File.Move(temporary, path);
 			if (File.Exists(temporary)) File.Delete(temporary);
 		}
 

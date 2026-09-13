@@ -31,6 +31,20 @@ internal static class VideoImportChecks
    // Two rows sharing an execution UID cannot be silently chosen.
    trade.Id=0;repo.Insert(trade);Write(root,m);report=new RecordingImportReport();Check(TradeRecordingImporter.Import(repo.GetAll(),media,root,report)==0 && report.ReviewNeeded==1,"duplicate candidate blocked");
    Check(repo.GetAll().All(t=>t.Notes=="preserve"),"annotations preserved");
-  }Console.WriteLine("PASS: "+checks+" video import checks");
+  }
+  using(var db=new DatabaseManager(Path.Combine(root,"observed.db"))){db.Initialize();var repo=new TradeRepository(db);var media=new AttachmentRepository(db);
+   var evidence=new ExecutionProvenance{Account="SIM",Instrument="MES SEP26",CompleteHistory=false,Allocations=new List<ExecutionAllocation>{new ExecutionAllocation{ExecutionId="o-entry",SignedQuantity=2},new ExecutionAllocation{ExecutionId="o-exit",SignedQuantity=-2}}};
+   var trade=new Trade{Account="SIM",Instrument="MES",InstrumentFullName="MES SEP26",Direction="Long",Quantity=2,EntryTime=DateTime.Today,ExitTime=DateTime.Today.AddMinutes(1),SessionDate=DateTime.Today.ToString("yyyy-MM-dd"),ProvenanceJson=ExecutionIdentity.Serialize(evidence)};repo.Insert(trade);
+   var ledger=new TradeRecordingImporter.RecorderTrade{Account=trade.Account,Instrument=trade.InstrumentFullName,Direction=trade.Direction,EntryQuantity=2,IsCompleteHistory=true,IdentityJson=trade.ProvenanceJson,ExecutionIds=new List<string>{"o-entry","o-exit"}};
+   var m=new TradeRecordingImporter.RecorderManifest{SchemaVersion=3,CaptureId="observed",FinalizationStatus="Complete",StartedUtc=DateTime.UtcNow.AddMinutes(-2),StoppedUtc=DateTime.UtcNow,FinalVideoPath=Path.Combine(root,"clip.mp4"),Trades=new List<TradeRecordingImporter.RecorderTrade>{ledger}};
+   Write(root,m);Check(TradeRecordingImporter.Import(repo.GetAll(),media,root)==1,"identical observed allocation evidence can associate media");
+   Check(repo.GetById(trade.Id).TradeUid==null && media.GetForTrade(trade.Id).Single().Caption.Contains("history unverified"),"media association never upgrades trade identity");
+   Check(TradeRecordingImporter.Import(repo.GetAll(),media,root)==0,"observed association repeat import idempotent");
+   media.Detach(trade.Id,media.GetForTrade(trade.Id).Single().Id);Check(TradeRecordingImporter.Import(repo.GetAll(),media,root)==0,"observed detach preserved");
+   ledger.TradeUid="tampered";Write(root,m);Check(TradeReconciliation.ObservedFillCandidates(ledger,repo.GetAll()).Count==0,"observed fallback cannot bypass conflicting UID");ledger.TradeUid=null;
+   ledger.ExecutionIds[1]="wrong";Check(TradeReconciliation.ObservedFillCandidates(ledger,repo.GetAll()).Count==0,"ledger ID list must agree");ledger.ExecutionIds[1]="o-exit";
+   trade.Id=0;repo.Insert(trade);m.FinalVideoPath=Path.Combine(root,"wrong.mp4");Write(root,m);Check(TradeRecordingImporter.Import(repo.GetAll(),media,root)==0,"duplicate observed candidates never auto link");
+  }
+  Console.WriteLine("PASS: "+checks+" video import checks");
  }
 }
