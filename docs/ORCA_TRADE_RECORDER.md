@@ -92,3 +92,6 @@ SIM validation must cover a single round trip, scaling, partial exits, reversal,
 ## 2026-09-12 reliability and Journal integration
 
 See [capture reliability and review queue](handoffs/2026-09-12_orca-journal_capture-reliability-review-queue.md) for automatic finalization, atomic manifests, stricter segment validation, Journal association evidence, test results, and pending NinjaTrader validation. Runtime recreation still requires manual Arm. Source changes are staged, not deployed.
+
+Deployment update 2026-09-13: recorder source and Journal DLL are now deployed with verified backups and hashes. NinjaTrader F5/load and manual capture validation remain pending; see the September 12 handoff deployment record.
+
