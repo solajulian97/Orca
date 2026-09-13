@@ -116,6 +116,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DrawOnPricePanel = true;
 				IsSuspendedWhileInactive = true;
 				BarsRequiredToPlot = 0;
+				// Julian's rule: ranges/extensions never pull the chart scale. Levels off-screen stay off-screen.
+				IsAutoScale = false;
+				PaintPriceMarkers = false;
 
 				// Display
 				DisplayStyle = OrcaOrDisplayStyle.Shaded;
@@ -719,6 +722,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		public override void OnRenderTargetChanged() { DisposeDx(); base.OnRenderTargetChanged(); }
+		#endregion
+
+		#region Autoscale
+		/// <summary>
+		/// Autoscale is off by design. Reporting an inverted min/max tells NinjaTrader this indicator
+		/// contributes nothing to the price scale, so OR levels and extensions never expand the chart.
+		/// </summary>
+		public override void OnCalculateMinMax()
+		{
+			MinValue = double.MaxValue;
+			MaxValue = double.MinValue;
+		}
 		#endregion
 
 		#region Properties
