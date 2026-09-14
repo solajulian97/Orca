@@ -95,3 +95,8 @@ See [capture reliability and review queue](handoffs/2026-09-12_orca-journal_capt
 
 Deployment update 2026-09-13: recorder source and Journal DLL are now deployed with verified backups and hashes. NinjaTrader F5/load and manual capture validation remain pending; see the September 12 handoff deployment record.
 
+
+## 2026-09-14: seeded positions and shared videos (source complete, deployment pending)
+When Recorder starts with an existing position, its trade identity now waits for a flat boundary before tracking a fresh cycle. This keeps later identities aligned with the quantity ledger; a crossing-flat execution allocates only its remaining opening quantity to the new identity. Initial unobserved history remains incomplete. Overlapping instruments and post-roll re-entry continue sharing one capture as before.
+
+Journal now offers **Attach video** in trade details and Manage: one existing file may be associated with several trades without duplication. Older captures with incomplete or malformed identities require manual association. See [September 14 handoff](handoffs/2026-09-14_orca-journal_parallel-videos-gross-equity.md) for P&L findings, equity intervals, tests, recovery, and deployment status.

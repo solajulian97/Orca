@@ -45,6 +45,14 @@ public static class RecorderTests {
   t=l.DrainCompleted(); Check(t.Count==2 && t.Sum(x=>x.GrossPnl)==0,"new trade in tail remains separate round trip");
   t[0].Account="Bad:/Account"; t[0].Instrument="MNQ?*";
   Check(OrcaRecorderTradeLedger.BuildTitle(new List<OrcaRecorderRoundTrip>{t[0]},false).IndexOfAny(Path.GetInvalidFileNameChars())<0,"safe filename");
+  l=new OrcaRecorderTradeLedger();l.Seed("Sim","MNQ SEP26",5);
+  Fill(l,"seed-close",false,5,100);t=l.DrainCompleted();
+  Check(t.Count==1 && t[0].IdentityJson==null,"seeded trade must not fabricate identity");
+  Fill(l,"fresh-open",true,10,100);Fill(l,"fresh-close",false,10,101);t=l.DrainCompleted();
+  Check(t.Count==1 && t[0].IdentityJson!=null && t[0].IdentityJson.Contains("fresh-open") && !t[0].IdentityJson.Contains("seed-close"),"identity restarts after seeded flat");
+  l=new OrcaRecorderTradeLedger();l.Seed("Sim","MNQ SEP26",5);
+  Fill(l,"reverse-seed",false,8,100);l.DrainCompleted();Fill(l,"reverse-exit",true,3,99);t=l.DrainCompleted();
+  Check(t.Count==1 && t[0].EntryQuantity==3 && t[0].IdentityJson!=null && t[0].IdentityJson.Contains("reverse-seed"),"seeded reversal preserves opening identity");
   return count;
  }
 }

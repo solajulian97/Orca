@@ -18,6 +18,13 @@ static class RiskMediaChecks {
  check(media.GetForTrade(t.Id)[0].Id==b.Id,"Legacy newest-first order");media.Move(t.Id,a.Id,-1);check(media.GetForTrade(t.Id)[0].Id==a.Id,"Custom order persists");
  media.Detach(t.Id,a.Id);check(media.GetForTrade(t.Id).Count==1 && File.Exists(file),"Detach preserves file");check(media.Exists(t.Id,file),"Tombstone blocks recorder reimport");
  using(var cmd=db.Connection.CreateCommand()){cmd.CommandText="SELECT count(*) FROM trade_attachments";check(Convert.ToInt32(cmd.ExecuteScalar())==2,"Detached row retained");}
+ string video=Path.Combine(root,"shared.mp4");File.WriteAllText(video,"video fixture");
+ var second=new Trade{TradeKey="parallel",Account="SIM",Instrument="MNQ",Direction="Long",EntryTime=DateTime.Today,ExitTime=DateTime.Today,SessionDate="2026-09-06"};trades.Insert(second);
+ media.AttachVideo(t.Id,video);media.AttachVideo(second.Id,video);media.AttachVideo(t.Id,video);
+ check(media.GetForTrade(t.Id).Count(x=>x.FilePath==video)==1 && media.GetForTrade(second.Id).Count(x=>x.FilePath==video)==1,"Same original video shared without duplicate rows");
+ var linked=media.GetForTrade(t.Id).Single(x=>x.FilePath==video);media.Detach(t.Id,linked.Id);media.AttachVideo(t.Id,video);
+ check(media.GetForTrade(t.Id).Any(x=>x.Id==linked.Id) && File.ReadAllText(video)=="video fixture","Explicit reattach restores tombstone and preserves file");
+ bool invalid=false;try{media.AttachVideo(t.Id,file);}catch(ArgumentException){invalid=true;}check(invalid,"Image cannot be attached as video");
  }
  Console.WriteLine("PASS: "+n+" risk/media checks on disposable database.");
  }

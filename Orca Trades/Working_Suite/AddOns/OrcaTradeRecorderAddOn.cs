@@ -491,7 +491,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 	{
 		private sealed class Bucket
 		{
-            public readonly Orca.SharedIdentity.Tracker Identity = new Orca.SharedIdentity.Tracker();
+            public Orca.SharedIdentity.Tracker Identity = new Orca.SharedIdentity.Tracker();
+            public bool IdentityAwaitingFlat;
 			public int Net;
 			public decimal Cash;
 			public decimal PointValue;
@@ -527,6 +528,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (b.Net == quantity) return;
 			b.Net = quantity;
 			b.Uncertain = true;
+            b.Identity = new Orca.SharedIdentity.Tracker();
+            b.IdentityAwaitingFlat = quantity != 0;
 		}
 		public void Fill(string account, string instrument, string id, bool buy, int quantity, double price, double pointValue, DateTime time, int? positionAfter = null)
 		{
@@ -539,7 +542,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			else if (!seen.Add(Key(account, id))) return;
 			Bucket b = Get(account, instrument);
 			int sign = buy ? 1 : -1;
-            var identity = b.Identity.Fill(account, instrument, id, sign * quantity, time, positionAfter);
+            var identity = b.IdentityAwaitingFlat ? null : b.Identity.Fill(account, instrument, id, sign * quantity, time, positionAfter);
 			int closing = b.Net != 0 && Math.Sign(b.Net) != sign ? Math.Min(Math.Abs(b.Net), quantity) : 0;
 			if (closing > 0) {
 				b.Cash -= sign * (decimal)price * closing;
@@ -560,6 +563,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 					b.Trade = null;
 					b.Cash = 0;
 					b.Uncertain = false;
+                    if (b.IdentityAwaitingFlat) {
+                        // The seeded opening fills were never observed. Start identity tracking
+                        // at this flat boundary, allocating only a reversal's remaining opening.
+                        b.Identity = new Orca.SharedIdentity.Tracker();
+                        b.IdentityAwaitingFlat = false;
+                        if (quantity > closing)
+                            b.Identity.Fill(account, instrument, id, sign * (quantity-closing), time, positionAfter);
+                    }
 				}
 			}
 			int opening = quantity - closing;

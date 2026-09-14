@@ -48,6 +48,20 @@ class Program {
   rolling.Load(new[]{T(cutoff,100),T(DateTime.Today,50)},new[]{"All Accounts","SIM"});Check(rolling.CalendarTitle==browsed,"Refresh preserves browsed month");
   rolling.NextMonthCommand.Execute(null);Check(rolling.CalendarTitle==originalMonth && rolling.Kpis.NetPnlDollars==150,"Return month preserves window");
   rolling.SelectedPeriod="Calendar month";rolling.PreviousMonthCommand.Execute(null);Check(rolling.SelectedPeriod=="Calendar month","Explicit calendar month still navigates");
+  var seriesTrades=new[]{T(day.AddHours(10).AddMinutes(15),-50),T(day.AddHours(10),100)};
+  var series=EquitySeries.Build(seriesTrades,0);
+  Check(series.Count==3 && series[1].RunningPnl==100 && series[2].RunningPnl==50,"Chronological trade curve");
+  foreach(int interval in new[]{5,15,30}) {
+   series=EquitySeries.Build(seriesTrades,interval);
+   Check(series.Last().RunningPnl==50,"Interval preserves cumulative total "+interval);
+  }
+  series=EquitySeries.Build(seriesTrades,5);
+  Check(series.Count==5 && series[2].RunningPnl==100 && series[3].RunningPnl==100,"Empty intervals carry running PnL");
+  Check(series[1].Time==day.AddHours(10).AddMinutes(5),"Exact boundary belongs to starting bucket");
+  Check(EquitySeries.HitIndex(72,1000,series.Count)==0 && EquitySeries.HitIndex(988,1000,series.Count)==series.Count-1 && EquitySeries.HitIndex(10,1000,series.Count)==-1,"Hover bounds and endpoints");
+  var position=EquitySeries.Position(series,series.Count-1,1000,500);
+  Check(position.X==988 && position.Y>=12 && position.Y<=472,"Hover uses chart coordinates");
+  vm.SelectedPeriod="Yesterday";vm.EquityInterval="15 minutes";Check(vm.EquityPoints.Last().RunningPnl==800,"View model interval respects filters");
   Console.WriteLine("PASS: "+checks+" dashboard checks and rendered view.");return 0;
  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
 }
