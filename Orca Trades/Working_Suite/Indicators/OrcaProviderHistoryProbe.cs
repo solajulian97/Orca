@@ -55,6 +55,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             private BarsRequest deferredCompletion;
             private ErrorCode deferredError;
             private string deferredMessage;
+            private DateTime issuedUtc, deferredCompletedUtc;
             private OrcaProviderHistoryConfigurationCapture configuration;
             private DispatcherTimer timer;
             private int stopRequested, completionQueued;
@@ -90,10 +91,9 @@ namespace NinjaTrader.NinjaScript.Indicators
                     dispatcher.ShutdownStarted += OnShutdown; hooked = true;
                     started = Stopwatch.GetTimestamp();
                     request = new BarsRequest(instrument, SampleLimit);
-                    // Count-back construction supplied 2099-12-01 in the observed run;
-                    // Request replaced that unresolved endpoint with its current clock.
-                    // Own an explicit local endpoint before freezing configuration instead.
-                    // Keep comparing it strictly after loading; this is not UTC coverage.
+                    // Retain an explicit requested endpoint for diagnostics. Observed count-back
+                    // requests replace even this value at issuance; completion validates that
+                    // single resolution and then freezes the completed endpoint strictly.
                     request.ToLocal = DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, localTimezone), DateTimeKind.Unspecified);
                     request.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1, MarketDataType = MarketDataType.Last };
                     request.TradingHours = hours;
@@ -106,32 +106,34 @@ namespace NinjaTrader.NinjaScript.Indicators
                         + "; lookup=Repository; merge=DoNotMerge; timeout=30s; eventClock=" + Brief(eventTimezone.Id)
                         + "; requestClock=" + Brief(localTimezone.Id) + "; published=0; UTC-range-confirmed=false");
                     Output("request-end explicit=True ToLocal=" + request.ToLocal.ToString("O", CultureInfo.InvariantCulture)
-                        + " kind=" + request.ToLocal.Kind + "; BarsBack=" + request.BarsBack + "; guard=STRICT");
+                        + " kind=" + request.ToLocal.Kind + "; BarsBack=" + request.BarsBack + "; guard=STRICT_INTENT_THEN_COMPLETION");
                     timer = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
                     timer.Interval = TimeSpan.FromSeconds(30); timer.Tick += OnTimeout; timer.Start();
                     if (Volatile.Read(ref stopRequested) != 0) { Cleanup("CANCELLED_BEFORE_REQUEST"); return; }
                     // Never hold a callback lock around platform Request. Always queue completion,
                     // including synchronous callbacks, so disposal cannot race its setup accessor.
                     issuing = true;
+                    issuedUtc = DateTime.UtcNow;
                     try { request.Request(OnCompleted); }
                     finally { issuing = false; }
                     if (Volatile.Read(ref stopRequested) != 0) Cleanup("CANCELLED_DURING_REQUEST");
-                    else if (completionDeferred) Complete(deferredCompletion, deferredError, deferredMessage);
+                    else if (completionDeferred) Complete(deferredCompletion, deferredError, deferredMessage, deferredCompletedUtc);
                 }
                 catch (Exception ex) { Output("REQUEST_FAILED " + Brief(ex.Message)); Cleanup("REQUEST_FAILED"); }
             }
             private void OnCompleted(BarsRequest completed, ErrorCode error, string message)
             {
+                DateTime completedUtc = DateTime.UtcNow;
                 if (Volatile.Read(ref stopRequested) != 0 || Interlocked.Exchange(ref completionQueued, 1) != 0) return;
                 string detail = Brief(message);
-                try { dispatcher.InvokeAsync(() => Complete(completed, error, detail)); }
+                try { dispatcher.InvokeAsync(() => Complete(completed, error, detail, completedUtc)); }
                 catch (Exception ex)
                 {
                     // The registered shutdown hook or timeout owns disposal, never this arbitrary callback thread.
                     Output("COMPLETION_QUEUE_FAILED " + Brief(ex.Message));
                 }
             }
-            private void Complete(BarsRequest completed, ErrorCode error, string message)
+            private void Complete(BarsRequest completed, ErrorCode error, string message, DateTime completedUtc)
             {
                 if (Volatile.Read(ref stopRequested) != 0 || cleaned) return;
                 // A platform call may pump a nested dispatcher frame. Queuing alone
@@ -139,6 +141,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (issuing)
                 {
                     deferredCompletion = completed; deferredError = error; deferredMessage = message;
+                    deferredCompletedUtc = completedUtc;
                     completionDeferred = true; return;
                 }
                 string outcome = "ERROR";
@@ -147,15 +150,17 @@ namespace NinjaTrader.NinjaScript.Indicators
                 {
                     if (!ReferenceEquals(completed, request)) throw new InvalidOperationException("Completion did not identify the owned request.");
                     if (error != ErrorCode.NoError) throw new InvalidOperationException("Platform error=" + error + "; " + message);
-                    configuration.RequireUnchanged(request, eventTimezone, localTimezone,
+                    Output("request-window issuedUtc=" + issuedUtc.ToString("O", CultureInfo.InvariantCulture)
+                        + " callbackUtc=" + completedUtc.ToString("O", CultureInfo.InvariantCulture));
+                    var completedConfiguration = configuration.CaptureCountBackCompletion(request, eventTimezone, localTimezone, issuedUtc, completedUtc,
                         detail => Output("configuration-change phase=before-inspection " + detail));
                     if (request.Bars == null) throw new InvalidOperationException("No Bars result.");
                     Inspect(request.Bars);
-                    configuration.RequireUnchanged(request, eventTimezone, localTimezone,
+                    completedConfiguration.RequireUnchanged(request, eventTimezone, localTimezone,
                         detail => Output("configuration-change phase=after-inspection " + detail));
                     if (Volatile.Read(ref stopRequested) != 0) throw new OperationCanceledException("Removed during inspection.");
                     outcome = "OBSERVED";
-                    Output("configurationUnchanged=True; observation-only; final bar may be developing; quote provenance and atomic snapshot unverified");
+                    Output("configurationUnchanged=True; baseline=completion; observation-only; final bar may be developing; quote provenance and atomic snapshot unverified");
                 }
                 catch (Exception ex) { Output("OBSERVATION_FAILED " + Brief(ex.Message)); }
                 finally { inspecting = false; Cleanup(outcome); }

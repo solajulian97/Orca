@@ -68,6 +68,26 @@ static class Program
             && Has("configurationUnchanged=True") && Has("returned=1 inspected=1"), "sentinel resolution no longer trips guard when explicit end is honored");
         Released(probe, request);
 
+        foreach (string resolutionCase in new[] { "normal", "after", "nested" })
+        {
+            probe = Create(); var resolvingProbe = probe;
+            BarsRequest.OnCreate = r => r.OnRequest = b =>
+            {
+                b.ToLocal = DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.Local), DateTimeKind.Unspecified);
+                b.Bars.Rows.Add(new Row());
+                if (resolutionCase == "after") b.Bars.OnRead = () => b.ToLocal = b.ToLocal.AddTicks(1);
+                b.Complete();
+                if (resolutionCase == "nested") resolvingProbe.Instrument.Dispatcher.Drain();
+            };
+            probe.Instrument.Dispatcher.Drain(); request = BarsRequest.All.Single();
+            Check(Has("countback-end resolved=True") && Has("withinRequestCallbackInterval=True") && Has("request-window issuedUtc="),
+                "observed platform endpoint resolution admitted as a separately reported completion snapshot");
+            if (resolutionCase == "after") Check(Has("configuration-change phase=after-inspection field=ToLocal.Ticks")
+                && Has("OBSERVATION_FAILED") && !Has("baseline=completion"), "resolved endpoint cannot change during inspection");
+            else Check(Has("configurationUnchanged=True; baseline=completion") && Has("returned=1 inspected=1"), "sample inspected only after compatible resolution");
+            Released(probe, request);
+        }
+
         foreach (bool timeout in new[] { false, true })
         {
             probe = Create(); var captured = probe;

@@ -199,6 +199,53 @@ static class ProviderHistoryConfigurationTests
         foreach (var mutate in mutations) mutate(stable);
         Reject(check, () => baseline.RequireUnchanged(stable, TimeZoneInfo.Utc, TimeZoneInfo.Utc, diagnostics.Add));
         check(diagnostics.Count <= 13 && diagnostics[diagnostics.Count - 1].Contains("guard=REJECT"), "difference output bounded without relaxing guard");
+        var issued = new DateTime(2026, 9, 13, 20, 36, 33, DateTimeKind.Utc);
+        var received = issued.AddSeconds(2);
+        var resolved = DateTime.SpecifyKind(issued.AddMilliseconds(10), DateTimeKind.Unspecified);
+        var countRequest = Request(); countRequest.BarsBack = 1000;
+        var input = Capture(countRequest); diagnostics.Clear();
+        countRequest.ToLocal = resolved;
+        var completion = input.CaptureCountBackCompletion(countRequest, TimeZoneInfo.Utc, TimeZoneInfo.Utc, issued, received, diagnostics.Add);
+        check(completion.Definition != input.Definition && completion.Definition == Capture(countRequest).Definition,
+            "count-back input and resolved completion remain distinct immutable snapshots");
+        check(diagnostics.Count == 1 && diagnostics[0].Contains("withinRequestCallbackInterval=True")
+            && diagnostics[0].Contains("immutableFieldsUnchanged=True"), "bounded endpoint resolution explicitly reported");
+        Reject(check, () => input.RequireUnchanged(countRequest, TimeZoneInfo.Utc, TimeZoneInfo.Utc));
+        completion.RequireUnchanged(countRequest, TimeZoneInfo.Utc, TimeZoneInfo.Utc);
+        countRequest.ToLocal = countRequest.ToLocal.AddTicks(1);
+        Reject(check, () => completion.RequireUnchanged(countRequest, TimeZoneInfo.Utc, TimeZoneInfo.Utc));
+        foreach (var mutate in mutations)
+        {
+            var other = Request(); other.BarsBack = 1000; var original = Capture(other);
+            other.ToLocal = resolved; mutate(other);
+            Reject(check, () => original.CaptureCountBackCompletion(other, TimeZoneInfo.Utc, TimeZoneInfo.Utc, issued, received, null));
+        }
+        foreach (DateTime end in new[] { issued.AddTicks(-1), received.AddTicks(1), issued.AddDays(-1) })
+        {
+            var other = Request(); other.BarsBack = 1000; var original = Capture(other);
+            other.ToLocal = DateTime.SpecifyKind(end, DateTimeKind.Unspecified);
+            Reject(check, () => original.CaptureCountBackCompletion(other, TimeZoneInfo.Utc, TimeZoneInfo.Utc, issued, received, null));
+        }
+        foreach (DateTime end in new[] { issued, received })
+        {
+            var other = Request(); other.BarsBack = 1000; var original = Capture(other);
+            other.ToLocal = DateTime.SpecifyKind(end, DateTimeKind.Unspecified);
+            check(original.CaptureCountBackCompletion(other, TimeZoneInfo.Utc, TimeZoneInfo.Utc, issued, received, null).Definition == Capture(other).Definition,
+                "exact issuance and callback boundaries accepted without a tolerance window");
+        }
+        var dateRequest = Request();
+        Reject(check, () => Capture(dateRequest).CaptureCountBackCompletion(dateRequest, TimeZoneInfo.Utc, TimeZoneInfo.Utc, issued, received, null));
+        Reject(check, () => input.CaptureCountBackCompletion(countRequest, TimeZoneInfo.Utc, TimeZoneInfo.Utc, received, issued, null));
+        Reject(check, () => input.CaptureCountBackCompletion(countRequest, TimeZoneInfo.Utc, TimeZoneInfo.Utc, DateTime.SpecifyKind(issued, DateTimeKind.Local), received, null));
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        foreach (var ambiguous in new[] { new DateTime(2026, 11, 1, 1, 30, 0), new DateTime(2026, 3, 8, 2, 30, 0) })
+        {
+            var other = Request(); other.BarsBack = 1000;
+            var original = OrcaProviderHistoryConfigurationCapture.Capture(other, TimeZoneInfo.Utc, eastern);
+            other.ToLocal = ambiguous;
+            Reject(check, () => original.CaptureCountBackCompletion(other, TimeZoneInfo.Utc, eastern,
+                new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 12, 1, 0, 0, 0, DateTimeKind.Utc), null));
+        }
     }
     static void Reject(Action<bool, string> check, Action action)
     {

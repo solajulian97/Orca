@@ -48,6 +48,46 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
         }
 
+        // Observer-only request/completion transition. The strict generic comparison above
+        // is unchanged. This is not source authentication or permission to publish history.
+        public OrcaProviderHistoryConfigurationCapture CaptureCountBackCompletion(BarsRequest request,
+            TimeZoneInfo eventTimezone, TimeZoneInfo requestLocalTimezone, DateTime issuedUtc, DateTime completedUtc,
+            Action<string> reportDifference)
+        {
+            if (issuedUtc.Kind != DateTimeKind.Utc || completedUtc.Kind != DateTimeKind.Utc
+                || issuedUtc == DateTime.MinValue || completedUtc < issuedUtc)
+                throw new ArgumentException("Ordered UTC request-issuance and callback-receipt times required.");
+            var current = Capture(request, eventTimezone, requestLocalTimezone);
+            var before = ReadFields(Definition); var after = ReadFields(current.Definition);
+            bool compatible = before.Count == after.Count && before[12] == "count-back" && after[12] == "count-back";
+            // Only ToLocal.Ticks (field 16) may resolve once. Kind, FromLocal, BarsBack,
+            // contract, session, clocks, merge, lookup and every other field remain exact.
+            for (int i = 0; compatible && i < before.Count; i++)
+                if (i != 16 && !string.Equals(before[i], after[i], StringComparison.Ordinal)) compatible = false;
+            if (!compatible)
+            {
+                if (reportDifference != null) ReportDifferences(Definition, current.Definition, reportDifference);
+                throw new InvalidOperationException("Count-back completion changed immutable request configuration.");
+            }
+            if (before[16] == after[16]) return current;
+            if (after[17] != ((int)DateTimeKind.Unspecified).ToString(CultureInfo.InvariantCulture))
+                throw new InvalidOperationException("Resolved count-back endpoint requires an unambiguous declared local clock.");
+            var resolvedLocal = new DateTime(long.Parse(after[16], CultureInfo.InvariantCulture), DateTimeKind.Unspecified);
+            if (requestLocalTimezone.IsInvalidTime(resolvedLocal) || requestLocalTimezone.IsAmbiguousTime(resolvedLocal))
+                throw new InvalidOperationException("Resolved count-back endpoint is invalid or ambiguous in the captured request clock.");
+            DateTime resolvedUtc = TimeZoneInfo.ConvertTimeToUtc(resolvedLocal, requestLocalTimezone);
+            if (resolvedUtc < issuedUtc || resolvedUtc > completedUtc)
+            {
+                if (reportDifference != null) ReportDifferences(Definition, current.Definition, reportDifference);
+                throw new InvalidOperationException("Resolved count-back endpoint is outside request issuance/callback receipt interval.");
+            }
+            if (reportDifference != null)
+                reportDifference("countback-end resolved=True before=" + DescribeValue("ToLocal.Ticks", before[16])
+                    + " after=" + DescribeValue("ToLocal.Ticks", after[16])
+                    + "; withinRequestCallbackInterval=True; immutableFieldsUnchanged=True; UTC-range-confirmed=false");
+            return current;
+        }
+
         private static void ReportDifferences(string before, string after, Action<string> report)
         {
             string[] names = { "FullContract", "Expiry.Ticks", "Expiry.Kind", "InstrumentType", "TickSize.Bits", "PointValue.Bits",
