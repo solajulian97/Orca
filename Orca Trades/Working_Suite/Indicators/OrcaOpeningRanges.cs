@@ -39,7 +39,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	/// <summary>
 	/// Orca Opening Ranges: 30-second opening ranges for the CME session opens
-	/// (RTH, PM, Globex, Tokyo, Midnight, London, Gold) with progressive RTH extensions.
+	/// (RTH, PM, Globex, Tokyo, Midnight, London, Gold, CL) with progressive RTH extensions.
 	/// Port of Julian's TradingView "30s OR" study.
 	/// </summary>
 	public class OrcaOpeningRanges : Indicator
@@ -78,7 +78,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private const int SessionMidnight = 4;
 		private const int SessionLondon = 5;
 		private const int SessionGold = 6;
-		private const int SessionCount = 7;
+		private const int SessionCl = 7;
+		private const int SessionCount = 8;
 
 		private const int BrushExtUp = SessionCount * 2;
 		private const int BrushExtDn = SessionCount * 2 + 1;
@@ -119,7 +120,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Name = "Orca Opening Ranges";
-				Description = "30-second opening ranges for RTH, PM, Globex, Tokyo, Midnight, London and Gold opens (New York time) with progressive RTH extensions.";
+				Description = "30-second opening ranges for RTH, PM, Globex, Tokyo, Midnight, London, Gold and CL opens (New York time) with progressive RTH extensions.";
 				Calculate = Calculate.OnPriceChange;
 				IsOverlay = true;
 				DisplayInDataBox = false;
@@ -156,6 +157,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				MidnightOpenTime = new TimeSpan(0, 0, 0);
 				LondonOpenTime = new TimeSpan(3, 0, 0);
 				GoldOpenTime = new TimeSpan(8, 20, 0);
+				ClOpenTime = new TimeSpan(9, 0, 0);
 
 				RthEnabled = true;      RthColor = WpfBrushes.Aqua;                          RthMidColor = WpfBrushes.Yellow;
 				PmEnabled = true;       PmColor = MakeBrush(0x20, 0xB2, 0xAA);               PmMidColor = MakeBrush(0x40, 0xE0, 0xD0);
@@ -164,6 +166,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				MidnightEnabled = true; MidnightColor = MakeBrush(0xA9, 0xA9, 0xA9);         MidnightMidColor = MakeBrush(0xF5, 0xF5, 0xF5);
 				LondonEnabled = true;   LondonColor = WpfBrushes.Olive;                      LondonMidColor = WpfBrushes.Lime;
 				GoldEnabled = false;    GoldColor = MakeBrush(0xDA, 0xA5, 0x20);             GoldMidColor = MakeBrush(0xFF, 0xD7, 0x00);
+				ClEnabled = false;      ClColor = MakeBrush(0xD2, 0x69, 0x1E);               ClMidColor = MakeBrush(0xF4, 0xA4, 0x60);
 
 				// RTH extensions
 				ExtensionsEnabled = true;
@@ -232,9 +235,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			sessions[SessionMidnight] = new OrSession { Label = "MIDNIGHT", OpenTime = NormalizeOpenTime(MidnightOpenTime), HlBrush = SessionMidnight * 2, MidBrush = SessionMidnight * 2 + 1 };
 			sessions[SessionLondon]   = new OrSession { Label = "LONDON",   OpenTime = NormalizeOpenTime(LondonOpenTime),   HlBrush = SessionLondon * 2,   MidBrush = SessionLondon * 2 + 1 };
 			sessions[SessionGold]     = new OrSession { Label = "GOLD",     OpenTime = NormalizeOpenTime(GoldOpenTime),     HlBrush = SessionGold * 2,     MidBrush = SessionGold * 2 + 1 };
+			sessions[SessionCl]       = new OrSession { Label = "CL",       OpenTime = NormalizeOpenTime(ClOpenTime),       HlBrush = SessionCl * 2,       MidBrush = SessionCl * 2 + 1 };
 		}
 
-		private static readonly string[] SessionPlotNames = { "RTH", "PM", "Globex", "Tokyo", "Midnight", "London", "Gold" };
+		private static readonly string[] SessionPlotNames = { "RTH", "PM", "Globex", "Tokyo", "Midnight", "London", "Gold", "CL" };
 
 		private void AddScaleMarkerPlots()
 		{
@@ -255,8 +259,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (Plots == null || Plots.Length < PlotCount)
 				return;
 
-			WpfBrush[] hl = { RthColor, PmColor, GlobexColor, TokyoColor, MidnightColor, LondonColor, GoldColor };
-			WpfBrush[] mid = { RthMidColor, PmMidColor, GlobexMidColor, TokyoMidColor, MidnightMidColor, LondonMidColor, GoldMidColor };
+			WpfBrush[] hl = { RthColor, PmColor, GlobexColor, TokyoColor, MidnightColor, LondonColor, GoldColor, ClColor };
+			WpfBrush[] mid = { RthMidColor, PmMidColor, GlobexMidColor, TokyoMidColor, MidnightMidColor, LondonMidColor, GoldMidColor, ClMidColor };
 			for (int i = 0; i < SessionCount; i++)
 			{
 				Plots[i * PlotsPerSession].Brush = hl[i] ?? WpfBrushes.White;
@@ -290,6 +294,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				case SessionMidnight: return MidnightEnabled;
 				case SessionLondon: return LondonEnabled;
 				case SessionGold: return GoldEnabled;
+				case SessionCl: return ClEnabled;
 			}
 			return false;
 		}
@@ -827,6 +832,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				colorMap[SessionMidnight * 2] = MidnightColor; colorMap[SessionMidnight * 2 + 1] = MidnightMidColor;
 				colorMap[SessionLondon * 2] = LondonColor;     colorMap[SessionLondon * 2 + 1] = LondonMidColor;
 				colorMap[SessionGold * 2] = GoldColor;         colorMap[SessionGold * 2 + 1] = GoldMidColor;
+				colorMap[SessionCl * 2] = ClColor;             colorMap[SessionCl * 2 + 1] = ClMidColor;
 				colorMap[BrushExtUp] = ExtensionUpColor;
 				colorMap[BrushExtDn] = ExtensionDownColor;
 
@@ -1013,33 +1019,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public WpfBrush GoldMidColor { get; set; }
 		[Browsable(false)] public string GoldMidColorSerializable { get { return Serialize.BrushToString(GoldMidColor); } set { GoldMidColor = Serialize.StringToBrush(value); } }
 
-		// --- 09. RTH Extensions ---
-		[NinjaScriptProperty][Display(Name="Enable RTH Extensions", Order=1, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		// --- 09. CL Open (default 09:00 NY) ---
+		[NinjaScriptProperty][Display(Name="Enable", Order=1, GroupName="09. CL Open")]
+		public bool ClEnabled { get; set; }
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 09:00.", Order=2, GroupName="09. CL Open")]
+		public TimeSpan ClOpenTime { get; set; }
+		[XmlIgnore][Display(Name="High/Low Color", Order=3, GroupName="09. CL Open")]
+		public WpfBrush ClColor { get; set; }
+		[Browsable(false)] public string ClColorSerializable { get { return Serialize.BrushToString(ClColor); } set { ClColor = Serialize.StringToBrush(value); } }
+		[XmlIgnore][Display(Name="Mid Color", Order=4, GroupName="09. CL Open")]
+		public WpfBrush ClMidColor { get; set; }
+		[Browsable(false)] public string ClMidColorSerializable { get { return Serialize.BrushToString(ClMidColor); } set { ClMidColor = Serialize.StringToBrush(value); } }
+
+		// --- 10. RTH Extensions ---
+		[NinjaScriptProperty][Display(Name="Enable RTH Extensions", Order=1, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public bool ExtensionsEnabled { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Extension Step", Description="Auto detects NQ/MNQ (65 pts) vs ES/MES and everything else (15 pts). Can be overridden.", Order=2, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Display(Name="Extension Step", Description="Auto detects NQ/MNQ (65 pts) vs ES/MES and everything else (15 pts). Can be overridden.", Order=2, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public OrcaOrExtensionStep ExtensionStepMode { get; set; }
 
-		[NinjaScriptProperty][Range(0.25, 100000)][Display(Name="Custom Step", Description="Points per extension level when Extension Step is Custom.", Order=3, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Range(0.25, 100000)][Display(Name="Custom Step", Description="Points per extension level when Extension Step is Custom.", Order=3, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public double CustomExtensionStep { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Expansion Trigger", Description="Both Sides: touching the last revealed level on either side reveals the next level on both sides. Each Side Individually: each side unlocks on its own touches.", Order=4, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Display(Name="Expansion Trigger", Description="Both Sides: touching the last revealed level on either side reveals the next level on both sides. Each Side Individually: each side unlocks on its own touches.", Order=4, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public OrcaOrExpansionTrigger ExpansionTrigger { get; set; }
 
-		[NinjaScriptProperty][Range(1, 20)][Display(Name="Initial Levels Per Side", Description="Extension levels shown as soon as the RTH opening range prints. Touching the highest revealed level always reveals the next one; there is no upper limit.", Order=5, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Range(1, 20)][Display(Name="Initial Levels Per Side", Description="Extension levels shown as soon as the RTH opening range prints. Touching the highest revealed level always reveals the next one; there is no upper limit.", Order=5, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public int InitialExtensionLevels { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Line Style", Order=6, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Display(Name="Line Style", Order=6, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public OrcaOrLineStyle ExtensionLineStyle { get; set; }
 
-		[NinjaScriptProperty][Range(1, 4)][Display(Name="Line Width", Order=7, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[NinjaScriptProperty][Range(1, 4)][Display(Name="Line Width", Order=7, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public int ExtensionLineWidth { get; set; }
 
-		[XmlIgnore][Display(Name="Upper Extensions", Order=8, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[XmlIgnore][Display(Name="Upper Extensions", Order=8, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public WpfBrush ExtensionUpColor { get; set; }
 		[Browsable(false)] public string ExtensionUpColorSerializable { get { return Serialize.BrushToString(ExtensionUpColor); } set { ExtensionUpColor = Serialize.StringToBrush(value); } }
 
-		[XmlIgnore][Display(Name="Lower Extensions", Order=9, GroupName="09. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
+		[XmlIgnore][Display(Name="Lower Extensions", Order=9, GroupName="10. RTH Extensions (ES: 15 pts / NQ: 65 pts)")]
 		public WpfBrush ExtensionDownColor { get; set; }
 		[Browsable(false)] public string ExtensionDownColorSerializable { get { return Serialize.BrushToString(ExtensionDownColor); } set { ExtensionDownColor = Serialize.StringToBrush(value); } }
 		#endregion
