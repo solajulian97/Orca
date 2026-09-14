@@ -32,6 +32,7 @@ namespace NinjaTrader.NinjaScript
 	public enum OrcaOrExtensionStep { Auto, ES15, NQ65, Custom }
 	public enum OrcaOrExpansionTrigger { BothSides, EachSideIndividually }
 	public enum OrcaOrLineStyle { Solid, Dashed, Dotted }
+	public enum OrcaOrBoxEnd { UntilNextOpeningRange, UntilDayEnd }
 }
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -137,6 +138,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowWordLabels = false;
 				ShowPriceLabels = true;
 				ConnectRanges = false;
+				BoxEndMode = OrcaOrBoxEnd.UntilNextOpeningRange;
+				DayEndTime = new TimeSpan(17, 0, 0);
 				TimeZoneMode = OrcaOrTimeZoneMode.NewYork;
 				LineWidth = 1;
 				MidLineWidth = 2;
@@ -146,7 +149,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				// Sessions (defaults follow the TradingView study; times are New York)
 				RthOpenTime = new TimeSpan(9, 30, 0);
-				RthCloseTime = new TimeSpan(16, 15, 0);
+				RthCloseTime = new TimeSpan(16, 0, 0);
 				PmOpenTime = new TimeSpan(13, 30, 0);
 				GlobexOpenTime = new TimeSpan(18, 0, 0);
 				TokyoOpenTime = new TimeSpan(20, 0, 0);
@@ -354,6 +357,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 		/// RTH close for a given RTH range, in chart time. Extensions (lines, unlocks, scale tags) stop here
 		/// so they never stretch across Globex.
 		/// </summary>
+		/// <summary>
+		/// End of an OR box in chart time for the UntilDayEnd mode: the first DayEndTime (NY) at or after the
+		/// range's open. Globex/Tokyo ranges opened after 17:00 therefore end at the next day's 17:00.
+		/// </summary>
+		private DateTime GetBoxDayEndChartTime(OrRange range)
+		{
+			TimeSpan dayEnd = NormalizeOpenTime(DayEndTime);
+			DateTime dayEndNy = range.NyOpen.Date + dayEnd;
+			if (dayEndNy <= range.NyOpen)
+				dayEndNy = dayEndNy.AddDays(1);
+			return range.AnchorTime + (dayEndNy - range.NyOpen);
+		}
+
+		/// <summary>True while the box is still drawn at barChartTime (always true in UntilNextOpeningRange mode).</summary>
+		private bool IsBoxActive(OrRange range, DateTime barChartTime)
+		{
+			if (BoxEndMode != OrcaOrBoxEnd.UntilDayEnd)
+				return true;
+			return barChartTime <= GetBoxDayEndChartTime(range);
+		}
+
 		private DateTime GetRthCloseChartTime(OrRange rth)
 		{
 			TimeSpan open = sessions[SessionRth].OpenTime;
@@ -399,7 +423,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				int b = i * PlotsPerSession;
 				OrRange range = sessions[i].Latest;
-				bool show = ShowPriceLabels && IsSessionEnabled(i) && range != null && range.IsValid;
+				bool show = ShowPriceLabels && IsSessionEnabled(i) && range != null && range.IsValid && IsBoxActive(range, barChartTime);
 				if (show)
 				{
 					Values[b][0] = range.High;
@@ -567,6 +591,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				float startX = cc.GetXByTime(range.AnchorTime);
 				float endX = i < last ? cc.GetXByTime(ranges[i + 1].AnchorTime) : panelRight;
+				bool boxClosed = false;
+				if (BoxEndMode == OrcaOrBoxEnd.UntilDayEnd)
+				{
+					DateTime dayEnd = GetBoxDayEndChartTime(range);
+					boxClosed = lastPrimaryTime != DateTime.MinValue && dayEnd <= lastPrimaryTime;
+					if (boxClosed)
+					{
+						float dayEndX = cc.GetXByTime(dayEnd);
+						if (!float.IsNaN(dayEndX))
+							endX = Math.Min(endX, dayEndX);
+					}
+				}
 				if (float.IsNaN(startX) || float.IsNaN(endX)) { prev = null; continue; }
 
 				bool visible = endX >= panelLeft && startX <= panelRight;
@@ -599,7 +635,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 
 					// Stepline join between the prior range and this one (TradingView "Connect successive ranges").
-					if (ConnectRanges && prev != null && prev.IsValid && startX >= panelLeft && startX <= panelRight)
+					// Only meaningful when boxes run into each other; day-ended boxes leave a gap instead.
+					if (ConnectRanges && BoxEndMode == OrcaOrBoxEnd.UntilNextOpeningRange && prev != null && prev.IsValid && startX >= panelLeft && startX <= panelRight)
 					{
 						DrawVerticalJoin(startX, cs.GetYByValue(prev.High), yHigh, hlBrush, LineWidth, panelTop, panelBottom);
 						DrawVerticalJoin(startX, cs.GetYByValue(prev.Low), yLow, hlBrush, LineWidth, panelTop, panelBottom);
@@ -607,7 +644,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 							DrawVerticalJoin(startX, cs.GetYByValue(prev.Mid), cs.GetYByValue(range.Mid), midBrush, MidLineWidth, panelTop, panelBottom);
 					}
 
-					if (i == last && ShowWordLabels && dxLabelFormat != null)
+					if (i == last && !boxClosed && ShowWordLabels && dxLabelFormat != null)
 					{
 						DrawLabel(session.Label + " OR-H", yHigh, hlBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
 						DrawLabel(session.Label + " OR-L", yLow, hlBrush, labelX, panelLeft, panelRight, panelTop, panelBottom);
@@ -863,25 +900,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty][Display(Name="Show Word Labels", Description="Level names (e.g. RTH OR-H, RTH EXT +1) drawn in the chart pane right of the last bar. Names only; prices come from Show Price Labels.", Order=5, GroupName="01. Display")]
 		public bool ShowWordLabels { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Connect Successive Ranges", Description="When off, each day's opening range is drawn on its own with no vertical join to the prior range.", Order=6, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Connect Successive Ranges", Description="When off, each day's opening range is drawn on its own with no vertical join to the prior range. Only applies to the Until Next Opening Range box end mode.", Order=6, GroupName="01. Display")]
 		public bool ConnectRanges { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Session Time Zone", Description="NewYork converts bar times from the NinjaTrader time zone to America/New_York. ChartTime uses bar times as-is.", Order=7, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="OR Box End", Description="UntilNextOpeningRange: each session's box runs until that session's next OR (TradingView behavior). UntilDayEnd: every box ends at Day End Time; ranges opened after it (Globex, Tokyo) end at the next day's Day End Time.", Order=7, GroupName="01. Display")]
+		public OrcaOrBoxEnd BoxEndMode { get; set; }
+
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Day End Time (New York)", Description="Used by the UntilDayEnd box end mode. Default 17:00 (Globex day boundary).", Order=8, GroupName="01. Display")]
+		public TimeSpan DayEndTime { get; set; }
+
+		[NinjaScriptProperty][Display(Name="Session Time Zone", Description="NewYork converts bar times from the NinjaTrader time zone to America/New_York. ChartTime uses bar times as-is.", Order=9, GroupName="01. Display")]
 		public OrcaOrTimeZoneMode TimeZoneMode { get; set; }
 
-		[NinjaScriptProperty][Range(1, 6)][Display(Name="Line Width", Order=8, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(1, 6)][Display(Name="Line Width", Order=10, GroupName="01. Display")]
 		public int LineWidth { get; set; }
 
-		[NinjaScriptProperty][Range(1, 6)][Display(Name="Midpoint Line Width", Order=9, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(1, 6)][Display(Name="Midpoint Line Width", Order=11, GroupName="01. Display")]
 		public int MidLineWidth { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Draw Behind Candles", Order=10, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Draw Behind Candles", Order=12, GroupName="01. Display")]
 		public bool DrawBehindCandles { get; set; }
 
-		[NinjaScriptProperty][Range(6, 24)][Display(Name="Word Label Font Size", Order=11, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(6, 24)][Display(Name="Word Label Font Size", Order=13, GroupName="01. Display")]
 		public int LabelFontSize { get; set; }
 
-		[NinjaScriptProperty][Range(0, 200)][Display(Name="Word Label X Offset", Order=12, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(0, 200)][Display(Name="Word Label X Offset", Order=14, GroupName="01. Display")]
 		public int LabelXOffset { get; set; }
 
 		// --- 02. RTH Open (default 09:30 NY) ---
@@ -889,7 +932,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool RthEnabled { get; set; }
 		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Open Time (New York)", Description="Session open in America/New_York; the 30-second bar starting at this time is the opening range. Default 09:30.", Order=2, GroupName="02. RTH Open")]
 		public TimeSpan RthOpenTime { get; set; }
-		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="RTH Close Time (New York)", Description="RTH extensions (lines, unlocks, scale tags) end here and never stretch into Globex. Default 16:15.", Order=3, GroupName="02. RTH Open")]
+		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="RTH Close Time (New York)", Description="RTH extensions (lines, unlocks, scale tags) end here and never stretch into Globex. Default 16:00.", Order=3, GroupName="02. RTH Open")]
 		public TimeSpan RthCloseTime { get; set; }
 		[XmlIgnore][Display(Name="High/Low Color", Order=4, GroupName="02. RTH Open")]
 		public WpfBrush RthColor { get; set; }
