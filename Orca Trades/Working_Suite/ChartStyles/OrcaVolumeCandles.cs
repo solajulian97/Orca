@@ -48,13 +48,18 @@ namespace NinjaTrader.NinjaScript.ChartStyles
 		public int MaxBodyWidthPercent { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Wick Matches Body", Order = 20, GroupName = "Wicks",
-			Description = "If true, wicks use the candle body color; otherwise the Wick stroke color.")]
+		[Display(Name = "Wick Matches Body", Order = 20, GroupName = "Colors",
+			Description = "If true, wicks use the candle body (up/down) color; otherwise the Wick color.")]
 		public bool WickMatchesBody { get; set; }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Border Matches Wick", Order = 21, GroupName = "Colors",
+			Description = "If true, the body border uses the wick color; otherwise the Border color.")]
+		public bool BorderMatchesWick { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(0.0, 0.5)]
-		[Display(Name = "Wick Width Scale", Order = 21, GroupName = "Wicks",
+		[Display(Name = "Wick Width Scale", Order = 30, GroupName = "Wicks",
 			Description = "Wick line width as a fraction of body width (clamped to 1-3px). 0 forces a 1px wick.")]
 		public double WickWidthScale { get; set; }
 
@@ -146,9 +151,12 @@ namespace NinjaTrader.NinjaScript.ChartStyles
 				int lowY = chartScale.GetYByValue(low);
 				int openY = chartScale.GetYByValue(open);
 
+				// Body: up/down brushes. Wick: own color, or body when WickMatchesBody.
+				// Border: own color, or wick color when BorderMatchesWick.
+				// Candle outline overrides (e.g. Absorption) still win for border + wick.
 				Brush bodyBrush = barOverrideBrush ?? (close >= open ? UpBrushDX : DownBrushDX);
-				Brush outlineBrush = candleOutlineOverrideBrush ?? Stroke.BrushDX;
 				Brush wickBrush = candleOutlineOverrideBrush ?? (WickMatchesBody ? bodyBrush : Stroke2.BrushDX);
+				Brush outlineBrush = candleOutlineOverrideBrush ?? (BorderMatchesWick ? wickBrush : Stroke.BrushDX);
 
 				if (Math.Abs(openY - closeY) < 1)
 				{
@@ -207,6 +215,7 @@ namespace NinjaTrader.NinjaScript.ChartStyles
 				clone.MinBodyWidthPercent = MinBodyWidthPercent;
 				clone.MaxBodyWidthPercent = MaxBodyWidthPercent;
 				clone.WickMatchesBody = WickMatchesBody;
+				clone.BorderMatchesWick = BorderMatchesWick;
 				clone.WickWidthScale = WickWidthScale;
 			}
 			return clone ?? new OrcaVolumeCandles();
@@ -222,15 +231,17 @@ namespace NinjaTrader.NinjaScript.ChartStyles
 				MinBodyWidthPercent = 35;
 				MaxBodyWidthPercent = 96;
 				WickMatchesBody = true;
+				BorderMatchesWick = false;
 				WickWidthScale = 0.1;
 			}
 			else if (State == State.Configure)
 			{
+				// Body up/down, Border (Stroke), Wick (Stroke2) — separate color picks.
 				SetPropertyName("BarWidth", "Bar width");
-				SetPropertyName("UpBrush", "Up bars color");
-				SetPropertyName("DownBrush", "Down bars color");
-				SetPropertyName("Stroke", "Candle outline");
-				SetPropertyName("Stroke2", "Candle wick");
+				SetPropertyName("UpBrush", "Body up");
+				SetPropertyName("DownBrush", "Body down");
+				SetPropertyName("Stroke", "Border");
+				SetPropertyName("Stroke2", "Wick");
 				SetPropertyOrder("BarWidth", 1);
 				SetPropertyOrder("UpBrush", 2);
 				SetPropertyOrder("DownBrush", 3);
