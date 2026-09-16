@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -33,8 +35,29 @@ namespace NinjaTrader.NinjaScript.Indicators
 		IndividualLinesAndArrows
 	}
 
+	public class ExecutionLinesVisibilityHotkeyConverter : StringConverter
+	{
+		public override bool GetStandardValuesSupported(ITypeDescriptorContext context) { return true; }
+		public override bool GetStandardValuesExclusive(ITypeDescriptorContext context) { return false; }
+		public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context)
+		{
+			return new StandardValuesCollection(new[]
+			{
+				"Ctrl+Alt+E", "Ctrl+Shift+E", "Alt+Shift+E", "Alt+E",
+				"Ctrl+Alt+L", "Ctrl+Shift+L", "Alt+Shift+L", "Alt+L"
+			});
+		}
+	}
+
 	public class OrcaExecutionLines : Indicator
 	{
+		private struct VisibilityHotkeyGesture
+		{
+			public Key Key;
+			public ModifierKeys Modifiers;
+			public bool IsValid;
+		}
+
 		private class PendingEntry
 		{
 			public DateTime Time;
@@ -70,6 +93,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private class RoundTrip
 		{
+            public string IdentityJson;
 			public int Number;
 			public bool IsLong;
 			public bool IsComplete;
@@ -90,6 +114,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public double MaxFavorableExcursion;
 			public bool MAEMFECalculated;
 			public string Note;
+			public string SetupGrade;
 			public List<string> Tags = new List<string>();
 			public double RealizedPnl;
 			public double CurrentUnrealizedPnl;
@@ -110,9 +135,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private class AccountState
 		{
+            public readonly Orca.SharedIdentity.Tracker Identity = new Orca.SharedIdentity.Tracker();
 			public string AccountName;
 			public List<PendingEntry> OpenFills  = new List<PendingEntry>();
 			public List<RoundTrip>   RoundTrips  = new List<RoundTrip>();
+			public HashSet<string> ProcessedExecutionIds = new HashSet<string>();
 			public RoundTrip CurrentRT;
 			public RoundTrip PendingAccountDayPnlRoundTrip;
 			public DateTime PendingAccountDayPnlUntilUtc;
@@ -122,6 +149,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private class OpenRoundTripSnapshot
 		{
+			public bool IsLong;
 			public List<FillMatch> Matches = new List<FillMatch>();
 			public List<ExecutionDisplayEvent> ExecutionEvents = new List<ExecutionDisplayEvent>();
 			public List<PendingEntry> OpenLots = new List<PendingEntry>();
@@ -136,6 +164,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string lastDrawnAccount;
 		private readonly object tradeLock = new object();
 		private static readonly TimeSpan AccountDayPnlRefreshWindow = TimeSpan.FromSeconds(2);
+		private static readonly TimeSpan LiveVisualRefreshInterval = TimeSpan.FromMilliseconds(100);
 		private bool needsRedraw;
 		private bool historyLoaded;
 		private DateTime shotClockEnd = DateTime.MinValue;
@@ -147,10 +176,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool mouseHooked;
 		private ChartScale lastRenderChartScale;
 		private Dictionary<string, string> tradeNotes;
+		private Dictionary<string, string> tradeSetupGrades;
 		private Dictionary<string, List<string>> tradeTags;
 		private HashSet<string> knownTags;
+		private HashSet<string> hiddenTags;
+		private static readonly string[] SetupGradeOptions = new[] { "A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F" };
+		private const int DwmwaUseImmersiveDarkMode = 20;
+		private const int DwmwaUseImmersiveDarkModeBefore20H1 = 19;
 		private bool noteEditorOpen;
 		private bool suppressNextRightClickMenu;
+		private readonly string diagnosticsInstanceId = Guid.NewGuid().ToString("N");
+		private bool diagnosticsRegistered;
+		private long nextDiagnosticsTradeStateReportUtcTicks;
+		private long nextDiagnosticsRenderStatusReportUtcTicks;
+		private DispatcherTimer liveVisualRefreshTimer;
+		private int liveVisualRefreshPending;
+		private long liveVisualRefreshRequestCount;
+		private long liveVisualRefreshIssuedCount;
+		private long liveVisualRefreshCoalescedCount;
+		private bool isTerminated;
+		private Instrument executionInstrument;
+		private ChartControl visibilityHotkeyChartControl;
+		private KeyEventHandler visibilityHotkeyHandler;
+		private bool visibilityHotkeyAttached;
+		private volatile bool visibilityHotkeyHidden;
+
+		[DllImport("dwmapi.dll", PreserveSig = true)]
+		private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int valueSize);
 
 		// â”€â”€ properties â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		[NinjaScriptProperty][Display(Name="Show Execution Lines",   GroupName="1. Visibility", Order=0)] public bool ShowExecutionLines  { get; set; }
@@ -163,6 +215,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name="Open Trade Rendering",                        GroupName="1. Visibility", Order=7)] public OrcaOpenTradeRenderMode OpenTradeRendering { get; set; }
 		[Display(Name="Show Session Total",                          GroupName="1. Visibility", Order=8)] public bool ShowSessionTotal     { get; set; }
 		[Display(Name="Show Account Day P&L On Label",               GroupName="1. Visibility", Order=9)] public bool ShowAccountDayPnlOnLabel { get; set; }
+		[Display(Name="Enable Visibility Hotkey", Description="Lets the configured chart-focused hotkey show or hide all Execution Lines visuals without stopping trade tracking.", GroupName="1. Visibility", Order=10)] public bool EnableVisibilityHotkey { get; set; }
+		[TypeConverter(typeof(ExecutionLinesVisibilityHotkeyConverter))]
+		[Display(Name="Visibility Hotkey", Description="Select or enter an exact chart-focused chord such as Ctrl+Alt+E.", GroupName="1. Visibility", Order=11)] public string VisibilityHotkey { get; set; }
 		[Display(Name="Session Total Position",                      GroupName="3. Appearance", Order=2)] public TextPosition SessionTotalPosition { get; set; }
 
 		[NinjaScriptProperty][Display(Name="Enable Shot Clock",      GroupName="5. Shot Clock", Order=0)] public bool EnableShotClock     { get; set; }
@@ -176,8 +231,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[NinjaScriptProperty][Display(Name="Load from Account",      GroupName="2. Data", Order=0)] public bool LoadTodayHistory   { get; set; }
 		[NinjaScriptProperty][Display(Name="Load from SQLite",       GroupName="2. Data", Order=1)] public bool LoadSqliteHistory  { get; set; }
-		[NinjaScriptProperty][Range(0,100000)][Display(Name="Risk Amount ($)", GroupName="2. Data", Order=2)] public double RiskAmount { get; set; }
-		[Range(5,200)][Display(Name="Max Trades To Show",            GroupName="2. Data", Order=3)] public int MaxTradesToShow     { get; set; }
+		[Display(Name="Follow Execution Router", Description="On ES or NQ charts, display executions from the MES or MNQ contract selected by the enabled Execution Router mapping.", GroupName="2. Data", Order=2)] public bool FollowExecutionRouter { get; set; }
+		[NinjaScriptProperty][Range(0,100000)][Display(Name="Risk Amount ($)", GroupName="2. Data", Order=3)] public double RiskAmount { get; set; }
+		[Range(5,200)][Display(Name="Max Trades To Show",            GroupName="2. Data", Order=4)] public int MaxTradesToShow     { get; set; }
 
 		[NinjaScriptProperty][Range(1,5)][Display(Name="Line Width", GroupName="3. Appearance", Order=0)] public int LineWidth      { get; set; }
 		[NinjaScriptProperty][Range(8,20)][Display(Name="Label Font Size", GroupName="3. Appearance", Order=1)] public int LabelFontSize { get; set; }
@@ -215,9 +271,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				OpenTradeRendering  = OrcaOpenTradeRenderMode.Off;
 				ShowSessionTotal     = true;
 				ShowAccountDayPnlOnLabel = false;
+				EnableVisibilityHotkey = false;
+				VisibilityHotkey = "Ctrl+Alt+E";
 				SessionTotalPosition = TextPosition.TopRight;
 				LoadTodayHistory     = true;
 				LoadSqliteHistory    = true;
+				FollowExecutionRouter = true;
 				EnableShotClock      = true;
 				ShotClockSeconds     = 300;
 				ShotClockPosition    = TextPosition.BottomRight;
@@ -246,15 +305,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 				noteEditorOpen   = false;
 				suppressNextRightClickMenu = false;
 				lastRenderChartScale = null;
+				isTerminated = false;
+				liveVisualRefreshTimer = null;
+				liveVisualRefreshPending = 0;
+				liveVisualRefreshRequestCount = 0;
+				liveVisualRefreshIssuedCount = 0;
+				liveVisualRefreshCoalescedCount = 0;
+				visibilityHotkeyChartControl = null;
+				visibilityHotkeyHandler = null;
+				visibilityHotkeyAttached = false;
+				visibilityHotkeyHidden = false;
 				tradeNotes = new Dictionary<string, string>();
+				tradeSetupGrades = new Dictionary<string, string>();
 				tradeTags = new Dictionary<string, List<string>>();
 				knownTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				hiddenTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				ResolveExecutionInstrument();
 				LoadTradeNotes();
 				LoadJournalTradeData();
 				HookAllAccounts();
+				ReportDiagnosticsState("DataLoaded");
+			}
+			else if (State == State.Historical)
+			{
+				QueueAttachVisibilityHotkey();
 			}
 			else if (State == State.Realtime)
 			{
+				QueueAttachVisibilityHotkey();
+				StartLiveVisualRefreshTimer();
+				RequestLiveVisualRefresh();
 				if (ChartControl != null && !mouseHooked)
 				{
 					ChartControl.MouseMove  += OnChartMouseMove;
@@ -264,10 +344,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 					ChartControl.ContextMenuOpening += OnChartContextMenuOpening;
 					mouseHooked = true;
 				}
+				ReportDiagnosticsState("Realtime");
 			}
 			else if (State == State.Terminated)
 			{
+				isTerminated = true;
+				DetachVisibilityHotkey();
+				StopLiveVisualRefreshTimer();
 				UnhookAllAccounts();
+				executionInstrument = null;
 				if (ChartControl != null && mouseHooked)
 				{
 					try { ChartControl.MouseMove  -= OnChartMouseMove; } catch {}
@@ -277,7 +362,353 @@ namespace NinjaTrader.NinjaScript.Indicators
 					try { ChartControl.ContextMenuOpening -= OnChartContextMenuOpening; } catch {}
 				}
 				try { RemoveDrawObject("OrcaShotClock"); } catch {}
+				OrcaDiagnosticsCore.UnregisterInstance(diagnosticsInstanceId);
+				diagnosticsRegistered = false;
 			}
+		}
+
+		private void QueueAttachVisibilityHotkey()
+		{
+			if (!EnableVisibilityHotkey || visibilityHotkeyAttached || ChartControl == null)
+				return;
+
+			VisibilityHotkeyGesture gesture;
+			if (!TryParseVisibilityHotkey(VisibilityHotkey, out gesture))
+				return;
+
+			ChartControl chart = ChartControl;
+			try
+			{
+				chart.Dispatcher.InvokeAsync(() =>
+				{
+					if (State == State.Terminated || visibilityHotkeyAttached || ChartControl == null || !ReferenceEquals(chart, ChartControl))
+						return;
+
+					visibilityHotkeyHandler = OnVisibilityHotkeyPreviewKeyDown;
+					visibilityHotkeyChartControl = chart;
+					chart.AddHandler(Keyboard.PreviewKeyDownEvent, visibilityHotkeyHandler, true);
+					visibilityHotkeyAttached = true;
+				});
+			}
+			catch { }
+		}
+
+		private void DetachVisibilityHotkey()
+		{
+			ChartControl chart = visibilityHotkeyChartControl;
+			KeyEventHandler handler = visibilityHotkeyHandler;
+			visibilityHotkeyAttached = false;
+			visibilityHotkeyChartControl = null;
+			visibilityHotkeyHandler = null;
+			if (chart == null || handler == null) return;
+
+			Action detach = () =>
+			{
+				try { chart.RemoveHandler(Keyboard.PreviewKeyDownEvent, handler); }
+				catch { }
+			};
+
+			try
+			{
+				if (chart.Dispatcher.CheckAccess()) detach();
+				else chart.Dispatcher.InvokeAsync(detach);
+			}
+			catch { }
+		}
+
+		private void OnVisibilityHotkeyPreviewKeyDown(object sender, KeyEventArgs e)
+		{
+			if (e == null || e.IsRepeat || !EnableVisibilityHotkey || !visibilityHotkeyAttached || IsTextInputFocused())
+				return;
+
+			VisibilityHotkeyGesture gesture;
+			if (!TryParseVisibilityHotkey(VisibilityHotkey, out gesture) || !VisibilityHotkeyMatches(e, gesture))
+				return;
+
+			e.Handled = true;
+			bool hidden = !visibilityHotkeyHidden;
+			visibilityHotkeyHidden = hidden;
+			try { TriggerCustomEvent(o => ApplyVisibilityHotkeyState((bool)o), hidden); }
+			catch (Exception ex) { Print("OrcaExecLines VisibilityHotkey: " + ex.Message); }
+		}
+
+		private void ApplyVisibilityHotkeyState(bool hidden)
+		{
+			visibilityHotkeyHidden = hidden;
+			if (hidden)
+			{
+				ClearOldDrawings();
+				RemoveDrawObject("OrcaRT_SessionTotal");
+				RemoveDrawObject("OrcaShotClock");
+			}
+			else
+			{
+				needsRedraw = false;
+				DrawAllTrades();
+			}
+
+			ChartControl chart = visibilityHotkeyChartControl;
+			if (chart != null)
+			{
+				try { chart.Dispatcher.InvokeAsync(() => chart.InvalidateVisual()); }
+				catch { }
+			}
+		}
+
+		private static bool IsTextInputFocused()
+		{
+			object focused = Keyboard.FocusedElement;
+			return focused is System.Windows.Controls.Primitives.TextBoxBase
+				|| focused is System.Windows.Controls.PasswordBox
+				|| focused is System.Windows.Controls.ComboBox;
+		}
+
+		private static bool TryParseVisibilityHotkey(string configured, out VisibilityHotkeyGesture gesture)
+		{
+			gesture = new VisibilityHotkeyGesture();
+			if (string.IsNullOrWhiteSpace(configured)) return false;
+
+			ModifierKeys modifiers = ModifierKeys.None;
+			Key key = Key.None;
+			foreach (string rawPart in configured.Split(new[] { '+' }, StringSplitOptions.RemoveEmptyEntries))
+			{
+				string part = rawPart.Trim();
+				if (part.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || part.Equals("Control", StringComparison.OrdinalIgnoreCase)) modifiers |= ModifierKeys.Control;
+				else if (part.Equals("Alt", StringComparison.OrdinalIgnoreCase)) modifiers |= ModifierKeys.Alt;
+				else if (part.Equals("Shift", StringComparison.OrdinalIgnoreCase)) modifiers |= ModifierKeys.Shift;
+				else if (part.Equals("Win", StringComparison.OrdinalIgnoreCase) || part.Equals("Windows", StringComparison.OrdinalIgnoreCase)) modifiers |= ModifierKeys.Windows;
+				else
+				{
+					Key parsed;
+					if (key != Key.None || !Enum.TryParse(part, true, out parsed) || parsed == Key.None) return false;
+					key = parsed;
+				}
+			}
+
+			if (key == Key.None) return false;
+			gesture = new VisibilityHotkeyGesture { Key = key, Modifiers = modifiers, IsValid = true };
+			return true;
+		}
+
+		private static bool VisibilityHotkeyMatches(KeyEventArgs e, VisibilityHotkeyGesture gesture)
+		{
+			if (e == null || !gesture.IsValid) return false;
+			Key eventKey = e.Key == Key.System ? e.SystemKey : e.Key;
+			return eventKey == gesture.Key && Keyboard.Modifiers == gesture.Modifiers;
+		}
+
+		private void EnsureDiagnosticsRegistered()
+		{
+			if (diagnosticsRegistered)
+				return;
+
+			OrcaDiagnosticsCore.RegisterInstance(diagnosticsInstanceId, "OrcaExecutionLines", this);
+			diagnosticsRegistered = true;
+			ReportDiagnosticsSourceDeclaration();
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 0, "PrimaryChartSeries", "Chart", "Execution line host chart; live MAE/MFE also consumes Last market data");
+		}
+
+		private void ReportDiagnosticsState(string stateName)
+		{
+			EnsureDiagnosticsRegistered();
+			OrcaDiagnosticsCore.ReportState(diagnosticsInstanceId, stateName);
+			ReportDiagnosticsSourceDeclaration();
+			ReportDiagnosticsTradeState("state=" + stateName, DateTime.UtcNow, true);
+		}
+
+		private void ReportDiagnosticsSourceDeclaration()
+		{
+			string sourceHealth = State == State.Historical ? "HistoricalReplay" : "Live";
+			if (hookedAccounts == null || hookedAccounts.Count == 0)
+				sourceHealth = "NoAccountHooks";
+			else if (string.IsNullOrEmpty(activeAccountName))
+				sourceHealth = "WaitingForChartTraderAccount";
+			OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, "AccountExecutionEvents+LastMarketData", sourceHealth, "AccountExecutionState");
+		}
+
+		private DateTime GetDiagnosticsBarTime()
+		{
+			try
+			{
+				if (CurrentBar >= 0)
+					return Time[0];
+			}
+			catch { }
+			return DateTime.UtcNow;
+		}
+
+		private static bool TryClaimDiagnosticsInterval(ref long nextReportUtcTicks, bool force)
+		{
+			long nowTicks = DateTime.UtcNow.Ticks;
+			if (force)
+			{
+				System.Threading.Interlocked.Exchange(ref nextReportUtcTicks, nowTicks + TimeSpan.TicksPerSecond);
+				return true;
+			}
+
+			while (true)
+			{
+				long nextTicks = System.Threading.Interlocked.Read(ref nextReportUtcTicks);
+				if (nowTicks < nextTicks)
+					return false;
+				if (System.Threading.Interlocked.CompareExchange(
+					ref nextReportUtcTicks,
+					nowTicks + TimeSpan.TicksPerSecond,
+					nextTicks) == nextTicks)
+					return true;
+			}
+		}
+
+		private void StartLiveVisualRefreshTimer()
+		{
+			ChartControl chart = ChartControl;
+			if (chart == null || isTerminated || liveVisualRefreshTimer != null)
+				return;
+
+			Action startTimer = () =>
+			{
+				if (isTerminated || liveVisualRefreshTimer != null)
+					return;
+				liveVisualRefreshTimer = new DispatcherTimer(DispatcherPriority.Render, chart.Dispatcher);
+				liveVisualRefreshTimer.Interval = LiveVisualRefreshInterval;
+				liveVisualRefreshTimer.Tick += OnLiveVisualRefreshTimerTick;
+				liveVisualRefreshTimer.Start();
+			};
+
+			try
+			{
+				if (chart.Dispatcher.CheckAccess())
+					startTimer();
+				else
+					chart.Dispatcher.InvokeAsync(startTimer);
+			}
+			catch { }
+		}
+
+		private void StopLiveVisualRefreshTimer()
+		{
+			DispatcherTimer timer = liveVisualRefreshTimer;
+			liveVisualRefreshTimer = null;
+			System.Threading.Interlocked.Exchange(ref liveVisualRefreshPending, 0);
+			if (timer == null)
+				return;
+
+			Action stopTimer = () =>
+			{
+				try
+				{
+					timer.Stop();
+					timer.Tick -= OnLiveVisualRefreshTimerTick;
+				}
+				catch { }
+			};
+
+			try
+			{
+				if (timer.Dispatcher.CheckAccess())
+					stopTimer();
+				else
+					timer.Dispatcher.InvokeAsync(stopTimer);
+			}
+			catch { }
+		}
+
+		private void RequestLiveVisualRefresh()
+		{
+			System.Threading.Interlocked.Increment(ref liveVisualRefreshRequestCount);
+			if (System.Threading.Interlocked.Exchange(ref liveVisualRefreshPending, 1) == 1)
+				System.Threading.Interlocked.Increment(ref liveVisualRefreshCoalescedCount);
+		}
+
+		private void OnLiveVisualRefreshTimerTick(object sender, EventArgs e)
+		{
+			if (isTerminated)
+				return;
+
+			bool accountChanged = false;
+			if (DateTime.UtcNow - lastAccountCheck > TimeSpan.FromSeconds(1))
+			{
+				lastAccountCheck = DateTime.UtcNow;
+				accountChanged = RefreshChartTraderAccountOnDispatcher();
+			}
+			if (!accountChanged && System.Threading.Interlocked.Exchange(ref liveVisualRefreshPending, 0) == 0)
+				return;
+			try
+			{
+				if (ChartControl != null)
+				{
+					ChartControl.InvalidateVisual();
+					System.Threading.Interlocked.Increment(ref liveVisualRefreshIssuedCount);
+				}
+			}
+			catch { }
+		}
+		private void ReportDiagnosticsTradeState(string status, DateTime modelTime, bool force = false)
+		{
+			if (!OrcaDiagnosticsCore.IsEnabled)
+				return;
+			if (!TryClaimDiagnosticsInterval(ref nextDiagnosticsTradeStateReportUtcTicks, force))
+				return;
+			EnsureDiagnosticsRegistered();
+			int accounts = 0;
+			int roundTrips = 0;
+			int completed = 0;
+			int openLots = 0;
+			int executionEvents = 0;
+			int matches = 0;
+			bool pendingRedraw = needsRedraw;
+
+			lock (tradeLock)
+			{
+				if (accountStates != null)
+				{
+					accounts = accountStates.Count;
+					foreach (var kv in accountStates)
+					{
+						if (kv.Value == null || kv.Value.RoundTrips == null)
+							continue;
+						roundTrips += kv.Value.RoundTrips.Count;
+						if (kv.Value.OpenFills != null)
+							openLots += kv.Value.OpenFills.Count;
+						foreach (RoundTrip rt in kv.Value.RoundTrips)
+						{
+							if (rt == null)
+								continue;
+							if (rt.IsComplete)
+								completed++;
+							if (rt.OpenLots != null)
+								openLots += rt.OpenLots.Count;
+							if (rt.ExecutionEvents != null)
+								executionEvents += rt.ExecutionEvents.Count;
+							if (rt.Matches != null)
+								matches += rt.Matches.Count;
+						}
+					}
+				}
+			}
+
+			int hooked = hookedAccounts != null ? hookedAccounts.Count : 0;
+			string active = string.IsNullOrEmpty(activeAccountName) ? "none" : activeAccountName;
+			string cacheStatus = "accounts=" + accounts + " hooked=" + hooked + " active=" + active
+				+ " completed=" + completed + " roundTrips=" + roundTrips + " openLots=" + openLots
+				+ " execEvents=" + executionEvents + " matches=" + matches + " history=" + historyLoaded
+				+ " redraw=" + pendingRedraw
+				+ " refresh=" + System.Threading.Interlocked.Read(ref liveVisualRefreshRequestCount)
+				+ "/" + System.Threading.Interlocked.Read(ref liveVisualRefreshIssuedCount)
+				+ " coalesced=" + System.Threading.Interlocked.Read(ref liveVisualRefreshCoalescedCount)
+				+ " " + status;
+			OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "AccountExecutionState", cacheStatus);
+			OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, modelTime == DateTime.MinValue ? DateTime.UtcNow : modelTime, null);
+			ReportDiagnosticsSourceDeclaration();
+		}
+
+		private void ReportDiagnosticsRenderObjects(int completedRoundTrips, int openRoundTrips)
+		{
+			if (!OrcaDiagnosticsCore.IsEnabled
+				|| !TryClaimDiagnosticsInterval(ref nextDiagnosticsRenderStatusReportUtcTicks, false))
+				return;
+			OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "RenderObjects",
+				"completedRoundTrips=" + completedRoundTrips + " openRoundTrips=" + openRoundTrips);
 		}
 
 		private void HookAllAccounts()
@@ -285,27 +716,100 @@ namespace NinjaTrader.NinjaScript.Indicators
 			try
 			{
 				foreach (Account a in Account.All)
-				{
-					a.ExecutionUpdate += OnExecutionUpdate;
-					a.AccountItemUpdate += OnAccountItemUpdate;
-					hookedAccounts.Add(a);
-				}
+					HookAccount(a);
 			}
 			catch (Exception ex) { Print("OrcaExecLines HookAll: " + ex.Message); }
+			ReportDiagnosticsTradeState("accounts hooked", DateTime.UtcNow, true);
+		}
+
+		private void ResolveExecutionInstrument()
+		{
+			executionInstrument = Instrument;
+			if (FollowExecutionRouter && Instrument != null)
+			{
+				try
+				{
+					Instrument routed = NinjaTrader.NinjaScript.AddOns.OrcaExecutionRouter.ResolveExecutionInstrument(Instrument, Instrument);
+					if (routed != null)
+						executionInstrument = routed;
+				}
+				catch (Exception ex) { Print("OrcaExecLines Router: " + ex.Message); }
+			}
+
+			string chartName = Instrument != null ? Instrument.FullName : "";
+			string executionName = GetExecutionInstrumentFullName();
+			Print("OrcaExecLines: chart " + chartName + " using executions from " + executionName);
+		}
+
+		private string GetExecutionInstrumentFullName()
+		{
+			Instrument source = executionInstrument ?? Instrument;
+			return source != null ? source.FullName : "";
+		}
+
+		private bool IsExecutionInstrument(Instrument candidate)
+		{
+			return candidate != null
+				&& string.Equals(candidate.FullName, GetExecutionInstrumentFullName(), StringComparison.OrdinalIgnoreCase);
+		}
+
+		private bool HookAccount(Account account)
+		{
+			if (account == null || hookedAccounts == null) return false;
+			lock (hookedAccounts)
+			{
+				if (hookedAccounts.Any(existing => object.ReferenceEquals(existing, account)))
+					return false;
+				account.ExecutionUpdate += OnExecutionUpdate;
+				account.AccountItemUpdate += OnAccountItemUpdate;
+				hookedAccounts.Add(account);
+				return true;
+			}
+		}
+
+		private bool EnsureSelectedAccountHooked(string accountName)
+		{
+			if (string.IsNullOrEmpty(accountName)) return false;
+			try
+			{
+				Account account = Account.All.FirstOrDefault(candidate => candidate != null && candidate.Name == accountName);
+				if (account == null || !HookAccount(account)) return false;
+
+				int loaded = historyLoaded ? LoadFromAccountExecutions(account) : 0;
+				if (historyLoaded)
+				{
+					CalculateAccountMAEMFE(accountName);
+					ApplyNotesToAccountRoundTrips(accountName);
+				}
+				needsRedraw = true;
+				Print("OrcaExecLines: hooked selected account " + accountName + " and loaded " + loaded + " executions");
+				ReportDiagnosticsTradeState("selected account hooked=" + accountName + " loaded=" + loaded, DateTime.UtcNow, true);
+				return true;
+			}
+			catch (Exception ex)
+			{
+				Print("OrcaExecLines HookSelected: " + ex.Message);
+				return false;
+			}
 		}
 
 		private void UnhookAllAccounts()
 		{
 			try
 			{
-				foreach (Account a in hookedAccounts)
+				List<Account> accounts;
+				lock (hookedAccounts)
+				{
+					accounts = hookedAccounts.ToList();
+					hookedAccounts.Clear();
+				}
+				foreach (Account a in accounts)
 					try
 					{
 						a.ExecutionUpdate -= OnExecutionUpdate;
 						a.AccountItemUpdate -= OnAccountItemUpdate;
 					}
 					catch {}
-				hookedAccounts.Clear();
 			}
 			catch {}
 		}
@@ -339,23 +843,66 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch { return ""; }
 		}
 
+		private bool SetActiveChartTraderAccount(string accountName)
+		{
+			if (string.IsNullOrEmpty(accountName))
+				return false;
+			bool newlyHooked = EnsureSelectedAccountHooked(accountName);
+			if (accountName == activeAccountName)
+				return newlyHooked;
+
+			activeAccountName = accountName;
+			ClearOldDrawings();
+			RemoveDrawObject("OrcaRT_SessionTotal");
+			lastDrawnAccount = activeAccountName;
+			needsRedraw = true;
+			return true;
+		}
+
+		private bool RefreshChartTraderAccountOnDispatcher()
+		{
+			try
+			{
+				if (ChartControl == null || !ChartControl.Dispatcher.CheckAccess())
+					return false;
+
+				Chart chart = Window.GetWindow(ChartControl) as Chart;
+				return chart != null && chart.ChartTrader != null && chart.ChartTrader.Account != null
+					&& SetActiveChartTraderAccount(chart.ChartTrader.Account.Name);
+			}
+			catch { return false; }
+		}
+
+        protected override void OnConnectionStatusUpdate(ConnectionStatusEventArgs e)
+        {
+            lock (tradeLock)
+                if (accountStates != null) foreach (var state in accountStates.Values)
+                    state.Identity.Invalidate("Connection status changed; await observed flat boundary");
+        }
+
 		private void OnExecutionUpdate(object sender, ExecutionEventArgs e)
 		{
 			try
 			{
-				if (e.Execution == null || e.Execution.Instrument == null || Instrument == null) return;
-				if (e.Execution.Instrument.FullName != Instrument.FullName) return;
-				if (e.Execution.Order == null) return;
+				if (e == null || e.Execution == null || e.Execution.Instrument == null || Instrument == null) return;
+                if (e.IsSod) {
+                    lock (tradeLock) foreach (var state in accountStates.Values) state.Identity.Invalidate("Start-of-day/reconnect execution");
+                }
+				if (!IsExecutionInstrument(e.Execution.Instrument)) return;
+				if (e.Execution.Order == null) {
+                    lock (tradeLock) if (accountStates != null) foreach (var state in accountStates.Values) state.Identity.Invalidate("Execution side unavailable");
+                    return;
+                }
 				string acct = e.Execution.Account != null ? e.Execution.Account.Name : "Unknown";
 				bool isBuy  = e.Execution.Order.OrderAction == OrderAction.Buy || e.Execution.Order.OrderAction == OrderAction.BuyToCover;
-				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct, e.Execution.Account);
+				ProcessExecution(isBuy, e.Execution.Price, e.Execution.Quantity, e.Execution.Time, acct, e.Execution.Account, e.Execution.ExecutionId, e.IsSod ? (int?)null : e.Execution.Position);
 			}
 			catch (Exception ex) { Print("OrcaExecLines OnExec: " + ex.Message); }
 		}
-
 		private void OnAccountItemUpdate(object sender, AccountItemEventArgs e)
 		{
 			bool refreshed = false;
+			long diagnosticsSettlementStart = OrcaDiagnosticsCore.IsEnabled ? Stopwatch.GetTimestamp() : 0;
 			try
 			{
 				if (e == null || e.Account == null
@@ -378,7 +925,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						return;
 					}
 					if (!rt.IsComplete || rt.AccountName != e.Account.Name
-						|| Instrument == null || rt.InstrumentFullName != Instrument.FullName)
+						|| Instrument == null || rt.InstrumentFullName != GetExecutionInstrumentFullName())
 						return;
 
 					// Multi-fill closes can publish intermediate account totals; keep the latest value in the bounded window.
@@ -395,18 +942,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 					});
 			}
 			catch (Exception ex) { Print("OrcaExecLines OnAccountItem: " + ex.Message); }
+			if (refreshed && diagnosticsSettlementStart > 0)
+				OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution settlement", Stopwatch.GetTimestamp() - diagnosticsSettlementStart);
 		}
+
 
 		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName)
 		{
-			ProcessExecution(isBuy, price, quantity, time, accountName, null);
+			ProcessExecution(isBuy, price, quantity, time, accountName, null, null);
 		}
 
 		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName, Account executionAccount)
 		{
+			ProcessExecution(isBuy, price, quantity, time, accountName, executionAccount, null);
+		}
+
+		private void ProcessExecution(bool isBuy, double price, int quantity, DateTime time, string accountName, Account executionAccount, string executionId, int? identityPositionAfter = null)
+		{
+			long diagnosticsExecutionStart = OrcaDiagnosticsCore.IsEnabled ? Stopwatch.GetTimestamp() : 0;
 			lock (tradeLock)
 			{
 				AccountState st  = GetOrCreateState(accountName);
+				if (!string.IsNullOrWhiteSpace(executionId) && !st.ProcessedExecutionIds.Add(executionId))
+					return;
+                var identity = st.Identity.Fill(accountName, GetExecutionInstrumentFullName(), executionId,
+                    isBuy ? quantity : -quantity, time, identityPositionAfter);
 				int prev = st.NetPosition;
 				int next = st.NetPosition + (isBuy ? quantity : -quantity);
 
@@ -459,6 +1019,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						UpdateRoundTripPnl(st.CurrentRT, price, time);
 						ArmAccountDayPnlRefresh(st, st.CurrentRT, executionAccount);
 						CaptureAccountDayPnl(st.CurrentRT, executionAccount);
+                        st.CurrentRT.IdentityJson = Orca.SharedIdentity.Contract.Json(identity);
 						st.CurrentRT.IsComplete = true;
 						st.CurrentRT.MAEMFECalculated = true;
 						ApplyNoteToRoundTrip(st.CurrentRT);
@@ -488,6 +1049,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				st.NetPosition = next;
 			}
+			if (diagnosticsExecutionStart > 0)
+				OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution event", Stopwatch.GetTimestamp() - diagnosticsExecutionStart);
+			// Historical replay uses this same path for every fill. Keep the model exact,
+			// but do not rescan all retained trades for every diagnostics publication.
+			if (OrcaDiagnosticsCore.IsEnabled)
+				ReportDiagnosticsTradeState("execution account=" + accountName, time);
 		}
 
 		private void CaptureAccountDayPnl(RoundTrip rt, Account account)
@@ -502,7 +1069,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			catch {}
 		}
-
 		private void ArmAccountDayPnlRefresh(AccountState st, RoundTrip rt, Account account)
 		{
 			if (st == null || rt == null || account == null || account.Name != rt.AccountName)
@@ -511,13 +1077,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			st.PendingAccountDayPnlUntilUtc = DateTime.UtcNow.Add(AccountDayPnlRefreshWindow);
 		}
 
+
 		private void StartNewRoundTrip(AccountState st, bool isBuy, double price, int qty, DateTime time, string acct)
 		{
 			st.RTCounter++;
 			st.OpenFills.Clear();
 			st.CurrentRT = new RoundTrip {
 				Number=st.RTCounter, IsLong=isBuy, IsComplete=false, AccountName=acct,
-				InstrumentFullName=Instrument != null ? Instrument.FullName : "",
+				InstrumentFullName=GetExecutionInstrumentFullName(),
 				EntryPriceSum=price*(double)qty, EntryQtyTotal=qty, FirstEntryTime=time, LastExitTime=DateTime.MinValue
 			};
 			st.CurrentRT.LastPrice = price;
@@ -565,7 +1132,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string BuildExecutionRenderTag(RoundTrip rt, string type, int sequence)
 		{
 			string account = rt != null && !string.IsNullOrEmpty(rt.AccountName) ? rt.AccountName : activeAccountName;
-			string instrument = rt != null && !string.IsNullOrEmpty(rt.InstrumentFullName) ? rt.InstrumentFullName : (Instrument != null ? Instrument.FullName : "");
+			string instrument = rt != null && !string.IsNullOrEmpty(rt.InstrumentFullName) ? rt.InstrumentFullName : GetExecutionInstrumentFullName();
 			int number = rt != null ? rt.Number : 0;
 			return "OrcaExec_" + (account ?? "") + "*" + (instrument ?? "") + "*" + number.ToString(CultureInfo.InvariantCulture) + "*" + type + "*" + sequence.ToString(CultureInfo.InvariantCulture);
 		}
@@ -574,8 +1141,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			try
 			{
-				if (Instrument != null && Instrument.MasterInstrument != null && Instrument.MasterInstrument.PointValue > 0)
-					return Instrument.MasterInstrument.PointValue;
+				Instrument source = executionInstrument ?? Instrument;
+				if (source != null && source.MasterInstrument != null && source.MasterInstrument.PointValue > 0)
+					return source.MasterInstrument.PointValue;
 			}
 			catch {}
 			return 1.0;
@@ -625,16 +1193,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// â”€â”€ history loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		private void LoadAllHistory()
 		{
+			// One-off wall times remain available when Diagnostics was not open at startup.
+			// These phases include reconstruction; SQLite time is not pure disk/provider time.
+			long startupStart = Stopwatch.GetTimestamp();
 			if (LoadSqliteHistory) LoadFromSqlite();
+			long sqliteEnd = Stopwatch.GetTimestamp();
 			if (LoadTodayHistory)  LoadFromAccountExecutions();
+			long accountEnd = Stopwatch.GetTimestamp();
 			CalculateAllMAEMFE();
+			long extremaEnd = Stopwatch.GetTimestamp();
 			ApplyNotesToAllRoundTrips();
 			int total = 0;
 			lock (tradeLock)
 				foreach (var kv in accountStates)
 					total += kv.Value.RoundTrips.Count(r => r.IsComplete);
 			Print("OrcaExecLines: " + total + " completed round-trips loaded");
+			long startupEnd = Stopwatch.GetTimestamp();
+			double tickMilliseconds = 1000.0 / Stopwatch.Frequency;
+			Print(string.Format(CultureInfo.InvariantCulture,
+				"OrcaExecLines startup [{0}] chart={1} execution={2} bars={3}: sqlite+rebuild={4:F1}ms account+rebuild={5:F1}ms chart-MAE/MFE={6:F1}ms notes+summary={7:F1}ms total={8:F1}ms sqliteEnabled={9} accountHistoryEnabled={10}",
+				diagnosticsInstanceId, Instrument == null ? "unknown" : Instrument.FullName,
+				GetExecutionInstrumentFullName(), BarsPeriod,
+				(sqliteEnd - startupStart) * tickMilliseconds,
+				(accountEnd - sqliteEnd) * tickMilliseconds,
+				(extremaEnd - accountEnd) * tickMilliseconds,
+				(startupEnd - extremaEnd) * tickMilliseconds,
+				(startupEnd - startupStart) * tickMilliseconds, LoadSqliteHistory, LoadTodayHistory));
 			if (total > 0) needsRedraw = true;
+			ReportDiagnosticsTradeState("history loaded completed=" + total, DateTime.UtcNow, true);
 		}
 
 		private void LoadFromSqlite()
@@ -650,21 +1236,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 				try
 				{
 					connT.GetMethod("Open").Invoke(conn, null);
-					string instName = Instrument.MasterInstrument.Name;
+					Instrument sourceInstrument = executionInstrument ?? Instrument;
+					if (sourceInstrument == null || sourceInstrument.MasterInstrument == null) return;
+					string instName = sourceInstrument.MasterInstrument.Name;
 					object cmd   = connT.GetMethod("CreateCommand").Invoke(conn, null);
 					Type   cmdT  = cmd.GetType();
 					cmdT.GetProperty("CommandText").SetValue(cmd,
-						"SELECT e.Time, a.Name, e.MarketPosition, e.Price, e.Quantity " +
+						"SELECT e.Time, a.Name, e.MarketPosition, e.Price, e.Quantity, e.ExecutionId " +
 						"FROM Executions e " +
 						"INNER JOIN Accounts a ON e.Account = a.Id " +
 						"INNER JOIN Instruments i ON e.Instrument = i.Id " +
 						"INNER JOIN MasterInstruments mi ON i.MasterInstrument = mi.Id " +
-						"WHERE mi.Name = @n ORDER BY e.Time ASC", null);
+						"WHERE mi.Name = @n ORDER BY e.Time ASC, e.Id ASC", null);
 					object p  = cmdT.GetMethod("CreateParameter").Invoke(cmd, null);
 					Type   pT = p.GetType();
 					pT.GetProperty("ParameterName").SetValue(p, "@n", null);
 					pT.GetProperty("Value").SetValue(p, instName, null);
-					object ps = cmdT.GetProperty("Parameters").GetValue(cmd, null);
+					object ps = cmdT.GetProperty("Parameters", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).GetValue(cmd, null);
 					ps.GetType().GetMethod("Add", new[] { pT }).Invoke(ps, new[] { p });
 
 					object r  = cmdT.GetMethod("ExecuteReader", Type.EmptyTypes).Invoke(cmd, null);
@@ -674,6 +1262,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					var mStr    = rT.GetMethod("GetString");
 					var mI32    = rT.GetMethod("GetInt32");
 					var mDbl    = rT.GetMethod("GetDouble");
+					var mValue  = rT.GetMethod("GetValue");
 					int count = 0;
 					while ((bool)mRead.Invoke(r, null))
 					{
@@ -682,7 +1271,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 						int    mp    = (int)mI32.Invoke(r, new object[]{2});
 						double price = (double)mDbl.Invoke(r, new object[]{3});
 						int    qty   = (int)mI32.Invoke(r, new object[]{4});
-						ProcessExecution(mp == (int)MarketPosition.Long, price, qty, new DateTime(ticks), acct);
+						string executionId = Convert.ToString(mValue.Invoke(r, new object[]{5}), CultureInfo.InvariantCulture);
+						ProcessExecution(mp == (int)MarketPosition.Long, price, qty, ConvertSqliteExecutionTime(ticks), acct, null, executionId);
 						count++;
 					}
 					rT.GetMethod("Close").Invoke(r, null);
@@ -693,44 +1283,83 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch (Exception ex) { Print("OrcaExecLines SQLite: " + ex.Message); }
 		}
 
+		// NinjaTrader stores execution ticks in SQLite as UTC; convert only the replay source to
+		// the same local time basis used by live Execution.Time before placing chart drawings.
+		private DateTime ConvertSqliteExecutionTime(long ticks)
+		{
+			return new DateTime(ticks, DateTimeKind.Utc).ToLocalTime();
+		}
+
 		private void LoadFromAccountExecutions()
 		{
 			try
 			{
-				if (Instrument == null) return;
-				string chartInst = Instrument.FullName;
-				HashSet<string> seen = new HashSet<string>();
-				lock (tradeLock)
-					foreach (var kv in accountStates)
-						foreach (var rt in kv.Value.RoundTrips)
-							foreach (var m in rt.Matches)
-							{
-								seen.Add(m.EntryTime.Ticks+"_"+m.EntryPrice+"_"+m.Quantity);
-								seen.Add(m.ExitTime.Ticks +"_"+m.ExitPrice +"_"+m.Quantity);
-							}
-
-				foreach (Account a in hookedAccounts)
-				{
-					try
-					{
-						var execs = a.Executions.Where(e => e.Instrument != null && e.Instrument.FullName == chartInst && e.Order != null).OrderBy(e => e.Time).ToList();
-						int count = 0;
-						foreach (var e in execs)
-						{
-							string key = e.Time.Ticks+"_"+e.Price+"_"+e.Quantity;
-							if (!seen.Contains(key))
-							{
-								bool isBuy = e.Order.OrderAction == OrderAction.Buy || e.Order.OrderAction == OrderAction.BuyToCover;
-								ProcessExecution(isBuy, e.Price, e.Quantity, e.Time, a.Name);
-								count++;
-							}
-						}
-						if (count > 0) Print("OrcaExecLines: " + count + " executions from account " + a.Name);
-					}
-					catch {}
-				}
+				List<Account> accounts;
+				lock (hookedAccounts) accounts = hookedAccounts.ToList();
+				foreach (Account account in accounts)
+					LoadFromAccountExecutions(account);
 			}
 			catch (Exception ex) { Print("OrcaExecLines AcctExec: " + ex.Message); }
+		}
+
+		private int LoadFromAccountExecutions(Account account)
+		{
+			if (account == null || Instrument == null) return 0;
+			try
+			{
+				string executionInst = GetExecutionInstrumentFullName();
+				HashSet<string> seenExecutionIds = new HashSet<string>();
+				HashSet<string> seenFallbackKeys = new HashSet<string>();
+				lock (tradeLock)
+				{
+					AccountState state;
+					if (accountStates.TryGetValue(account.Name, out state) && state != null)
+					{
+						seenExecutionIds.UnionWith(state.ProcessedExecutionIds);
+						foreach (RoundTrip rt in state.RoundTrips)
+							foreach (ExecutionDisplayEvent executionEvent in rt.ExecutionEvents)
+								seenFallbackKeys.Add(BuildExecutionHistoryKey(executionEvent.Time, executionEvent.Price, executionEvent.Quantity, executionEvent.IsBuy));
+					}
+				}
+
+				var executions = account.Executions
+					.Where(execution => execution.Instrument != null
+						&& string.Equals(execution.Instrument.FullName, executionInst, StringComparison.OrdinalIgnoreCase)
+						&& execution.Order != null)
+					.OrderBy(execution => execution.Time)
+					.ToList();
+				int count = 0;
+				foreach (var execution in executions)
+				{
+					bool isBuy = execution.Order.OrderAction == OrderAction.Buy || execution.Order.OrderAction == OrderAction.BuyToCover;
+					string executionId = execution.ExecutionId;
+					if (!string.IsNullOrWhiteSpace(executionId))
+					{
+						if (!seenExecutionIds.Add(executionId)) continue;
+					}
+					else
+					{
+						string key = BuildExecutionHistoryKey(execution.Time, execution.Price, execution.Quantity, isBuy);
+						if (!seenFallbackKeys.Add(key)) continue;
+					}
+					ProcessExecution(isBuy, execution.Price, execution.Quantity, execution.Time, account.Name, account, executionId);
+					count++;
+				}
+				if (count > 0) Print("OrcaExecLines: " + count + " executions from account " + account.Name);
+				return count;
+			}
+			catch (Exception ex)
+			{
+				Print("OrcaExecLines AcctExec " + account.Name + ": " + ex.Message);
+				return 0;
+			}
+		}
+
+		private string BuildExecutionHistoryKey(DateTime time, double price, int quantity, bool isBuy)
+		{
+			return time.Ticks.ToString(CultureInfo.InvariantCulture) + "_"
+				+ price.ToString("R", CultureInfo.InvariantCulture) + "_"
+				+ quantity.ToString(CultureInfo.InvariantCulture) + "_" + (isBuy ? "B" : "S");
 		}
 
 		private void CalculateAllMAEMFE()
@@ -740,6 +1369,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				foreach (var kv in accountStates)
 					foreach (var rt in kv.Value.RoundTrips.Where(r => r.IsComplete))
 						CalculateMAEMFE(rt);
+		}
+
+		private void CalculateAccountMAEMFE(string accountName)
+		{
+			if (!ShowMAEMFE || string.IsNullOrEmpty(accountName)) return;
+			lock (tradeLock)
+			{
+				AccountState state;
+				if (!accountStates.TryGetValue(accountName, out state) || state == null) return;
+				foreach (RoundTrip rt in state.RoundTrips.Where(roundTrip => roundTrip.IsComplete))
+					CalculateMAEMFE(rt);
+			}
 		}
 
 		private void CalculateMAEMFE(RoundTrip rt)
@@ -841,64 +1482,138 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnMarketData(MarketDataEventArgs e)
 		{
+			long diagnosticsWorkStart = 0;
+			long diagnosticsLivePnlTicks = 0;
+			long diagnosticsRefreshTicks = 0;
+			bool reportDiagnosticsTradeState = false;
 			try
 			{
+				if (e != null && OrcaDiagnosticsCore.IsEnabled)
+				{
+					EnsureDiagnosticsRegistered();
+					long diagnosticsSequence = OrcaDiagnosticsCore.ReportMarketData(diagnosticsInstanceId, e.MarketDataType, e.Time);
+					diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+				}
 				if (!ShowMAEMFE || e == null || e.MarketDataType != MarketDataType.Last || e.Price <= 0) return;
+				bool updated = false;
+				long diagnosticsPhaseStart = diagnosticsWorkStart > 0 ? Stopwatch.GetTimestamp() : 0;
 				lock (tradeLock)
 				{
-					if (string.IsNullOrEmpty(activeAccountName) || !accountStates.ContainsKey(activeAccountName)) return;
-					AccountState st = accountStates[activeAccountName];
-					if (st == null || st.CurrentRT == null || st.NetPosition == 0) return;
-					UpdateRoundTripPnl(st.CurrentRT, e.Price, e.Time);
+					if (!string.IsNullOrEmpty(activeAccountName) && accountStates.ContainsKey(activeAccountName))
+					{
+						AccountState st = accountStates[activeAccountName];
+						if (st != null && st.CurrentRT != null && st.NetPosition != 0)
+						{
+							UpdateRoundTripPnl(st.CurrentRT, e.Price, e.Time);
+							updated = true;
+						}
+					}
 				}
-				if (ChartControl != null) ChartControl.InvalidateVisual();
+				if (diagnosticsPhaseStart > 0)
+					diagnosticsLivePnlTicks = Stopwatch.GetTimestamp() - diagnosticsPhaseStart;
+				if (!updated) return;
+				diagnosticsPhaseStart = diagnosticsWorkStart > 0 ? Stopwatch.GetTimestamp() : 0;
+				if (ChartControl != null) RequestLiveVisualRefresh();
+				if (diagnosticsPhaseStart > 0)
+					diagnosticsRefreshTicks = Stopwatch.GetTimestamp() - diagnosticsPhaseStart;
+				reportDiagnosticsTradeState = true;
 			}
 			catch {}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+				{
+					long diagnosticsTotalTicks = Stopwatch.GetTimestamp() - diagnosticsWorkStart;
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.MarketData, -1, diagnosticsWorkStart);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution live-pnl", diagnosticsLivePnlTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution refresh", diagnosticsRefreshTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution other", Math.Max(0, diagnosticsTotalTicks - diagnosticsLivePnlTicks - diagnosticsRefreshTicks));
+				}
+				if (reportDiagnosticsTradeState && diagnosticsWorkStart > 0)
+					ReportDiagnosticsTradeState("market-data pnl", e == null ? DateTime.MinValue : e.Time);
+			}
 		}
 
 		// â”€â”€ bar update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		protected override void OnBarUpdate()
 		{
-			if (!historyLoaded && CurrentBar > 10)
+			long diagnosticsWorkStart = 0;
+			long diagnosticsHistoryTicks = 0;
+			long diagnosticsAccountTicks = 0;
+			long diagnosticsLivePnlTicks = 0;
+			long diagnosticsRedrawTicks = 0;
+			int diagnosticsBarsInProgress = BarsInProgress;
+			DateTime diagnosticsBarTime = DateTime.MinValue;
+			if (OrcaDiagnosticsCore.IsEnabled)
 			{
-				historyLoaded   = true;
-				shotClockIsLive = true;
-				LoadAllHistory();
+				EnsureDiagnosticsRegistered();
+				diagnosticsBarTime = GetDiagnosticsBarTime();
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportBarUpdate(diagnosticsInstanceId, BarsInProgress, diagnosticsBarTime);
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
 			}
-
-			if (DateTime.UtcNow - lastAccountCheck > TimeSpan.FromSeconds(1))
+			try
 			{
-				lastAccountCheck = DateTime.UtcNow;
-				string acct = GetChartTraderAccount();
-				if (!string.IsNullOrEmpty(acct) && acct != activeAccountName)
+				long diagnosticsPhaseStart = diagnosticsWorkStart > 0 ? Stopwatch.GetTimestamp() : 0;
+				if (!historyLoaded && CurrentBar > 10)
 				{
-					activeAccountName = acct;
-					ClearOldDrawings();
-					RemoveDrawObject("OrcaRT_SessionTotal");
-					lastDrawnAccount = activeAccountName;
-					needsRedraw = true;
+					historyLoaded   = true;
+					shotClockIsLive = true;
+					LoadAllHistory();
+				}
+				if (diagnosticsPhaseStart > 0)
+					diagnosticsHistoryTicks = Stopwatch.GetTimestamp() - diagnosticsPhaseStart;
+
+				diagnosticsPhaseStart = diagnosticsWorkStart > 0 ? Stopwatch.GetTimestamp() : 0;
+				if (DateTime.UtcNow - lastAccountCheck > TimeSpan.FromSeconds(1))
+				{
+					lastAccountCheck = DateTime.UtcNow;
+					string acct = GetChartTraderAccount();
+					SetActiveChartTraderAccount(acct);
+				}
+				if (diagnosticsPhaseStart > 0)
+					diagnosticsAccountTicks = Stopwatch.GetTimestamp() - diagnosticsPhaseStart;
+
+				diagnosticsPhaseStart = diagnosticsWorkStart > 0 ? Stopwatch.GetTimestamp() : 0;
+				UpdateLiveMAEMFE();
+				if (diagnosticsPhaseStart > 0)
+					diagnosticsLivePnlTicks = Stopwatch.GetTimestamp() - diagnosticsPhaseStart;
+				if (visibilityHotkeyHidden) return;
+
+				diagnosticsPhaseStart = diagnosticsWorkStart > 0 ? Stopwatch.GetTimestamp() : 0;
+				if (needsRedraw) { needsRedraw = false; DrawAllTrades(); }
+				if (diagnosticsPhaseStart > 0)
+					diagnosticsRedrawTicks = Stopwatch.GetTimestamp() - diagnosticsPhaseStart;
+
+				if (!EnableShotClock || !shotClockActive) return;
+				double rem = (shotClockEnd - DateTime.UtcNow).TotalSeconds;
+				if (rem <= 0)
+				{
+					shotClockActive = false;
+					try { RemoveDrawObject("OrcaShotClock"); } catch {}
+					return;
+				}
+				System.Windows.Media.Brush clk = rem <= 30 ? ShotClockWarningColor : ShotClockColor;
+				Draw.TextFixed(this, "OrcaShotClock",
+					string.Format("Shot Clock  {0}:{1:D2}", (int)(rem/60), (int)(rem%60)),
+					ShotClockPosition, clk,
+					new SimpleFont("Arial", 14){ Bold=true },
+					System.Windows.Media.Brushes.Transparent,
+					System.Windows.Media.Brushes.Transparent, 0);
+			}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+				{
+					long diagnosticsTotalTicks = Stopwatch.GetTimestamp() - diagnosticsWorkStart;
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.BarUpdate, diagnosticsBarsInProgress, diagnosticsWorkStart);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution history", diagnosticsHistoryTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution account", diagnosticsAccountTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution live-pnl", diagnosticsLivePnlTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution redraw", diagnosticsRedrawTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Execution other", Math.Max(0, diagnosticsTotalTicks - diagnosticsHistoryTicks - diagnosticsAccountTicks - diagnosticsLivePnlTicks - diagnosticsRedrawTicks));
+					ReportDiagnosticsTradeState("bar-update", diagnosticsBarTime);
 				}
 			}
-
-			UpdateLiveMAEMFE();
-
-			if (needsRedraw) { needsRedraw = false; DrawAllTrades(); }
-
-			if (!EnableShotClock || !shotClockActive) return;
-			double rem = (shotClockEnd - DateTime.UtcNow).TotalSeconds;
-			if (rem <= 0)
-			{
-				shotClockActive = false;
-				try { RemoveDrawObject("OrcaShotClock"); } catch {}
-				return;
-			}
-			System.Windows.Media.Brush clk = rem <= 30 ? ShotClockWarningColor : ShotClockColor;
-			Draw.TextFixed(this, "OrcaShotClock",
-				string.Format("Shot Clock  {0}:{1:D2}", (int)(rem/60), (int)(rem%60)),
-				ShotClockPosition, clk,
-				new SimpleFont("Arial", 14){ Bold=true },
-				System.Windows.Media.Brushes.Transparent,
-				System.Windows.Media.Brushes.Transparent, 0);
 		}
 
 		// â”€â”€ drawing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -914,7 +1629,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawAllTrades()
 		{
-			if (!ShowExecutionLines) return;
+			if (!ShowExecutionLines || visibilityHotkeyHidden) return;
 			List<RoundTrip> list;
 			lock (tradeLock)
 			{
@@ -927,6 +1642,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				list = accountStates[activeAccountName].RoundTrips.Where(rt => rt.IsComplete).ToList();
 			}
 			if (lastDrawnAccount != activeAccountName) { ClearOldDrawings(); lastDrawnAccount = activeAccountName; }
+			if (OrcaDiagnosticsCore.IsEnabled)
+				OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "ExecutionDrawObjects", "completedRoundTrips=" + list.Count);
 
 			if (list.Count > 0)
 			{
@@ -956,6 +1673,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string Fmt(double d) { return (d >= 0 ? "+$" : "-$") + Math.Abs(d).ToString("N2"); }
 		private string FmtAbs(double d) { return "$" + Math.Abs(d).ToString("N2"); }
 
+        private readonly HashSet<string> identityRecords = new HashSet<string>(StringComparer.Ordinal);
+
 		private string NotesFilePath
 		{
 			get
@@ -970,30 +1689,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 			try
 			{
 				if (tradeNotes == null) tradeNotes = new Dictionary<string, string>();
+				if (tradeSetupGrades == null) tradeSetupGrades = new Dictionary<string, string>();
 				if (tradeTags == null) tradeTags = new Dictionary<string, List<string>>();
 				if (knownTags == null) knownTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				if (hiddenTags == null) hiddenTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 				tradeNotes.Clear();
+				tradeSetupGrades.Clear();
 				tradeTags.Clear();
 				knownTags.Clear();
+				hiddenTags.Clear();
 				if (!System.IO.File.Exists(NotesFilePath)) return;
 
 				foreach (string line in System.IO.File.ReadAllLines(NotesFilePath))
 				{
 					if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#")) continue;
 					string[] parts = line.Split('\t');
-					if (parts.Length >= 2 && parts[0] == "TAG")
+                    if (parts.Length >= 3 && parts[0] == "IDENTITY_V1")
+                    {
+                        identityRecords.Add(line);
+                    }
+					else if (parts.Length >= 2 && parts[0] == "TAG")
 					{
 						string tag = NormalizeTagName(DecodeText(parts[1]));
 						if (!string.IsNullOrEmpty(tag)) knownTags.Add(tag);
+					}
+					else if (parts.Length >= 2 && parts[0] == "HIDDEN_TAG")
+					{
+						string tag = NormalizeTagName(DecodeText(parts[1]));
+						if (!string.IsNullOrEmpty(tag)) hiddenTags.Add(tag);
 					}
 					else if (parts.Length >= 3 && parts[0] == "TRADE")
 					{
 						string key = DecodeText(parts[1]);
 						string note = DecodeText(parts[2]);
 						List<string> tags = parts.Length >= 4 ? DecodeTags(parts[3]) : new List<string>();
+						string grade = parts.Length >= 5 ? NormalizeSetupGrade(DecodeText(parts[4])) : "";
 						if (!string.IsNullOrEmpty(key))
 						{
 							if (!string.IsNullOrWhiteSpace(note)) tradeNotes[key] = note;
+							if (!string.IsNullOrEmpty(grade)) tradeSetupGrades[key] = grade;
 							if (tags.Count > 0) tradeTags[key] = tags;
 							foreach (string tag in tags) knownTags.Add(tag);
 						}
@@ -1020,26 +1754,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 				List<string> lines = new List<string>();
 				lines.Add("# OrcaExecutionLines trade journal data. Values are base64 UTF-8.");
 				lines.Add("# TAG<TAB>tag");
-				lines.Add("# TRADE<TAB>key<TAB>note<TAB>tag1\\u001Ftag2");
+				lines.Add("# HIDDEN_TAG<TAB>tag");
+				lines.Add("# TRADE<TAB>key<TAB>note<TAB>tag1\\u001Ftag2<TAB>setup-grade");
 
 				if (knownTags != null)
 					foreach (string tag in knownTags.Where(t => !string.IsNullOrWhiteSpace(t)).OrderBy(t => t, StringComparer.OrdinalIgnoreCase))
 						lines.Add("TAG\t" + EncodeText(tag));
+				if (hiddenTags != null)
+					foreach (string tag in hiddenTags.Where(t => !string.IsNullOrWhiteSpace(t)).OrderBy(t => t, StringComparer.OrdinalIgnoreCase))
+						lines.Add("HIDDEN_TAG\t" + EncodeText(tag));
 
 				HashSet<string> keys = new HashSet<string>();
 				if (tradeNotes != null) foreach (string key in tradeNotes.Keys) keys.Add(key);
+				if (tradeSetupGrades != null) foreach (string key in tradeSetupGrades.Keys) keys.Add(key);
 				if (tradeTags != null) foreach (string key in tradeTags.Keys) keys.Add(key);
 
 				foreach (string key in keys.OrderBy(k => k))
 				{
 					string note = "";
+					string grade = "";
 					List<string> tags = new List<string>();
 					if (tradeNotes != null) tradeNotes.TryGetValue(key, out note);
+					if (tradeSetupGrades != null) tradeSetupGrades.TryGetValue(key, out grade);
 					if (tradeTags != null && tradeTags.ContainsKey(key)) tags = tradeTags[key];
-					if (string.IsNullOrWhiteSpace(note) && (tags == null || tags.Count == 0)) continue;
-					lines.Add("TRADE\t" + EncodeText(key) + "\t" + EncodeText(note ?? "") + "\t" + EncodeTags(tags));
+					if (string.IsNullOrWhiteSpace(note) && string.IsNullOrEmpty(grade) && (tags == null || tags.Count == 0)) continue;
+					lines.Add("TRADE\t" + EncodeText(key) + "\t" + EncodeText(note ?? "") + "\t" + EncodeTags(tags) + "\t" + EncodeText(grade ?? ""));
 				}
 
+                // Preserve other chart instances' identity evidence; write only during explicit note saving.
+                if (File.Exists(NotesFilePath))
+                    foreach (string existing in File.ReadAllLines(NotesFilePath))
+                        if (existing.StartsWith("IDENTITY_V1\t", StringComparison.Ordinal)) identityRecords.Add(existing);
+                lock (tradeLock)
+                    foreach (var state in accountStates.Values)
+                        foreach (var trade in state.RoundTrips)
+                            if (trade.IsComplete && !string.IsNullOrEmpty(trade.IdentityJson) && keys.Contains(BuildTradeKey(trade)))
+                                identityRecords.Add("IDENTITY_V1\t" + EncodeText(BuildTradeKey(trade)) + "\t" + EncodeText(trade.IdentityJson));
+                lines.AddRange(identityRecords.OrderBy(record => record, StringComparer.Ordinal));
 				System.IO.File.WriteAllLines(NotesFilePath, lines.ToArray(), new UTF8Encoding(false));
 			}
 			catch (Exception ex) { Print("OrcaExecLines SaveNotes: " + ex.Message); }
@@ -1090,7 +1841,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			Type pT = p.GetType();
 			pT.GetProperty("ParameterName").SetValue(p, name, null);
 			pT.GetProperty("Value").SetValue(p, value ?? DBNull.Value, null);
-			object ps = cmdT.GetProperty("Parameters").GetValue(cmd, null);
+			object ps = cmdT.GetProperty("Parameters", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).GetValue(cmd, null);
 			ps.GetType().GetMethod("Add", new[] { pT }).Invoke(ps, new[] { p });
 		}
 
@@ -1165,6 +1916,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				"entry_time TEXT, " +
 				"exit_time TEXT, " +
 				"notes TEXT, " +
+				"setup_grade TEXT, " +
 				"updated_at TEXT NOT NULL);");
 
 			TryExecuteJournalNonQuery(conn,
@@ -1172,9 +1924,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				"trade_key TEXT NOT NULL, " +
 				"tag_name TEXT NOT NULL, " +
 				"PRIMARY KEY (trade_key, tag_name));");
+			TryExecuteJournalNonQuery(conn,
+				"CREATE TABLE IF NOT EXISTS execution_line_hidden_tags (" +
+				"tag_name TEXT PRIMARY KEY);");
 
 			TryExecuteJournalNonQuery(conn, "ALTER TABLE trades ADD COLUMN trade_key TEXT;");
 			TryExecuteJournalNonQuery(conn, "ALTER TABLE trades ADD COLUMN instrument_full_name TEXT NOT NULL DEFAULT '';");
+			TryExecuteJournalNonQuery(conn, "ALTER TABLE execution_line_annotations ADD COLUMN setup_grade TEXT;");
 			TryExecuteJournalNonQuery(conn, "ALTER TABLE trade_tags ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';");
 			TryExecuteJournalNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_trades_trade_key ON trades(trade_key);");
 		}
@@ -1188,6 +1944,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (conn == null) return;
 				EnsureJournalAnnotationSchema(conn);
 				LoadJournalKnownTags(conn);
+				LoadJournalHiddenTags(conn);
 				LoadJournalTradeNotes(conn);
 				LoadJournalPendingAnnotations(conn);
 			}
@@ -1215,6 +1972,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 			catch {}
+			finally
+			{
+				IDisposable d = reader as IDisposable;
+				if (d != null) d.Dispose();
+			}
+		}
+
+		private void LoadJournalHiddenTags(object conn)
+		{
+			object reader = null;
+			try
+			{
+				if (hiddenTags == null) hiddenTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				reader = ExecuteJournalReader(conn, "SELECT tag_name FROM execution_line_hidden_tags;");
+				Type rT = reader.GetType();
+				var mRead = rT.GetMethod("Read");
+				var mStr = rT.GetMethod("GetString");
+				while ((bool)mRead.Invoke(reader, null))
+				{
+					string tag = NormalizeTagName((string)mStr.Invoke(reader, new object[] { 0 }));
+					if (!string.IsNullOrEmpty(tag)) hiddenTags.Add(tag);
+				}
+			}
+			catch { }
 			finally
 			{
 				IDisposable d = reader as IDisposable;
@@ -1281,7 +2062,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			try
 			{
 				reader = ExecuteJournalReader(conn,
-					"SELECT trade_key, notes FROM execution_line_annotations;");
+					"SELECT trade_key, notes, setup_grade FROM execution_line_annotations;");
 				Type rT = reader.GetType();
 				var mRead = rT.GetMethod("Read");
 				var mStr = rT.GetMethod("GetString");
@@ -1294,6 +2075,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						string note = (string)mStr.Invoke(reader, new object[] { 1 });
 						if (!string.IsNullOrWhiteSpace(note)) tradeNotes[key] = note;
+					}
+					if (!(bool)mIsDbNull.Invoke(reader, new object[] { 2 }))
+					{
+						string grade = NormalizeSetupGrade((string)mStr.Invoke(reader, new object[] { 2 }));
+						if (!string.IsNullOrEmpty(grade)) tradeSetupGrades[key] = grade;
 					}
 				}
 			}
@@ -1360,7 +2146,57 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void SaveRoundTripJournalToDatabase(RoundTrip rt, string key, string note, List<string> tags)
+		private void HideTagOption(string tag)
+		{
+			string cleanTag = NormalizeTagName(tag);
+			if (string.IsNullOrEmpty(cleanTag)) return;
+			if (hiddenTags == null) hiddenTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			if (!hiddenTags.Add(cleanTag)) return;
+
+			SaveTradeNotes();
+			object conn = null;
+			try
+			{
+				conn = OpenJournalConnection(true);
+				if (conn == null) return;
+				EnsureJournalAnnotationSchema(conn);
+				ExecuteJournalNonQuery(conn,
+					"INSERT OR IGNORE INTO execution_line_hidden_tags (tag_name) VALUES (@tag);",
+					"@tag", cleanTag);
+			}
+			catch (Exception ex) { Print("OrcaExecLines HideTag: " + ex.Message); }
+			finally
+			{
+				IDisposable d = conn as IDisposable;
+				if (d != null) d.Dispose();
+			}
+		}
+
+		private void RestoreHiddenTagOption(string tag)
+		{
+			string cleanTag = NormalizeTagName(tag);
+			if (string.IsNullOrEmpty(cleanTag) || hiddenTags == null || !hiddenTags.Remove(cleanTag)) return;
+
+			SaveTradeNotes();
+			object conn = null;
+			try
+			{
+				conn = OpenJournalConnection(true);
+				if (conn == null) return;
+				EnsureJournalAnnotationSchema(conn);
+				ExecuteJournalNonQuery(conn,
+					"DELETE FROM execution_line_hidden_tags WHERE tag_name = @tag;",
+					"@tag", cleanTag);
+			}
+			catch (Exception ex) { Print("OrcaExecLines RestoreTag: " + ex.Message); }
+			finally
+			{
+				IDisposable d = conn as IDisposable;
+				if (d != null) d.Dispose();
+			}
+		}
+
+		private void SaveRoundTripJournalToDatabase(RoundTrip rt, string key, string note, List<string> tags, string setupGrade)
 		{
 			object conn = null;
 			try
@@ -1371,7 +2207,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				EnsureJournalAnnotationSchema(conn);
 
 				List<string> cleanTags = tags ?? new List<string>();
-				if (string.IsNullOrWhiteSpace(note) && cleanTags.Count == 0)
+				if (string.IsNullOrWhiteSpace(note) && string.IsNullOrEmpty(setupGrade) && cleanTags.Count == 0)
 				{
 					ExecuteJournalNonQuery(conn, "DELETE FROM execution_line_annotation_tags WHERE trade_key = @key;", "@key", key);
 					ExecuteJournalNonQuery(conn, "DELETE FROM execution_line_annotations WHERE trade_key = @key;", "@key", key);
@@ -1386,15 +2222,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				ExecuteJournalNonQuery(conn,
 					"INSERT OR REPLACE INTO execution_line_annotations " +
-					"(trade_key, account, instrument_full_name, direction, entry_time, exit_time, notes, updated_at) " +
-					"VALUES (@key, @account, @instrument, @direction, @entry, @exit, @note, @updated);",
+					"(trade_key, account, instrument_full_name, direction, entry_time, exit_time, notes, setup_grade, updated_at) " +
+					"VALUES (@key, @account, @instrument, @direction, @entry, @exit, @note, @grade, @updated);",
 					"@key", key,
 					"@account", rt.AccountName ?? "",
-					"@instrument", Instrument != null ? Instrument.FullName : "",
+					"@instrument", !string.IsNullOrEmpty(rt.InstrumentFullName) ? rt.InstrumentFullName : GetExecutionInstrumentFullName(),
 					"@direction", rt.IsLong ? "L" : "S",
 					"@entry", rt.FirstEntryTime.ToString("o"),
 					"@exit", rt.LastExitTime.ToString("o"),
 					"@note", string.IsNullOrWhiteSpace(note) ? null : note,
+					"@grade", string.IsNullOrEmpty(setupGrade) ? null : setupGrade,
 					"@updated", DateTime.Now.ToString("o"));
 
 				ExecuteJournalNonQuery(conn, "DELETE FROM execution_line_annotation_tags WHERE trade_key = @key;", "@key", key);
@@ -1446,7 +2283,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (rt == null) return null;
 
-				string fullInstrument = Instrument != null ? Instrument.FullName : "";
+				string fullInstrument = !string.IsNullOrEmpty(rt.InstrumentFullName) ? rt.InstrumentFullName : GetExecutionInstrumentFullName();
 				string instrument = GetJournalShortInstrument(fullInstrument);
 				string account = !string.IsNullOrEmpty(rt.AccountName) ? rt.AccountName : activeAccountName;
 				if (string.IsNullOrEmpty(account) || string.IsNullOrEmpty(instrument)) return null;
@@ -1565,10 +2402,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return (tag ?? "").Trim();
 		}
 
+		private string NormalizeSetupGrade(string grade)
+		{
+			string clean = (grade ?? "").Trim().ToUpperInvariant();
+			return SetupGradeOptions.Contains(clean) ? clean : "";
+		}
+
 		private string BuildTradeKey(RoundTrip rt)
 		{
 			if (rt == null) return "";
-			string instrument = Instrument != null ? Instrument.FullName : "";
+			string instrument = !string.IsNullOrEmpty(rt.InstrumentFullName) ? rt.InstrumentFullName : GetExecutionInstrumentFullName();
 			string account = !string.IsNullOrEmpty(rt.AccountName) ? rt.AccountName : activeAccountName;
 			return string.Join("|", new string[] {
 				account ?? "",
@@ -1613,12 +2456,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return new List<string>();
 		}
 
+		private string GetRoundTripSetupGrade(RoundTrip rt)
+		{
+			if (rt == null) return "";
+			string grade = NormalizeSetupGrade(rt.SetupGrade);
+			if (!string.IsNullOrEmpty(grade)) return grade;
+			if (tradeSetupGrades == null) return "";
+
+			if (tradeSetupGrades.TryGetValue(BuildTradeKey(rt), out grade))
+			{
+				rt.SetupGrade = NormalizeSetupGrade(grade);
+				return rt.SetupGrade;
+			}
+			return "";
+		}
+
 		private void ApplyNoteToRoundTrip(RoundTrip rt)
 		{
-			if (rt == null || tradeNotes == null) return;
-			string note;
-			if (tradeNotes.TryGetValue(BuildTradeKey(rt), out note))
-				rt.Note = note;
+			if (rt == null) return;
+			if (tradeNotes != null)
+			{
+				string note;
+				if (tradeNotes.TryGetValue(BuildTradeKey(rt), out note))
+					rt.Note = note;
+			}
+			if (tradeSetupGrades != null)
+			{
+				string grade;
+				if (tradeSetupGrades.TryGetValue(BuildTradeKey(rt), out grade))
+					rt.SetupGrade = NormalizeSetupGrade(grade);
+			}
 			if (tradeTags != null)
 			{
 				List<string> tags;
@@ -1639,10 +2506,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch {}
 		}
 
-		private void SaveRoundTripJournal(RoundTrip rt, string note, IEnumerable<string> tags)
+		private void ApplyNotesToAccountRoundTrips(string accountName)
+		{
+			if (string.IsNullOrEmpty(accountName)) return;
+			try
+			{
+				lock (tradeLock)
+				{
+					AccountState state;
+					if (!accountStates.TryGetValue(accountName, out state) || state == null) return;
+					foreach (RoundTrip rt in state.RoundTrips.Where(roundTrip => roundTrip.IsComplete))
+						ApplyNoteToRoundTrip(rt);
+				}
+			}
+			catch { }
+		}
+
+		private void SaveRoundTripJournal(RoundTrip rt, string note, IEnumerable<string> tags, string setupGrade)
 		{
 			if (rt == null) return;
 			if (tradeNotes == null) tradeNotes = new Dictionary<string, string>();
+			if (tradeSetupGrades == null) tradeSetupGrades = new Dictionary<string, string>();
 			if (tradeTags == null) tradeTags = new Dictionary<string, List<string>>();
 			if (knownTags == null) knownTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1657,6 +2541,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				tradeNotes[key] = clean;
 				rt.Note = clean;
+			}
+
+			string cleanGrade = NormalizeSetupGrade(setupGrade);
+			if (string.IsNullOrEmpty(cleanGrade))
+			{
+				tradeSetupGrades.Remove(key);
+				rt.SetupGrade = "";
+			}
+			else
+			{
+				tradeSetupGrades[key] = cleanGrade;
+				rt.SetupGrade = cleanGrade;
 			}
 
 			List<string> cleanTags = new List<string>();
@@ -1684,7 +2580,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			SaveTradeNotes();
-			SaveRoundTripJournalToDatabase(rt, key, clean, cleanTags);
+			SaveRoundTripJournalToDatabase(rt, key, clean, cleanTags, cleanGrade);
 			needsRedraw = true;
 			if (ChartControl != null) ChartControl.InvalidateVisual();
 		}
@@ -1747,20 +2643,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 			box.CaretIndex = box.Text.Length;
 		}
 
+		private void ApplyNoteEditorDarkTitleBar(Window window)
+		{
+			try
+			{
+				IntPtr handle = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+				if (handle == IntPtr.Zero) return;
+				int enabled = 1;
+				if (DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkMode, ref enabled, sizeof(int)) != 0)
+					DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkModeBefore20H1, ref enabled, sizeof(int));
+			}
+			catch { }
+		}
+
 		private void OpenNoteEditor(RoundTrip rt)
 		{
 			try
 			{
 				if (rt == null || ChartControl == null || noteEditorOpen) return;
 				string existing = GetRoundTripNote(rt);
+				string selectedSetupGrade = GetRoundTripSetupGrade(rt);
 				List<string> existingTags = GetRoundTripTags(rt).ToList();
 				List<string> tagOptions = knownTags != null
-					? knownTags.Where(t => !string.IsNullOrWhiteSpace(t)).OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToList()
+					? knownTags.Where(t => !string.IsNullOrWhiteSpace(t) && (hiddenTags == null || !hiddenTags.Contains(t))).OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToList()
 					: new List<string>();
 				foreach (string tag in existingTags)
 				{
 					string cleanTag = NormalizeTagName(tag);
-					if (!string.IsNullOrEmpty(cleanTag) && !tagOptions.Any(t => string.Equals(t, cleanTag, StringComparison.OrdinalIgnoreCase)))
+					if (!string.IsNullOrEmpty(cleanTag) && (hiddenTags == null || !hiddenTags.Contains(cleanTag)) && !tagOptions.Any(t => string.Equals(t, cleanTag, StringComparison.OrdinalIgnoreCase)))
 						tagOptions.Add(cleanTag);
 				}
 
@@ -1771,21 +2681,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 						if (noteEditorOpen) return;
 						noteEditorOpen = true;
 						HashSet<string> selectedTags = new HashSet<string>(existingTags.Select(t => NormalizeTagName(t)).Where(t => !string.IsNullOrEmpty(t)), StringComparer.OrdinalIgnoreCase);
+						System.Windows.Media.Brush windowBackground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(25, 26, 30));
+						System.Windows.Media.Brush surfaceBackground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(57, 58, 66));
+						System.Windows.Media.Brush borderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(91, 93, 103));
+						System.Windows.Media.Brush textBrush = System.Windows.Media.Brushes.WhiteSmoke;
+						System.Windows.Media.Brush mutedTextBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(196, 198, 207));
+						System.Windows.Media.Brush accentBrush = System.Windows.Media.Brushes.DodgerBlue;
+						System.Windows.Media.Brush dangerBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(126, 49, 60));
 
 						Window owner = Window.GetWindow(ChartControl);
 						Window win = new Window
 						{
 							Title = "Orca Trade Note",
 							Width = 500,
-							Height = 430,
+							Height = 470,
 							MinWidth = 360,
-							MinHeight = 340,
+							MinHeight = 380,
 							ResizeMode = ResizeMode.CanResizeWithGrip,
-							WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen
+							WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen,
+							Background = windowBackground,
+							Foreground = textBrush
 						};
 						if (owner != null) win.Owner = owner;
+						win.SourceInitialized += delegate { ApplyNoteEditorDarkTitleBar(win); };
 
-						Grid root = new Grid { Margin = new Thickness(12) };
+						Grid root = new Grid { Margin = new Thickness(12), Background = windowBackground };
+						root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 						root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 						root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 						root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -1797,17 +2718,56 @@ namespace NinjaTrader.NinjaScript.Indicators
 						{
 							Text = BuildNoteEditorHeader(rt),
 							Margin = new Thickness(0, 0, 0, 8),
-							TextWrapping = TextWrapping.Wrap
+							TextWrapping = TextWrapping.Wrap,
+							Foreground = textBrush
 						};
 						Grid.SetRow(header, 0);
 						root.Children.Add(header);
 
-						TextBlock tagsHeader = new TextBlock
+						WrapPanel gradePanel = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+						gradePanel.Children.Add(new TextBlock { Text = "Setup Grade", Margin = new Thickness(0, 3, 8, 4), Foreground = mutedTextBrush });
+						List<Button> gradeButtons = new List<Button>();
+						Action refreshGradeButtons = delegate
 						{
-							Text = "Tags",
-							Margin = new Thickness(0, 0, 0, 4)
+							foreach (Button gradeButton in gradeButtons)
+							{
+								bool selected = string.Equals(selectedSetupGrade, gradeButton.Tag as string, StringComparison.Ordinal);
+								gradeButton.Background = selected ? accentBrush : surfaceBackground;
+								gradeButton.Foreground = textBrush;
+								gradeButton.BorderBrush = selected ? accentBrush : borderBrush;
+								gradeButton.BorderThickness = selected ? new Thickness(2) : new Thickness(1);
+								gradeButton.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+							}
 						};
-						Grid.SetRow(tagsHeader, 1);
+						foreach (string option in SetupGradeOptions)
+						{
+							string gradeValue = option;
+							Button gradeButton = new Button
+							{
+								Content = gradeValue,
+								Tag = gradeValue,
+								MinWidth = 27,
+								FontSize = 12,
+								Padding = new Thickness(4, 1, 4, 1),
+								Margin = new Thickness(0, 0, 3, 4),
+								ToolTip = "Setup grade " + gradeValue
+							};
+							gradeButton.Click += delegate
+							{
+								selectedSetupGrade = string.Equals(selectedSetupGrade, gradeValue, StringComparison.Ordinal) ? "" : gradeValue;
+								refreshGradeButtons();
+							};
+							gradeButtons.Add(gradeButton);
+							gradePanel.Children.Add(gradeButton);
+						}
+						refreshGradeButtons();
+						Grid.SetRow(gradePanel, 1);
+						root.Children.Add(gradePanel);
+
+						List<System.Windows.Controls.Primitives.ToggleButton> tagButtons = new List<System.Windows.Controls.Primitives.ToggleButton>();
+						StackPanel tagsHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+						tagsHeader.Children.Add(new TextBlock { Text = "Tags", Foreground = mutedTextBrush, VerticalAlignment = VerticalAlignment.Center });
+						Grid.SetRow(tagsHeader, 2);
 						root.Children.Add(tagsHeader);
 
 						WrapPanel tagPanel = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
@@ -1816,9 +2776,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 							Content = tagPanel,
 							MaxHeight = 90,
 							VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-							Margin = new Thickness(0, 0, 0, 4)
+							Margin = new Thickness(0, 0, 0, 4),
+							Background = windowBackground,
+							Foreground = textBrush
 						};
-						Grid.SetRow(tagScroll, 2);
+						Grid.SetRow(tagScroll, 3);
 						root.Children.Add(tagScroll);
 
 						Action<string, bool> addTagCheck = null;
@@ -1828,43 +2790,105 @@ namespace NinjaTrader.NinjaScript.Indicators
 							string cleanTag = NormalizeTagName(tagName);
 							if (string.IsNullOrEmpty(cleanTag)) return;
 
-							foreach (CheckBox existingBox in tagPanel.Children.OfType<CheckBox>())
+							foreach (System.Windows.Controls.Primitives.ToggleButton existingButton in tagPanel.Children.OfType<System.Windows.Controls.Primitives.ToggleButton>())
 							{
-								string existingTag = existingBox.Tag as string;
+								string existingTag = existingButton.Tag as string;
 								if (string.Equals(existingTag, cleanTag, StringComparison.OrdinalIgnoreCase))
 								{
-									existingBox.IsChecked = checkedState;
+									existingButton.IsChecked = checkedState;
 									return;
 								}
 							}
 
-							CheckBox check = new CheckBox
+							System.Windows.Controls.Primitives.ToggleButton check = new System.Windows.Controls.Primitives.ToggleButton
 							{
 								Content = cleanTag,
 								Tag = cleanTag,
 								IsChecked = checkedState,
-								Margin = new Thickness(0, 0, 12, 6),
-								MinWidth = 72
+								Margin = new Thickness(0, 0, 3, 6),
+								MinWidth = 72,
+								Padding = new Thickness(7, 2, 7, 2),
+								ToolTip = "Click to add or remove this tag from the trade"
+							};
+							Action refreshTagButton = delegate
+							{
+								bool selected = check.IsChecked == true;
+								check.Background = selected ? accentBrush : surfaceBackground;
+								check.Foreground = textBrush;
+								check.BorderBrush = selected ? accentBrush : borderBrush;
+								check.BorderThickness = selected ? new Thickness(2) : new Thickness(1);
 							};
 							check.Checked += delegate
 							{
 								selectedTags.Add((string)check.Tag);
 								AppendTagSectionToNoteBox(box, (string)check.Tag);
+								refreshTagButton();
 							};
-							check.Unchecked += delegate { selectedTags.Remove((string)check.Tag); };
+							check.Unchecked += delegate
+							{
+								selectedTags.Remove((string)check.Tag);
+								refreshTagButton();
+							};
+							refreshTagButton();
+							tagButtons.Add(check);
 							tagPanel.Children.Add(check);
-						};
 
+							Button hideTag = new Button
+							{
+								Content = "x",
+								Tag = cleanTag,
+								Width = 12,
+								MinWidth = 12,
+								MaxWidth = 12,
+								Height = 14,
+								MinHeight = 14,
+								MaxHeight = 14,
+								Padding = new Thickness(0),
+								Margin = new Thickness(0, 2, 7, 6),
+								FontSize = 8,
+								ToolTip = "Remove this tag from future tag options"
+							};
+							hideTag.Background = System.Windows.Media.Brushes.Transparent;
+							hideTag.Foreground = dangerBrush;
+							hideTag.BorderBrush = System.Windows.Media.Brushes.Transparent;
+							hideTag.Click += delegate
+							{
+								if (MessageBox.Show(win,
+									"Remove '" + cleanTag + "' from future Trade Note tag options?\n\nExisting saved trade tags will not be changed.",
+									"Remove Tag", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+									return;
+
+								check.IsChecked = false;
+								selectedTags.Remove(cleanTag);
+								tagButtons.Remove(check);
+								tagPanel.Children.Remove(check);
+								tagPanel.Children.Remove(hideTag);
+								HideTagOption(cleanTag);
+							};
+							tagPanel.Children.Add(hideTag);
+						};
 						foreach (string tag in tagOptions.OrderBy(t => t, StringComparer.OrdinalIgnoreCase))
 							addTagCheck(tag, selectedTags.Contains(tag));
 
 						StackPanel addTagRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
-						TextBox newTagBox = new TextBox { MinWidth = 220, Margin = new Thickness(0, 0, 8, 0) };
-						Button addTag = new Button { Content = "Add Tag", MinWidth = 72 };
+						TextBox newTagBox = new TextBox
+						{
+							MinWidth = 220,
+							Margin = new Thickness(0, 0, 8, 0),
+							Background = surfaceBackground,
+							Foreground = textBrush,
+							CaretBrush = textBrush,
+							BorderBrush = borderBrush
+						};
+						Button addTag = new Button { Content = "Add Tag", MinWidth = 72, Padding = new Thickness(7, 2, 7, 2) };
+						addTag.Background = surfaceBackground;
+						addTag.Foreground = textBrush;
+						addTag.BorderBrush = borderBrush;
 						Action addEnteredTag = delegate
 						{
 							string cleanTag = NormalizeTagName(newTagBox.Text);
 							if (string.IsNullOrEmpty(cleanTag)) return;
+							RestoreHiddenTagOption(cleanTag);
 							selectedTags.Add(cleanTag);
 							if (knownTags == null) knownTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 							knownTags.Add(cleanTag);
@@ -1885,7 +2909,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						};
 						addTagRow.Children.Add(newTagBox);
 						addTagRow.Children.Add(addTag);
-						Grid.SetRow(addTagRow, 3);
+						Grid.SetRow(addTagRow, 4);
 						root.Children.Add(addTagRow);
 
 						box = new TextBox
@@ -1894,29 +2918,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 							AcceptsReturn = true,
 							TextWrapping = TextWrapping.Wrap,
 							VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-							Margin = new Thickness(0, 0, 0, 10)
+							Margin = new Thickness(0, 0, 0, 10),
+							Background = surfaceBackground,
+							Foreground = textBrush,
+							CaretBrush = textBrush,
+							BorderBrush = accentBrush
 						};
-						Grid.SetRow(box, 4);
+						Grid.SetRow(box, 5);
 						root.Children.Add(box);
 
 						StackPanel buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-						Button delete = new Button { Content = "Delete", MinWidth = 72, Margin = new Thickness(0, 0, 8, 0) };
-						Button cancel = new Button { Content = "Cancel", MinWidth = 72, Margin = new Thickness(0, 0, 8, 0) };
-						Button save = new Button { Content = "Save", MinWidth = 72 };
+						Button delete = new Button { Content = "Delete", MinWidth = 72, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(7, 2, 7, 2) };
+						Button cancel = new Button { Content = "Cancel", MinWidth = 72, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(7, 2, 7, 2) };
+						Button save = new Button { Content = "Save", MinWidth = 72, Padding = new Thickness(7, 2, 7, 2) };
+						delete.Background = dangerBrush;
+						delete.Foreground = textBrush;
+						delete.BorderBrush = dangerBrush;
+						cancel.Background = surfaceBackground;
+						cancel.Foreground = textBrush;
+						cancel.BorderBrush = borderBrush;
+						save.Background = accentBrush;
+						save.Foreground = textBrush;
+						save.BorderBrush = accentBrush;
 						buttons.Children.Add(delete);
 						buttons.Children.Add(cancel);
 						buttons.Children.Add(save);
-						Grid.SetRow(buttons, 5);
+						Grid.SetRow(buttons, 6);
 						root.Children.Add(buttons);
 
-						save.Click += delegate { SaveRoundTripJournal(rt, box.Text, selectedTags.OrderBy(t => t, StringComparer.OrdinalIgnoreCase)); win.Close(); };
-						delete.Click += delegate { SaveRoundTripJournal(rt, "", new string[0]); win.Close(); };
+						save.Click += delegate { SaveRoundTripJournal(rt, box.Text, selectedTags.OrderBy(t => t, StringComparer.OrdinalIgnoreCase), selectedSetupGrade); win.Close(); };
+						delete.Click += delegate { SaveRoundTripJournal(rt, "", new string[0], ""); win.Close(); };
 						cancel.Click += delegate { win.Close(); };
 						win.KeyDown += delegate(object sender, KeyEventArgs args)
 						{
 							if (args.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
 							{
-								SaveRoundTripJournal(rt, box.Text, selectedTags.OrderBy(t => t, StringComparer.OrdinalIgnoreCase));
+								SaveRoundTripJournal(rt, box.Text, selectedTags.OrderBy(t => t, StringComparer.OrdinalIgnoreCase), selectedSetupGrade);
 								args.Handled = true;
 								win.Close();
 							}
@@ -1941,7 +2978,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (rt == null) return "";
 			string side = rt.IsLong ? "Long" : "Short";
-			string inst = Instrument != null ? Instrument.FullName : "";
+			string inst = !string.IsNullOrEmpty(rt.InstrumentFullName) ? rt.InstrumentFullName : GetExecutionInstrumentFullName();
 			return "#" + rt.Number + " " + side + " x" + rt.EntryQtyTotal + " " + inst
 				+ "  " + rt.FirstEntryTime.ToString("g") + " -> " + rt.LastExitTime.ToString("t")
 				+ "  " + Fmt(rt.TotalPnLDollars);
@@ -1951,6 +2988,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			hoveredRT = null;
 			hoveredFill = null;
+			if (visibilityHotkeyHidden) return false;
 			if (chartControl == null || chartScale == null || ChartBars == null || Bars == null) return false;
 
 			List<RoundTrip> list;
@@ -2008,6 +3046,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (rt == null || rt.IsComplete) return null;
 			OpenRoundTripSnapshot snapshot = new OpenRoundTripSnapshot {
+				IsLong = rt.IsLong,
 				LastPrice = rt.LastPrice,
 				LastPriceTime = rt.LastPriceTime
 			};
@@ -2076,7 +3115,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
-			if (!ShowExecutionLines || RenderTarget == null || ChartBars == null || Bars == null) return;
+			long diagnosticsRenderStart = Stopwatch.GetTimestamp();
+			int diagnosticsCompletedRoundTrips = -1;
+			int diagnosticsOpenRoundTrips = 0;
+			try
+			{
+				if (OrcaReplayCore.IsChartLocked(chartControl)) return;
+				if (!ShowExecutionLines || visibilityHotkeyHidden || RenderTarget == null || ChartBars == null || Bars == null) return;
 			lastRenderChartScale = chartScale;
 			List<RoundTrip> list;
 			OpenRoundTripSnapshot openSnapshot = null;
@@ -2088,6 +3133,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (OpenTradeRendering != OrcaOpenTradeRenderMode.Off && st.CurrentRT != null && !st.CurrentRT.IsComplete)
 					openSnapshot = CreateOpenRoundTripSnapshot(st.CurrentRT);
 			}
+			diagnosticsCompletedRoundTrips = list.Count;
+			diagnosticsOpenRoundTrips = openSnapshot != null ? 1 : 0;
 			if (list.Count == 0 && openSnapshot == null) return;
 
 			RoundTrip hoveredRT     = null;
@@ -2174,12 +3221,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 						DrawTri( rt.IsLong, x1, y1, 8f, mb);
 						DrawTri(!rt.IsLong, x2, y2, 8f, mb);
 					}
-					if (!ShowIndividualMarkers || (rt.Matches.Count <= 1 && ShowMarkers)) continue;
-					foreach (var m in rt.Matches)
+					if (!ShowIndividualMarkers || (rt.ExecutionEvents.Count <= 2 && ShowMarkers)) continue;
+					foreach (ExecutionDisplayEvent ev in rt.ExecutionEvents)
 					{
-						float xa,ya,xb,yb;
-						if (TryGetXY(m.EntryTime, m.EntryPrice, chartControl, chartScale, out xa, out ya))  DrawTri( rt.IsLong, xa, ya, 4.4f, mba);
-						if (TryGetXY(m.ExitTime,  m.ExitPrice,  chartControl, chartScale, out xb, out yb))  DrawTri(!rt.IsLong, xb, yb, 4.4f, mba);
+						float x, y;
+						if (TryGetXY(ev.Time, ev.Price, chartControl, chartScale, out x, out y))
+							DrawTri(ev.IsBuy, x, y, 4.4f, mba);
 					}
 				}
 				DrawOpenRoundTrip(openSnapshot, chartControl, chartScale, lngB, lngBA, shtB, shtBA, prfB, lssB);
@@ -2195,6 +3242,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			else if (TryGetXY(hoveredRT.LastExitTime, hoveredRT.AvgExitPrice, chartControl, chartScale, out hx, out hy))
 				DrawHover(hoveredRT, null, hx, hy);
+			}
+			finally
+			{
+				OrcaDiagnosticsCore.ReportRenderSample(diagnosticsInstanceId, diagnosticsRenderStart);
+				if (diagnosticsCompletedRoundTrips >= 0)
+					ReportDiagnosticsRenderObjects(diagnosticsCompletedRoundTrips, diagnosticsOpenRoundTrips);
+			}
 		}
 
 		private void DrawOpenRoundTrip(
@@ -2236,11 +3290,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				float x, y;
 				if (!TryGetXY(ev.Time, ev.Price, chartControl, chartScale, out x, out y)) continue;
-				SharpDX.Direct2D1.SolidColorBrush brush = ev.IsBuy
-					? (ev.IsEntry ? longBrush : longFadedBrush)
-					: (ev.IsEntry ? shortBrush : shortFadedBrush);
-				float size = ev.IsPartialExit ? 6.2f : (ev.IsFinalExit ? 6.8f : 5.2f);
-				DrawTri(ev.IsBuy, x, y, size, brush);
+				SharpDX.Direct2D1.SolidColorBrush brush = snapshot.IsLong ? longFadedBrush : shortFadedBrush;
+				DrawTri(ev.IsBuy, x, y, 4.4f, brush);
 			}
 		}
 
@@ -2267,13 +3318,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				gs.SetFillMode(FillMode.Winding);
 				if (up)
 				{
-					gs.BeginFigure(new Vector2(cx, cy - sz*1.4f), FigureBegin.Filled);
-					gs.AddLines(new[] { new Vector2(cx+sz, cy+sz*0.7f), new Vector2(cx-sz, cy+sz*0.7f) });
+					gs.BeginFigure(new Vector2(cx, cy), FigureBegin.Filled);
+					gs.AddLines(new[] { new Vector2(cx+sz, cy+sz*2.1f), new Vector2(cx-sz, cy+sz*2.1f) });
 				}
 				else
 				{
-					gs.BeginFigure(new Vector2(cx, cy + sz*1.4f), FigureBegin.Filled);
-					gs.AddLines(new[] { new Vector2(cx+sz, cy-sz*0.7f), new Vector2(cx-sz, cy-sz*0.7f) });
+					gs.BeginFigure(new Vector2(cx, cy), FigureBegin.Filled);
+					gs.AddLines(new[] { new Vector2(cx+sz, cy-sz*2.1f), new Vector2(cx-sz, cy-sz*2.1f) });
 				}
 				gs.EndFigure(FigureEnd.Closed);
 				gs.Close();
@@ -2299,6 +3350,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					label += "\nDay P&L after trade: " + Fmt(rt.AccountDayPnlAfterClose);
 				if (!isFill && ShowMAEMFE && rt.MAEMFECalculated)
 					label += "\nMax Profit Seen: " + FmtAbs(rt.HighestProfitPnl) + "  |  Heat Taken: " + FmtAbs(rt.HeatTakenPnl);
+				string setupGrade = !isFill ? GetRoundTripSetupGrade(rt) : "";
+				if (!string.IsNullOrEmpty(setupGrade))
+					label += "\nSetup Grade: " + setupGrade;
 				string tagPreview = FormatTagsPreview(GetRoundTripTags(rt));
 				if (!string.IsNullOrEmpty(tagPreview))
 					label += "\nTags: " + tagPreview;
@@ -2342,7 +3396,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (scb != null)
 			{
 				System.Windows.Media.Color c = scb.Color;
-				return new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(c.R/255f, c.G/255f, c.B/255f, a));
+				float opacity = Math.Max(0f, Math.Min(1f, a * c.A/255f * (float)scb.Opacity));
+				return new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(c.R/255f, c.G/255f, c.B/255f, opacity));
 			}
 			return new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new Color4(1f,1f,0f,a));
 		}

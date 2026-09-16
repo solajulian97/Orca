@@ -71,6 +71,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public bool Enabled { get; set; }
 		public bool RouteNqToMnq { get; set; } = true;
 		public bool RouteEsToMes { get; set; } = true;
+		public bool RouteGcToMgc { get; set; } = true;
+		public bool RouteClToMcl { get; set; } = true;
+		public bool ShowRoutedPnlAmounts { get; set; } = true;
 		public string PositionColor { get; set; } = "#FF1E90FF";
 		public string ShortPositionColor { get; set; } = "#FFE03A52";
 		public string BuyColor { get; set; } = "#FF32CD32";
@@ -91,6 +94,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 	{
 		private static readonly object Sync = new object();
 		private static OrcaExecutionRouterSettings settings;
+		internal static event EventHandler SettingsChanged;
 
 		public static OrcaExecutionRouterSettings GetSettings()
 		{
@@ -100,6 +104,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 					Enabled = settings.Enabled,
 					RouteNqToMnq = settings.RouteNqToMnq,
 					RouteEsToMes = settings.RouteEsToMes,
+					RouteGcToMgc = settings.RouteGcToMgc,
+					RouteClToMcl = settings.RouteClToMcl,
+					ShowRoutedPnlAmounts = settings.ShowRoutedPnlAmounts,
 					PositionColor = settings.PositionColor,
 					ShortPositionColor = settings.ShortPositionColor,
 					BuyColor = settings.BuyColor,
@@ -128,6 +135,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 					Enabled = newSettings.Enabled,
 					RouteNqToMnq = newSettings.RouteNqToMnq,
 					RouteEsToMes = newSettings.RouteEsToMes,
+					RouteGcToMgc = newSettings.RouteGcToMgc,
+					RouteClToMcl = newSettings.RouteClToMcl,
+					ShowRoutedPnlAmounts = newSettings.ShowRoutedPnlAmounts,
 					PositionColor = string.IsNullOrWhiteSpace(newSettings.PositionColor) ? "#FF1E90FF" : newSettings.PositionColor,
 					ShortPositionColor = string.IsNullOrWhiteSpace(newSettings.ShortPositionColor) ? "#FFE03A52" : newSettings.ShortPositionColor,
 					BuyColor = string.IsNullOrWhiteSpace(newSettings.BuyColor) ? "#FF32CD32" : newSettings.BuyColor,
@@ -148,6 +158,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 					Directory.CreateDirectory(directory);
 				using (FileStream stream = File.Create(SettingsPath))
 					new XmlSerializer(typeof(OrcaExecutionRouterSettings)).Serialize(stream, settings);
+			}
+			EventHandler handler = SettingsChanged;
+			if (handler != null) {
+				foreach (EventHandler subscriber in handler.GetInvocationList()) {
+					try { subscriber(null, EventArgs.Empty); } catch { }
+				}
 			}
 		}
 
@@ -199,9 +215,65 @@ namespace NinjaTrader.NinjaScript.AddOns
 					if (micro != null)
 						return micro;
 				}
+
+				if (settings.RouteGcToMgc && string.Equals(GetRoot(sourceInstrument), "GC", StringComparison.OrdinalIgnoreCase)) {
+					Instrument micro = GetMappedInstrument(sourceInstrument, "MGC");
+					if (micro != null)
+						return micro;
+				}
+
+				if (settings.RouteClToMcl && string.Equals(GetRoot(sourceInstrument), "CL", StringComparison.OrdinalIgnoreCase)) {
+					Instrument micro = GetMappedInstrument(sourceInstrument, "MCL");
+					if (micro != null)
+						return micro;
+				}
 			}
 
 			return fallbackInstrument ?? chartInstrument;
+		}
+
+		// New entries require an exact contract. Display and existing-order management keep
+		// their established resolver so a blocked entry cannot disable close/cancel paths.
+		internal static bool TryResolveEntryInstrument(Instrument chartInstrument, out Instrument executionInstrument, out string reason)
+		{
+			executionInstrument = null;
+			reason = null;
+			if (chartInstrument == null || string.IsNullOrWhiteSpace(chartInstrument.FullName)) {
+				reason = "The selected chart instrument is not ready.";
+				return false;
+			}
+			EnsureLoaded();
+			string root = GetRoot(chartInstrument);
+			string targetRoot = null;
+			lock (Sync) {
+				if (settings.Enabled) {
+					if (settings.RouteEsToMes && string.Equals(root, "ES", StringComparison.OrdinalIgnoreCase)) targetRoot = "MES";
+					else if (settings.RouteNqToMnq && string.Equals(root, "NQ", StringComparison.OrdinalIgnoreCase)) targetRoot = "MNQ";
+					else if (settings.RouteGcToMgc && string.Equals(root, "GC", StringComparison.OrdinalIgnoreCase)) targetRoot = "MGC";
+					else if (settings.RouteClToMcl && string.Equals(root, "CL", StringComparison.OrdinalIgnoreCase)) targetRoot = "MCL";
+				}
+			}
+			if (targetRoot == null) {
+				executionInstrument = chartInstrument;
+				return true;
+			}
+			string fullName = chartInstrument.FullName;
+			if (!fullName.StartsWith(root + " ", StringComparison.OrdinalIgnoreCase)
+				|| string.IsNullOrWhiteSpace(fullName.Substring(root.Length))) {
+				reason = "Routing requires a specific " + root + " contract on the selected chart.";
+				return false;
+			}
+			string targetFullName = targetRoot + fullName.Substring(root.Length);
+			try {
+				Instrument mapped = Instrument.GetInstrument(targetFullName, true);
+				if (mapped != null && string.Equals(mapped.FullName, targetFullName, StringComparison.OrdinalIgnoreCase)
+					&& string.Equals(GetRoot(mapped), targetRoot, StringComparison.OrdinalIgnoreCase)) {
+					executionInstrument = mapped;
+					return true;
+				}
+			} catch { }
+			reason = "Routing is enabled, but " + targetFullName + " could not be resolved. No order was submitted.";
+			return false;
 		}
 
 		private static string SettingsPath
@@ -272,6 +344,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private readonly CheckBox enabledBox;
 		private readonly CheckBox nqToMnqBox;
 		private readonly CheckBox esToMesBox;
+		private readonly CheckBox gcToMgcBox;
+		private readonly CheckBox clToMclBox;
+		private readonly CheckBox showRoutedPnlAmountsBox;
 		private readonly TextBlock statusText;
 		private readonly TextBox positionColorBox;
 		private readonly TextBox shortPositionColorBox;
@@ -321,12 +396,30 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 			esToMesBox = new CheckBox {
 				Content = "Route ES chart orders to MES",
+				Margin = new Thickness(0, 0, 0, 8),
+				Foreground = Brushes.GhostWhite
+			};
+			gcToMgcBox = new CheckBox {
+				Content = "Route GC chart orders to MGC",
+				Margin = new Thickness(0, 0, 0, 8),
+				Foreground = Brushes.GhostWhite
+			};
+			clToMclBox = new CheckBox {
+				Content = "Route CL chart orders to MCL",
+				Margin = new Thickness(0, 0, 0, 14),
+				Foreground = Brushes.GhostWhite
+			};
+			showRoutedPnlAmountsBox = new CheckBox {
+				Content = "Show routed P&L and risk amounts",
 				Margin = new Thickness(0, 0, 0, 14),
 				Foreground = Brushes.GhostWhite
 			};
 			root.Children.Add(enabledBox);
 			root.Children.Add(nqToMnqBox);
 			root.Children.Add(esToMesBox);
+			root.Children.Add(gcToMgcBox);
+			root.Children.Add(clToMclBox);
+			root.Children.Add(showRoutedPnlAmountsBox);
 
 			root.Children.Add(new TextBlock {
 				Text = "Overlay Visuals",
@@ -374,6 +467,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 			nqToMnqBox.Unchecked += OnRoutingToggleChanged;
 			esToMesBox.Checked += OnRoutingToggleChanged;
 			esToMesBox.Unchecked += OnRoutingToggleChanged;
+			gcToMgcBox.Checked += OnRoutingToggleChanged;
+			gcToMgcBox.Unchecked += OnRoutingToggleChanged;
+			clToMclBox.Checked += OnRoutingToggleChanged;
+			clToMclBox.Unchecked += OnRoutingToggleChanged;
 			Closed += (s, e) => instance = null;
 		}
 
@@ -411,6 +508,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 			enabledBox.IsChecked = settings.Enabled;
 			nqToMnqBox.IsChecked = settings.RouteNqToMnq;
 			esToMesBox.IsChecked = settings.RouteEsToMes;
+			gcToMgcBox.IsChecked = settings.RouteGcToMgc;
+			clToMclBox.IsChecked = settings.RouteClToMcl;
+			showRoutedPnlAmountsBox.IsChecked = settings.ShowRoutedPnlAmounts;
 			positionColorBox.Text = settings.PositionColor;
 			shortPositionColorBox.Text = settings.ShortPositionColor;
 			buyColorBox.Text = settings.BuyColor;
@@ -434,6 +534,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Enabled = enabledBox.IsChecked == true,
 				RouteNqToMnq = nqToMnqBox.IsChecked == true,
 				RouteEsToMes = esToMesBox.IsChecked == true,
+				RouteGcToMgc = gcToMgcBox.IsChecked == true,
+				RouteClToMcl = clToMclBox.IsChecked == true,
+				ShowRoutedPnlAmounts = showRoutedPnlAmountsBox.IsChecked == true,
 				PositionColor = positionColorBox.Text,
 				ShortPositionColor = shortPositionColorBox.Text,
 				BuyColor = buyColorBox.Text,
@@ -465,7 +568,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private void UpdateStatus()
 		{
-			statusText.Text = enabledBox.IsChecked == true && (nqToMnqBox.IsChecked == true || esToMesBox.IsChecked == true)
+			statusText.Text = enabledBox.IsChecked == true && (nqToMnqBox.IsChecked == true || esToMesBox.IsChecked == true || gcToMgcBox.IsChecked == true || clToMclBox.IsChecked == true)
 				? "Enabled: Orca Risk Manager will use chart prices but submit and size routed orders on the matching micro contract."
 				: "Disabled: Orca Risk Manager uses its normal chart/Chart Trader instrument behavior.";
 		}

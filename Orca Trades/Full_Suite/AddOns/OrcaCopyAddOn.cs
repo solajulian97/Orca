@@ -200,7 +200,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Content = BuildCopierTab()
 			});
 			tabs.Items.Add(new TabItem {
-				Header = "Health",
+				Header = "P&L",
 				Foreground = Brush("#FFEAF0F6"),
 				Background = Brush("#FF141D27"),
 				Content = BuildHealthTab()
@@ -388,6 +388,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			grid.Columns.Add(TextColumn("Account Name", "DisplayName", 190));
 			grid.Columns.Add(TextColumn("Connection Name", "ConnectionName", 170));
 			grid.Columns.Add(CheckColumn("ATM Copy", "AtmCopy", 86));
+			grid.Columns.Add(TextColumn("Dispatch Last / Avg (ms)", "DispatchText", 154));
 			grid.Columns.Add(TextColumn("Latency (ms)", "LatencyMs", 96));
 			DataGridTextColumn slip = TextColumn("Avg Slippage (Ticks)", "AverageSlippageTicks", 142);
 			slip.Binding = new Binding("AverageSlippageTicks") { StringFormat = "0.##" };

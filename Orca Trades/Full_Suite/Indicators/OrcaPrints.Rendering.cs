@@ -9,6 +9,7 @@ using NinjaTrader.Gui.Chart;
 using DxEllipse = SharpDX.Direct2D1.Ellipse;
 using DxSolidColorBrush = SharpDX.Direct2D1.SolidColorBrush;
 using DxTextFormat = SharpDX.DirectWrite.TextFormat;
+using DxTextLayout = SharpDX.DirectWrite.TextLayout;
 using WpfBrush = System.Windows.Media.Brush;
 using WpfColor = System.Windows.Media.Color;
 using WpfColors = System.Windows.Media.Colors;
@@ -22,10 +23,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private IntPtr dxBrushCacheRenderTarget = IntPtr.Zero;
 		private Dictionary<int, DxSolidColorBrush> dxBrushCache;
 		private DxTextFormat tooltipTextFormat;
+		private DxTextFormat singlePrintTextFormat;
+		private string singlePrintTextFormatSignature = string.Empty;
 		private ChartPanel lastChartPanel;
 		private System.Windows.Point lastMousePoint;
 		private bool hasMousePoint;
 		private bool detailProfileLayoutActive;
+		private bool printsHiddenForZoom;
+
+		private sealed class CompactAggregatePrintEvent : PrintEvent
+		{
+			public DateTime StartTime;
+			public DateTime EndTime;
+			public double MinPrice;
+			public double MaxPrice;
+			public OrcaPrintEventKind SourceKind;
+			public int SourceEventCount;
+			public int UnderlyingPrintCount;
+		}
 
 		private struct OrcaPrintRenderItem
 		{
@@ -79,6 +94,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			dxBrushCache = new Dictionary<int, DxSolidColorBrush>();
 			hasMousePoint = false;
 			detailProfileLayoutActive = true;
+			printsHiddenForZoom = false;
 		}
 
 		private void AttachOrcaPrintsMouseHandlers()
@@ -150,6 +166,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			dxBrushCacheRenderTarget = IntPtr.Zero;
 
+			if (singlePrintTextFormat != null)
+			{
+				singlePrintTextFormat.Dispose();
+				singlePrintTextFormat = null;
+			}
+			singlePrintTextFormatSignature = string.Empty;
 			if (tooltipTextFormat != null)
 			{
 				tooltipTextFormat.Dispose();
@@ -159,13 +181,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
-			base.OnRender(chartControl, chartScale);
-			RefreshSharedProfileRegistrationIfNeeded();
+			long diagnosticsRenderStart = 0;
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				diagnosticsRenderStart = System.Diagnostics.Stopwatch.GetTimestamp();
+			}
+
+			try
+			{
+				base.OnRender(chartControl, chartScale);
+				RefreshSharedProfileRegistrationIfNeeded();
 
 			if (RenderTarget == null || chartControl == null || chartScale == null || ChartPanel == null)
 				return;
 
 			lastChartPanel = ChartPanel;
+			if (ShouldHidePrintsForZoom(chartControl))
+				return;
 
 			List<PrintEvent> snapshot = CopyPrintEventsSnapshot();
 			if (snapshot.Count == 0)
@@ -188,6 +221,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				PrintEvent printEvent = snapshot[i];
 				if (printEvent == null)
 					continue;
+				if (HideSinglePrintsMatchingClusters && printEvent.SuppressedByCluster)
+					continue;
 				if (printEvent.Price < chartScale.MinValue || printEvent.Price > chartScale.MaxValue)
 					continue;
 
@@ -209,6 +244,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (visibleItems.Count == 0 || maxVisibleVolume <= 0)
 				return;
+
+			if (AutoCompactLayout && !useDetailProfileLayout)
+			{
+				if (AggregateSinglePrintsWhenCompact)
+					visibleItems = BuildCompactSinglePrintLayout(visibleItems);
+				if (AggregateClustersWhenCompact)
+					visibleItems = BuildCompactClusterLayout(visibleItems);
+			}
 
 			if (minVisibleVolume == long.MaxValue || minVisibleVolume <= 0)
 				minVisibleVolume = 1;
@@ -295,10 +338,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 						RenderTarget.DrawEllipse(ring, ringBrush, 1.5f);
 					}
 				}
+
+				DrawSinglePrintSizeLabel(printEvent, x, y, diameter, fillArgb);
 			}
 
-			if (hoveredEvent != null)
-				DrawPrintTooltip(hoveredEvent, hoveredX, hoveredY, hoveredRadius, left, right, top, bottom);
+				if (hoveredEvent != null)
+					DrawPrintTooltip(hoveredEvent, hoveredX, hoveredY, hoveredRadius, left, right, top, bottom);
+			}
+			finally
+			{
+				if (diagnosticsRenderStart != 0)
+					OrcaDiagnosticsCore.ReportRenderSample(diagnosticsInstanceId, diagnosticsRenderStart);
+			}
 		}
 
 		private void PreparePrintRenderLayout(List<OrcaPrintRenderItem> visibleItems, ChartScale chartScale, float panelLeft, float panelRight, float panelTop, float panelBottom, float padding, bool applySameLevelLayout)
@@ -328,6 +379,163 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (applySameLevelLayout)
 				ApplySameLevelHorizontalLayout(visibleItems, panelLeft, panelRight, panelTop, panelBottom, padding);
+		}
+
+		private List<OrcaPrintRenderItem> BuildCompactSinglePrintLayout(List<OrcaPrintRenderItem> visibleItems)
+		{
+			return BuildCompactAggregateLayout(visibleItems, OrcaPrintEventKind.Single, CompactAggregateMinPrints, CompactAggregatePriceRangeTicks);
+		}
+
+		private List<OrcaPrintRenderItem> BuildCompactClusterLayout(List<OrcaPrintRenderItem> visibleItems)
+		{
+			return BuildCompactAggregateLayout(visibleItems, OrcaPrintEventKind.Cluster, CompactClusterAggregateMinClusters, CompactClusterAggregatePriceRangeTicks);
+		}
+
+		private List<OrcaPrintRenderItem> BuildCompactAggregateLayout(List<OrcaPrintRenderItem> visibleItems, OrcaPrintEventKind sourceKind, int configuredMinimum, int configuredPriceRangeTicks)
+		{
+			int minimumEvents = Math.Max(2, configuredMinimum);
+			if (visibleItems == null || visibleItems.Count < minimumEvents || TickSize <= 0)
+				return visibleItems;
+
+			List<OrcaPrintRenderItem> output = new List<OrcaPrintRenderItem>(visibleItems.Count);
+			List<int> buys = new List<int>();
+			List<int> sells = new List<int>();
+
+			for (int i = 0; i < visibleItems.Count; i++)
+			{
+				OrcaPrintRenderItem item = visibleItems[i];
+				if (!IsCompactAggregateCandidate(item, sourceKind))
+				{
+					output.Add(item);
+					continue;
+				}
+
+				if (item.Event.Side == AggressorSide.Buy)
+					buys.Add(i);
+				else if (item.Event.Side == AggressorSide.Sell)
+					sells.Add(i);
+				else
+					output.Add(item);
+			}
+
+			AppendCompactAggregateRuns(visibleItems, buys, output, sourceKind, minimumEvents, configuredPriceRangeTicks);
+			AppendCompactAggregateRuns(visibleItems, sells, output, sourceKind, minimumEvents, configuredPriceRangeTicks);
+			return output;
+		}
+
+		private bool IsCompactAggregateCandidate(OrcaPrintRenderItem item, OrcaPrintEventKind sourceKind)
+		{
+			if (item.Event == null || item.Event is CompactAggregatePrintEvent || item.Event.IsPriceLevel || item.BarIndex < 0)
+				return false;
+
+			return sourceKind == OrcaPrintEventKind.Cluster
+				? item.Event.IsCluster
+				: !item.Event.IsCluster;
+		}
+
+		private double GetCompactAggregateMinPrice(PrintEvent printEvent, OrcaPrintEventKind sourceKind)
+		{
+			ClusterEvent cluster = sourceKind == OrcaPrintEventKind.Cluster ? printEvent as ClusterEvent : null;
+			return cluster != null ? cluster.MinPrice : printEvent.Price;
+		}
+
+		private double GetCompactAggregateMaxPrice(PrintEvent printEvent, OrcaPrintEventKind sourceKind)
+		{
+			ClusterEvent cluster = sourceKind == OrcaPrintEventKind.Cluster ? printEvent as ClusterEvent : null;
+			return cluster != null ? cluster.MaxPrice : printEvent.Price;
+		}
+
+		private void AppendCompactAggregateRuns(List<OrcaPrintRenderItem> visibleItems, List<int> candidateIndices, List<OrcaPrintRenderItem> output, OrcaPrintEventKind sourceKind, int minimumEvents, int configuredPriceRangeTicks)
+		{
+			if (visibleItems == null || candidateIndices == null || candidateIndices.Count == 0 || output == null)
+				return;
+
+			double maxPriceSpan = Math.Max(TickSize, configuredPriceRangeTicks * TickSize);
+			int runStart = 0;
+			while (runStart < candidateIndices.Count)
+			{
+				int runEnd = runStart;
+				PrintEvent firstEvent = visibleItems[candidateIndices[runStart]].Event;
+				double runMinPrice = GetCompactAggregateMinPrice(firstEvent, sourceKind);
+				double runMaxPrice = GetCompactAggregateMaxPrice(firstEvent, sourceKind);
+
+				while (runEnd + 1 < candidateIndices.Count)
+				{
+					OrcaPrintRenderItem current = visibleItems[candidateIndices[runEnd]];
+					OrcaPrintRenderItem next = visibleItems[candidateIndices[runEnd + 1]];
+					double proposedMin = Math.Min(runMinPrice, GetCompactAggregateMinPrice(next.Event, sourceKind));
+					double proposedMax = Math.Max(runMaxPrice, GetCompactAggregateMaxPrice(next.Event, sourceKind));
+					bool continuousBars = next.BarIndex >= current.BarIndex && next.BarIndex - current.BarIndex <= 1;
+
+					if (!continuousBars || proposedMax - proposedMin > maxPriceSpan + 0.0000001)
+						break;
+
+					runEnd++;
+					runMinPrice = proposedMin;
+					runMaxPrice = proposedMax;
+				}
+
+				if (runEnd - runStart + 1 >= minimumEvents)
+					output.Add(CreateCompactAggregateItem(visibleItems, candidateIndices, runStart, runEnd, runMinPrice, runMaxPrice, sourceKind));
+				else
+				{
+					for (int i = runStart; i <= runEnd; i++)
+						output.Add(visibleItems[candidateIndices[i]]);
+				}
+
+				runStart = runEnd + 1;
+			}
+		}
+
+		private OrcaPrintRenderItem CreateCompactAggregateItem(List<OrcaPrintRenderItem> visibleItems, List<int> candidateIndices, int runStart, int runEnd, double minPrice, double maxPrice, OrcaPrintEventKind sourceKind)
+		{
+			OrcaPrintRenderItem first = visibleItems[candidateIndices[runStart]];
+			DateTime startTime = first.Event.Time;
+			DateTime endTime = startTime;
+			long totalVolume = 0;
+			double weightedPrice = 0.0;
+			double weightedX = 0.0;
+			double weightedBarIndex = 0.0;
+			double weightedTimeOffsetTicks = 0.0;
+			int underlyingPrintCount = 0;
+
+			for (int i = runStart; i <= runEnd; i++)
+			{
+				OrcaPrintRenderItem item = visibleItems[candidateIndices[i]];
+				long volume = Math.Max(1L, item.Event.Volume);
+				totalVolume += volume;
+				weightedPrice += item.Event.Price * volume;
+				weightedX += item.BaseX * volume;
+				weightedBarIndex += item.BarIndex * volume;
+				weightedTimeOffsetTicks += (item.Event.Time.Ticks - startTime.Ticks) * (double)volume;
+				ClusterEvent sourceCluster = item.Event as ClusterEvent;
+				underlyingPrintCount += sourceCluster != null ? Math.Max(1, sourceCluster.ChildCount) : 1;
+				if (item.Event.Time > endTime)
+					endTime = item.Event.Time;
+			}
+
+			double divisor = Math.Max(1.0, totalVolume);
+			long aggregateOffsetTicks = (long)Math.Round(weightedTimeOffsetTicks / divisor);
+			DateTime aggregateTime = startTime.AddTicks(aggregateOffsetTicks);
+			CompactAggregatePrintEvent aggregate = new CompactAggregatePrintEvent
+			{
+				Time = aggregateTime,
+				Price = weightedPrice / divisor,
+				Volume = totalVolume,
+				Side = first.Event.Side,
+				Kind = sourceKind,
+				StartTime = startTime,
+				EndTime = endTime,
+				MinPrice = minPrice,
+				MaxPrice = maxPrice,
+				SourceKind = sourceKind,
+				SourceEventCount = runEnd - runStart + 1,
+				UnderlyingPrintCount = underlyingPrintCount
+			};
+
+			int aggregateBarIndex = (int)Math.Round(weightedBarIndex / divisor);
+			float aggregateX = (float)(weightedX / divisor);
+			return new OrcaPrintRenderItem(aggregate, aggregateBarIndex, aggregateX, 0.0f, 0.0f, false, false);
 		}
 
 		private void GetVisibleVolumeRanges(List<OrcaPrintRenderItem> visibleItems, out VolumeRange singleRange, out VolumeRange priceLevelRange, out VolumeRange clusterRange)
@@ -560,7 +768,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			string text = BuildTooltipText(printEvent);
 			int lineCount = CountTooltipLines(text);
-			float width = printEvent.IsCluster || printEvent.IsPriceLevel ? 250.0f : 170.0f;
+			bool isCompactAggregate = printEvent is CompactAggregatePrintEvent;
+			float width = printEvent.IsCluster || printEvent.IsPriceLevel || isCompactAggregate ? 250.0f : 170.0f;
 			float height = Math.Max(38.0f, 18.0f + lineCount * 15.0f);
 			float tipX = x + radius + 10.0f;
 			float tipY = y - height - radius - 6.0f;
@@ -675,6 +884,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return detailProfileLayoutActive;
 		}
 
+		private bool ShouldHidePrintsForZoom(ChartControl chartControl)
+		{
+			if (!HidePrintsWhenZoomedOut)
+			{
+				printsHiddenForZoom = false;
+				return false;
+			}
+
+			float spacing = GetAverageVisibleBarSpacing(chartControl);
+			if (spacing <= 0.0f)
+			{
+				printsHiddenForZoom = false;
+				return false;
+			}
+
+			float hideAt = Math.Max(1.0f, MinimumBarSpacingToShowPrintsPx);
+			float showAt = hideAt + 1.0f;
+			if (printsHiddenForZoom)
+			{
+				if (spacing >= showAt)
+					printsHiddenForZoom = false;
+			}
+			else if (spacing <= hideAt)
+			{
+				printsHiddenForZoom = true;
+			}
+
+			return printsHiddenForZoom;
+		}
+
 		private bool IsProfileHorizontalAnchor()
 		{
 			return HorizontalAnchor == OrcaPrintHorizontalAnchor.OrcaCandleVolumeProfileLeft
@@ -786,6 +1025,79 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return 0.0f;
 		}
 
+		private void DrawSinglePrintSizeLabel(PrintEvent printEvent, float x, float y, float diameter, int fillArgb)
+		{
+			if (!ShowSinglePrintSizeText || printEvent == null || printEvent.IsCluster || printEvent.IsPriceLevel || RenderTarget == null)
+				return;
+
+			EnsureSinglePrintTextFormat();
+			if (singlePrintTextFormat == null)
+				return;
+
+			string text = printEvent.Volume.ToString("N0");
+			float padding = Math.Max(2.0f, Math.Min(4.0f, SinglePrintTextFontSize * 0.25f));
+			float available = diameter - (padding * 2.0f);
+			if (available <= 0.0f)
+				return;
+
+			using (DxTextLayout layout = new DxTextLayout(NinjaTrader.Core.Globals.DirectWriteFactory, text, singlePrintTextFormat, diameter, diameter))
+			{
+				SharpDX.DirectWrite.TextMetrics metrics = layout.Metrics;
+				if (metrics.Width > available || metrics.Height > available)
+					return;
+
+				DxSolidColorBrush textBrush = GetDxBrush(GetContrastingTextArgb(fillArgb));
+				if (textBrush != null)
+					RenderTarget.DrawTextLayout(new SharpDX.Vector2(x - (diameter * 0.5f), y - (diameter * 0.5f)), layout, textBrush, SharpDX.Direct2D1.DrawTextOptions.Clip);
+			}
+		}
+
+		private void EnsureSinglePrintTextFormat()
+		{
+			string family = string.IsNullOrWhiteSpace(SinglePrintTextFontFamily) ? "Figtree" : SinglePrintTextFontFamily.Trim();
+			float size = Math.Max(6.0f, SinglePrintTextFontSize);
+			string signature = family + "|" + size.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+			if (singlePrintTextFormat != null && singlePrintTextFormatSignature == signature)
+				return;
+
+			if (singlePrintTextFormat != null)
+			{
+				singlePrintTextFormat.Dispose();
+				singlePrintTextFormat = null;
+			}
+
+			try
+			{
+				singlePrintTextFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, family, SharpDX.DirectWrite.FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, size);
+			}
+			catch
+			{
+				try
+				{
+					singlePrintTextFormat = new DxTextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, size);
+				}
+				catch
+				{
+					singlePrintTextFormat = null;
+				}
+			}
+
+			if (singlePrintTextFormat != null)
+			{
+				singlePrintTextFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				singlePrintTextFormat.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center;
+			}
+			singlePrintTextFormatSignature = signature;
+		}
+
+		private int GetContrastingTextArgb(int fillArgb)
+		{
+			int red = (fillArgb >> 16) & 0xFF;
+			int green = (fillArgb >> 8) & 0xFF;
+			int blue = fillArgb & 0xFF;
+			double luminance = (0.299 * red) + (0.587 * green) + (0.114 * blue);
+			return luminance >= 145.0 ? unchecked((int)0xFF000000) : unchecked((int)0xFFFFFFFF);
+		}
 		private void EnsureTooltipTextFormat()
 		{
 			if (tooltipTextFormat != null)
@@ -808,15 +1120,47 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string BuildTooltipText(PrintEvent printEvent)
 		{
 			string side = printEvent.Side == AggressorSide.Buy ? "Buy" : "Sell";
+			CompactAggregatePrintEvent compactAggregate = printEvent as CompactAggregatePrintEvent;
+			if (compactAggregate != null)
+			{
+				double rangeTicks = TickSize > 0 ? (compactAggregate.MaxPrice - compactAggregate.MinPrice) / TickSize : 0.0;
+				if (compactAggregate.SourceKind == OrcaPrintEventKind.Cluster)
+				{
+					return "Compact super cluster" + Environment.NewLine
+						+ side + " " + compactAggregate.Volume.ToString("N0") + " combined detected volume" + Environment.NewLine
+						+ compactAggregate.SourceEventCount.ToString("N0") + " clusters / " + compactAggregate.UnderlyingPrintCount.ToString("N0") + " reported child prints" + Environment.NewLine
+						+ "VWAP " + compactAggregate.Price.ToString("0.00") + "  Range " + rangeTicks.ToString("0.0") + " ticks" + Environment.NewLine
+						+ compactAggregate.StartTime.ToString("HH:mm:ss") + " - " + compactAggregate.EndTime.ToString("HH:mm:ss");
+				}
+
+				return "Compact single-print group" + Environment.NewLine
+					+ side + " " + compactAggregate.Volume.ToString("N0") + " contracts / " + compactAggregate.SourceEventCount.ToString("N0") + " prints" + Environment.NewLine
+					+ "VWAP " + compactAggregate.Price.ToString("0.00") + "  Range " + rangeTicks.ToString("0.0") + " ticks" + Environment.NewLine
+					+ compactAggregate.StartTime.ToString("HH:mm:ss") + " - " + compactAggregate.EndTime.ToString("HH:mm:ss");
+			}
+
 			PriceLevelEvent priceLevel = printEvent as PriceLevelEvent;
 			if (priceLevel != null)
 			{
+				string deltaText = (priceLevel.Delta > 0 ? "+" : string.Empty) + priceLevel.Delta.ToString("N0");
+				if (priceLevel.IsHighDelta)
+				{
+					string direction = priceLevel.Delta > 0 ? "Positive" : "Negative";
+					string rangeText = priceLevel.WindowTicks <= 1
+						? "Price " + priceLevel.Price.ToString("0.00")
+						: priceLevel.WindowTicks.ToString("N0") + " ticks  " + priceLevel.MinPrice.ToString("0.00") + " - " + priceLevel.MaxPrice.ToString("0.00");
+					return "High delta price level" + Environment.NewLine
+						+ direction + " delta " + deltaText + Environment.NewLine
+						+ "S: " + priceLevel.SellVolume.ToString("N0") + "  B: " + priceLevel.BuyVolume.ToString("N0") + "  V: " + priceLevel.TotalVolume.ToString("N0") + Environment.NewLine
+						+ rangeText + Environment.NewLine
+						+ priceLevel.ChildCount.ToString("N0") + " prints  " + priceLevel.StartTime.ToString("HH:mm:ss") + " - " + priceLevel.EndTime.ToString("HH:mm:ss");
+				}
+
 				return "Price level accumulation" + Environment.NewLine
 					+ side + " dominant  " + priceLevel.DominantPercent.ToString("0") + "%" + Environment.NewLine
-					+ "S: " + priceLevel.SellVolume.ToString("N0") + "  B: " + priceLevel.BuyVolume.ToString("N0") + "  V: " + priceLevel.Volume.ToString("N0") + Environment.NewLine
+					+ "S: " + priceLevel.SellVolume.ToString("N0") + "  B: " + priceLevel.BuyVolume.ToString("N0") + "  V: " + priceLevel.TotalVolume.ToString("N0") + "  D: " + deltaText + Environment.NewLine
 					+ priceLevel.ChildCount.ToString("N0") + " prints at " + priceLevel.Price.ToString("0.00");
 			}
-
 			ClusterEvent cluster = printEvent as ClusterEvent;
 			if (cluster == null)
 			{
@@ -881,7 +1225,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int configuredMin = SinglePrintMinDotSize;
 			int configuredMax = SinglePrintMaxDotSize;
 
-			if (printEvent != null && printEvent.IsCluster)
+			CompactAggregatePrintEvent compactAggregate = printEvent as CompactAggregatePrintEvent;
+			if (compactAggregate != null && compactAggregate.SourceKind == OrcaPrintEventKind.Cluster)
+			{
+				configuredMin = ClusterMinDotSize;
+				configuredMax = ClusterMaxDotSize;
+			}
+			else if (compactAggregate != null)
+			{
+				configuredMin = Math.Max(SinglePrintMinDotSize, PriceLevelMinDotSize);
+				configuredMax = Math.Max(configuredMin, ClusterMaxDotSize);
+			}
+			else if (printEvent != null && printEvent.IsCluster)
 			{
 				configuredMin = ClusterMinDotSize;
 				configuredMax = ClusterMaxDotSize;
@@ -921,7 +1276,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double minIntensity = Clamp01(MinIntensityPct / 100.0);
 				double rank = Clamp01(volumeRank);
 				PriceLevelEvent priceLevel = printEvent as PriceLevelEvent;
-				if (priceLevel != null)
+				if (priceLevel != null && !priceLevel.IsHighDelta)
 					rank = Clamp01((priceLevel.DominantPercent - 50.0) / 50.0);
 				intensity = minIntensity + (1.0 - minIntensity) * rank;
 			}

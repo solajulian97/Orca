@@ -42,7 +42,7 @@ public enum DivergenceColorBasis
 namespace NinjaTrader.NinjaScript.Indicators
 {
 
-	public class OrcaAbsorptionCandles : Indicator
+	public class OrcaAbsorptionCandles : Indicator, IOrcaReplayParticipant
 	{
 		private double	lastBid;
 		private double	lastAsk;
@@ -62,6 +62,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private Brush pos50Brush;
 		private Brush neg50Brush;
 		private Brush divOutlineBrush;
+		private readonly string diagnosticsInstanceId = Guid.NewGuid().ToString("N");
+		private bool diagnosticsRegistered;
+		private OrcaReplayBarHorizon replayBarHorizon;
 
 		protected override void OnStateChange()
 		{
@@ -113,9 +116,59 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastAsk        = double.NaN;
 				prevLast       = double.NaN;
 				lastDirection  = 0;
+				replayBarHorizon = new OrcaReplayBarHorizon("OrcaAbsorptionCandles:" + diagnosticsInstanceId);
 
 				InitializeBrushes();
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+				ReportDiagnosticsState();
 			}
+			else if (State == State.Historical || State == State.Transition || State == State.Realtime)
+			{
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+			}
+			else if (State == State.Terminated)
+			{
+				if (ChartControl != null) OrcaReplayCore.UnregisterParticipant(ChartControl, this);
+				if (replayBarHorizon != null) replayBarHorizon.Restore();
+				OrcaDiagnosticsCore.UnregisterInstance(diagnosticsInstanceId);
+			}
+		}
+
+		private void EnsureDiagnosticsRegistered()
+		{
+			if (diagnosticsRegistered)
+				return;
+
+			OrcaDiagnosticsCore.RegisterInstance(diagnosticsInstanceId, "OrcaAbsorptionCandles", this);
+			OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, "HiddenSecondaryTickSeries", "Unknown", "LocalBarSeries");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 0, "PrimaryChartSeries", "Chart", "Primary bars");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 1, "Tick 1 Last", "Component", "Absorption candle delta processing");
+			diagnosticsRegistered = true;
+		}
+
+		private void ReportDiagnosticsState()
+		{
+			EnsureDiagnosticsRegistered();
+			OrcaDiagnosticsCore.ReportState(diagnosticsInstanceId, State.ToString());
+		}
+
+		private DateTime GetDiagnosticsEventTime()
+		{
+			try
+			{
+				if (Times != null && CurrentBars != null && BarsInProgress >= 0 && BarsInProgress < Times.Length && BarsInProgress < CurrentBars.Length && CurrentBars[BarsInProgress] >= 0)
+					return Times[BarsInProgress][0];
+			}
+			catch { }
+
+			try
+			{
+				if (CurrentBar >= 0)
+					return Time[0];
+			}
+			catch { }
+
+			return DateTime.MinValue;
 		}
 
 		private void InitializeBrushes()
@@ -203,6 +256,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			bool hasReal = barIdx < barHasData.Count && barHasData[barIdx];
 			bool useSynthetic = !hasReal && ShowHistoricalColor;
+			if (useSynthetic && OrcaDiagnosticsCore.IsEnabled)
+				OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, "HiddenSecondaryTickSeries", "FallbackActive", "LocalBarSeries");
 			if (!hasReal && !useSynthetic)
 				return null;
 
@@ -308,6 +363,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnMarketData(MarketDataEventArgs e)
 		{
+			if (e == null)
+				return;
+			long diagnosticsWorkStart = 0;
+
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportMarketData(diagnosticsInstanceId, e.MarketDataType, e.Time == DateTime.MinValue ? GetDiagnosticsEventTime() : e.Time);
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+			}
+			try
+			{
+
 			if (DeltaMode == DeltaCalculationMode.BidAsk)
 			{
 				if (e.MarketDataType == MarketDataType.Bid) lastBid = e.Price;
@@ -318,11 +386,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (e.Bid > 0 && !double.IsNaN(e.Bid)) lastBid = e.Bid;
 				}
 			}
+			}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.MarketData, -1, diagnosticsWorkStart);
+			}
 		}
 
 		protected override void OnBarUpdate()
 		{
+			long diagnosticsWorkStart = 0;
+			int diagnosticsBarsInProgress = BarsInProgress;
+			long diagnosticsMapTicks = 0;
+			long diagnosticsStorageTicks = 0;
+			long diagnosticsPaintStart = 0;
+			DateTime diagnosticsModelTime = DateTime.MinValue;
+			bool diagnosticsModelUpdated = false;
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportBarUpdate(diagnosticsInstanceId, BarsInProgress, GetDiagnosticsEventTime());
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+			}
+
 			// ============================================
+			try
+			{
 			// BarsInProgress == 1 : hidden tick processing
 			// ============================================
 			if (BarsInProgress == 1)
@@ -363,12 +453,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (signed == 0) return;
 
 				DateTime tickTime = Times[1][0];
+				long phaseStart = diagnosticsWorkStart > 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 				int primaryIdx = BarsArray[0].GetBar(tickTime);
+				if (phaseStart > 0)
+					diagnosticsMapTicks += System.Diagnostics.Stopwatch.GetTimestamp() - phaseStart;
 				if (primaryIdx < 0) return;
 
+				phaseStart = diagnosticsWorkStart > 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 				EnsureBarLists(primaryIdx);
 				barTickDelta[primaryIdx] += signed;
 				barHasData[primaryIdx] = true;
+				if (phaseStart > 0)
+					diagnosticsStorageTicks += System.Diagnostics.Stopwatch.GetTimestamp() - phaseStart;
+				if (OrcaDiagnosticsCore.IsEnabled)
+				{
+					diagnosticsModelTime = tickTime;
+					diagnosticsModelUpdated = true;
+				}
 				return;
 			}
 
@@ -377,6 +478,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// ============================================
 			if (BarsInProgress == 0)
 			{
+				diagnosticsPaintStart = diagnosticsWorkStart > 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 				EnsureBarLists(CurrentBar);
 
 				if (Bars.IsFirstBarOfSession && IsFirstTickOfBar)
@@ -536,7 +638,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 				}
 			}
+			}
+			finally
+			{
+				long diagnosticsPaintTicks = diagnosticsPaintStart > 0
+					? System.Diagnostics.Stopwatch.GetTimestamp() - diagnosticsPaintStart
+					: 0;
+				if (diagnosticsWorkStart > 0)
+				{
+					long diagnosticsTotalTicks = System.Diagnostics.Stopwatch.GetTimestamp() - diagnosticsWorkStart;
+					long diagnosticsTrackedTicks = diagnosticsMapTicks + diagnosticsStorageTicks + diagnosticsPaintTicks;
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.BarUpdate, diagnosticsBarsInProgress, diagnosticsWorkStart);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Absorption map", diagnosticsMapTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Absorption storage", diagnosticsStorageTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Absorption paint", diagnosticsPaintTicks);
+					OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "Absorption other", Math.Max(0, diagnosticsTotalTicks - diagnosticsTrackedTicks));
+				}
+				if (diagnosticsModelUpdated && OrcaDiagnosticsCore.IsEnabled)
+					OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, diagnosticsModelTime, null);
+			}
 		}
+
+		string IOrcaReplayParticipant.ReplayParticipantId { get { return replayBarHorizon == null ? "OrcaAbsorptionCandles:" + diagnosticsInstanceId : replayBarHorizon.ParticipantId; } }
+		OrcaReplayCapabilities IOrcaReplayParticipant.ReplayCapabilities { get { return replayBarHorizon == null ? new OrcaReplayCapabilities(true, false, true, true, OrcaReplayChartStyleSupport.AllV1) : replayBarHorizon.Capabilities; } }
+		OrcaReplayCheckpoint IOrcaReplayParticipant.CaptureReplayCheckpoint(OrcaReplayContext context) { return replayBarHorizon.Capture(context); }
+		void IOrcaReplayParticipant.PrepareReplay(OrcaReplayContext context, OrcaReplayCheckpoint checkpoint) { replayBarHorizon.Prepare(context, checkpoint); }
+		void IOrcaReplayParticipant.ApplyReplayEvent(OrcaReplayContext context, OrcaReplayTradeEvent tradeEvent) { }
+		void IOrcaReplayParticipant.ApplyReplayBar(OrcaReplayContext context, int primaryBarIndex) { replayBarHorizon.ApplyBar(primaryBarIndex); }
+		void IOrcaReplayParticipant.PublishReplaySnapshot(OrcaReplayContext context) { }
+		void IOrcaReplayParticipant.RestoreLiveState() { if (replayBarHorizon != null) replayBarHorizon.Restore(); }
 
 		#region Properties
 		[XmlIgnore]

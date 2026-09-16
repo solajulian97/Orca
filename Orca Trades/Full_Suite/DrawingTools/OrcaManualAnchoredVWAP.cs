@@ -287,8 +287,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			switch (DrawingState)
 			{
 				case DrawingState.Building:
-					dataPoint.CopyDataValues(StartAnchor);
-					dataPoint.CopyDataValues(EndAnchor);
+					SnapStartAnchorToBarOpen(dataPoint);
+					StartAnchor.CopyDataValues(EndAnchor);
 					StartAnchor.IsEditing = false;
 					EndAnchor.IsEditing = true;
 					MarkVwapDirty();
@@ -327,7 +327,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			else if (DrawingState == DrawingState.Editing)
 			{
 				if (editMode == EditMode.Start)
-					dataPoint.CopyDataValues(StartAnchor);
+					SnapStartAnchorToBarOpen(dataPoint);
 				else if (editMode == EditMode.End)
 					dataPoint.CopyDataValues(EndAnchor);
 
@@ -356,6 +356,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			if (DrawingState == DrawingState.Editing || DrawingState == DrawingState.Moving)
 			{
+				if (DrawingState == DrawingState.Editing && editMode == EditMode.Start && dataPoint != null)
+					SnapStartAnchorToBarOpen(dataPoint);
+
 				lastMouseMoveDataPoint = null;
 				DrawingState = DrawingState.Normal;
 				editMode = EditMode.None;
@@ -514,6 +517,28 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				return EditMode.MoveAll;
 
 			return EditMode.None;
+		}
+
+		private void SnapStartAnchorToBarOpen(ChartAnchor dataPoint)
+		{
+			if (dataPoint == null || StartAnchor == null)
+				return;
+
+			dataPoint.CopyDataValues(StartAnchor);
+
+			ChartBars chartBars = GetAttachedToChartBars();
+			if (chartBars == null || chartBars.Bars == null)
+				return;
+
+			Bars bars = chartBars.Bars;
+			int chartBarsCount = Math.Min(chartBars.Count, bars.Count);
+			if (chartBarsCount <= 0)
+				return;
+
+			int barIndex = FindNearestBarIndex(bars, dataPoint.Time);
+			barIndex = Math.Max(0, Math.Min(barIndex, chartBarsCount - 1));
+			StartAnchor.Time = bars.GetTime(barIndex);
+			StartAnchor.Price = bars.GetOpen(barIndex);
 		}
 
 		private void EnsureVwap(ChartControl chartControl, ChartScale chartScale)

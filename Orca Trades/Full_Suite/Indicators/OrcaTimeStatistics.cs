@@ -28,6 +28,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		WeekSundaySixPmEastern
 	}
 
+	public enum OrcaTimeStatisticsFontWeight
+	{
+		Light = 0,
+		Regular = 1,
+		Medium = 2,
+		SemiBold = 3,
+		Bold = 4,
+		ExtraBold = 5
+	}
+
 	public class OrcaTimeStatisticsCumulativeDeltaStartModeConverter : EnumConverter
 	{
 		public OrcaTimeStatisticsCumulativeDeltaStartModeConverter() : base(typeof(OrcaTimeStatisticsCumulativeDeltaStartMode))
@@ -96,14 +106,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 	}
 
-	public class OrcaTimeStatistics : Indicator
+	public class OrcaTimeStatistics : Indicator, IOrcaReplayParticipant
 	{
+		private struct CandleMetrics
+		{
+			public double Body;
+			public double BodyPercent;
+			public double CloseLocationPercent;
+			public double UpperWickPercent;
+			public double LowerWickPercent;
+			public bool HasRangePercentages;
+		}
+
 		private sealed class AverageSummary
 		{
 			public double VolumeSum;
 			public int VolumeCount;
+			public double VolumePerSecondSum;
+			public int VolumePerSecondCount;
+			public double VolumePerRangeTickSum;
+			public int VolumePerRangeTickCount;
 			public double DeltaAbsSum;
 			public int DeltaCount;
+			public double DeltaPerSecondAbsSum;
+			public int DeltaPerSecondCount;
 			public double CumulativeDeltaAbsSum;
 			public int CumulativeDeltaCount;
 			public double DeltaPercentAbsSum;
@@ -116,6 +142,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public int FinishDeltaCount;
 			public double RangeSum;
 			public int RangeCount;
+			public double BodySum;
+			public int BodyCount;
+			public double BodyPercentSum;
+			public int BodyPercentCount;
+			public double CloseLocationPercentSum;
+			public int CloseLocationPercentCount;
+			public double UpperWickPercentSum;
+			public int UpperWickPercentCount;
+			public double LowerWickPercentSum;
+			public int LowerWickPercentCount;
 			public double TimeSecondsSum;
 			public int TimeCount;
 		}
@@ -132,11 +168,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int providerRevision = -1;
 		private int providerCurrentBar = -1;
 		private bool providerDataActive;
-		private DateTime lastProviderWarningUtc = DateTime.MinValue;
+		private int providerOutageWarningLogged;
 		private DateTime lastBarUpdateWarningUtc = DateTime.MinValue;
 		private DateTime lastSharedBackfillAttemptUtc = DateTime.MinValue;
 		private DateTime lastSharedBackfillSuccessLogUtc = DateTime.MinValue;
 		private const int SharedProviderMaxRealtimeLagSeconds = 30;
+		private readonly string diagnosticsInstanceId = Guid.NewGuid().ToString("N");
+		private bool diagnosticsRegistered;
+		private OrcaReplayBarHorizon replayBarHorizon;
 
 		private SharpDX.Direct2D1.Brush	dxVolumeBrush;
 		private SharpDX.Direct2D1.Brush	dxPositiveBrush;
@@ -159,7 +198,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Name						= "OrcaTimeStatistics";
-				Description					= "Displays per-bar statistics (Volume, Delta, Delta Efficiency, Range, Time) as a panel below the chart.";
+				Description					= "Displays optional per-bar activity, order-flow, candle-efficiency, range, and timing statistics.";
 				Calculate					= Calculate.OnEachTick;
 				IsOverlay					= false;
 				DisplayInDataBox			= false;
@@ -184,6 +223,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				CellSeparatorColor   = Brushes.Black;
 				BaseOpacity          = 0.25;
 				FontFamilyName       = "Segoe UI";
+				TextFontWeight       = OrcaTimeStatisticsFontWeight.Bold;
 				FontSize             = 11;
 				ShowCellSeparators   = true;
 				CellSeparatorThickness = 1f;
@@ -191,7 +231,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				AverageLookbackBars  = 14;
 
 				ShowVolume           = true;
+				ShowVolumePerSecond  = false;
+				ShowVolumePerRangeTick = false;
 				ShowDelta            = true;
+				ShowDeltaPerSecond   = false;
 				ShowCumulativeDelta  = false;
 				CumulativeDeltaStartMode = OrcaTimeStatisticsCumulativeDeltaStartMode.OneDaySixPmEastern;
 				ShowDeltaPercent     = false;
@@ -199,9 +242,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowMinDelta         = false;
 				ShowFinishDelta      = true;
 				ShowRange            = true;
+				ShowBody             = false;
+				ShowBodyPercent      = false;
+				ShowCloseLocation    = false;
+				ShowUpperWick        = false;
+				ShowLowerWick        = false;
 				ShowTime             = true;
 				OrderFlowSourceMode  = OrcaOrderFlowSourceMode.Internal;
 
+			}
+			else if (State == State.Configure)
+			{
+				// Preserve continuous market-data processing after saved settings are applied.
+				IsSuspendedWhileInactive = false;
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -213,11 +266,82 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastAsk        = double.NaN;
 				prevLast       = double.NaN;
 				lastDirection  = 0;
+				replayBarHorizon = new OrcaReplayBarHorizon("OrcaTimeStatistics:" + diagnosticsInstanceId);
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+				ReportDiagnosticsState();
+			}
+			else if (State == State.Historical || State == State.Transition || State == State.Realtime)
+			{
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+				ReportDiagnosticsState();
 			}
 			else if (State == State.Terminated)
 			{
+				if (ChartControl != null) OrcaReplayCore.UnregisterParticipant(ChartControl, this);
+				if (replayBarHorizon != null) replayBarHorizon.Restore();
+				OrcaDiagnosticsCore.UnregisterInstance(diagnosticsInstanceId);
 				DisposeDxResources();
 			}
+		}
+
+		private void EnsureDiagnosticsRegistered()
+		{
+			if (diagnosticsRegistered)
+				return;
+
+			OrcaDiagnosticsCore.RegisterInstance(diagnosticsInstanceId, "OrcaTimeStatistics", this);
+			ReportDiagnosticsSourceDeclaration("Unknown");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 0, "PrimaryChartSeries", "Chart", "Time statistics primary bars");
+			diagnosticsRegistered = true;
+		}
+
+		private void ReportDiagnosticsState()
+		{
+			EnsureDiagnosticsRegistered();
+			OrcaDiagnosticsCore.ReportState(diagnosticsInstanceId, State.ToString());
+			ReportDiagnosticsSourceDeclaration(null);
+		}
+
+		private void ReportDiagnosticsSourceDeclaration(string sourceHealth)
+		{
+			string sourceMode;
+			string cacheProvider;
+			if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedProvider)
+			{
+				sourceMode = "SharedOrcaProfileDataProvider";
+				cacheProvider = "SharedOrcaProfileDataProvider";
+			}
+			else if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedHistoricalInternalRealtime)
+			{
+				sourceMode = "SharedHistoricalInternalRealtime";
+				cacheProvider = "SharedOrcaProfileDataProvider";
+			}
+			else
+			{
+				sourceMode = "PrimaryChartMarketData";
+				cacheProvider = "LocalBarSeries";
+			}
+
+			OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, sourceMode, sourceHealth, cacheProvider);
+		}
+
+		private DateTime GetDiagnosticsEventTime()
+		{
+			try
+			{
+				if (Times != null && CurrentBars != null && BarsInProgress >= 0 && BarsInProgress < Times.Length && BarsInProgress < CurrentBars.Length && CurrentBars[BarsInProgress] >= 0)
+					return Times[BarsInProgress][0];
+			}
+			catch { }
+
+			try
+			{
+				if (CurrentBar >= 0)
+					return Time[0];
+			}
+			catch { }
+
+			return DateTime.MinValue;
 		}
 
 		private void EnsureBarLists(int idx)
@@ -266,6 +390,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (e == null)
 				return;
+			long diagnosticsWorkStart = 0;
+
+            if (OrcaDiagnosticsCore.IsEnabled)
+            {
+                EnsureDiagnosticsRegistered();
+                long diagnosticsSequence = OrcaDiagnosticsCore.ReportMarketData(diagnosticsInstanceId, e.MarketDataType, e.Time == DateTime.MinValue ? GetDiagnosticsEventTime() : e.Time);
+                diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+            }
+			try
+			{
 
 			if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedProvider)
 				return;
@@ -310,21 +444,41 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				if (signed != 0 && BarsArray != null && BarsArray.Length > 0 && BarsArray[0] != null && BarsArray[0].Count > 0)
 				{
-					int primaryIdx = BarsArray[0].GetBar(e.Time);
-					if (primaryIdx >= 0)
+					// OnEachTick has already assigned this trade's bar before OnMarketData.
+					// GetBar(time) chooses the first match when range/volume bars share a timestamp.
+					int primaryIdx = Calculate == Calculate.OnEachTick ? CurrentBar : BarsArray[0].GetBar(e.Time);
+					if (primaryIdx >= 0 && primaryIdx < BarsArray[0].Count)
 					{
 						EnsureBarLists(primaryIdx);
 						barTickDelta[primaryIdx] += signed;
 						barMaxDelta[primaryIdx] = Math.Max(barMaxDelta[primaryIdx], barTickDelta[primaryIdx]);
 						barMinDelta[primaryIdx] = Math.Min(barMinDelta[primaryIdx], barTickDelta[primaryIdx]);
 						barHasData[primaryIdx] = true;
+                        OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, e.Time, null);
 					}
 				}
+			}
+			}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.MarketData, -1, diagnosticsWorkStart);
 			}
 		}
 
 		protected override void OnBarUpdate()
 		{
+            long diagnosticsWorkStart = 0;
+            int diagnosticsBarsInProgress = BarsInProgress;
+            if (OrcaDiagnosticsCore.IsEnabled)
+            {
+                EnsureDiagnosticsRegistered();
+                long diagnosticsSequence = OrcaDiagnosticsCore.ReportBarUpdate(diagnosticsInstanceId, BarsInProgress, GetDiagnosticsEventTime());
+                diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+            }
+            try
+            {
+
 			if (!IsPrimarySeriesReady())
 				return;
 
@@ -343,6 +497,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			} catch (Exception ex) {
 				LogBarUpdateWarning(ex);
 			}
+            }
+            finally
+            {
+                if (diagnosticsWorkStart > 0)
+                    OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.BarUpdate, diagnosticsBarsInProgress, diagnosticsWorkStart);
+            }
 		}
 
 		private bool IsPrimarySeriesReady()
@@ -390,6 +550,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
+            long diagnosticsRenderStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
 			if (chartControl == null || chartScale == null || Bars == null || ChartBars == null || ChartPanel == null || Instrument == null || Instrument.MasterInstrument == null) return;
 			EnsureDeltaStorage();
 			if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedProvider && State == State.Realtime)
@@ -397,13 +560,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedHistoricalInternalRealtime && State == State.Realtime && !providerDataActive && ShouldAttemptRealtimeSharedBackfill())
 				TryRefreshFromSharedProvider(false, true, false);
 
-			int rowCount = (ShowVolume ? 1 : 0) + (ShowDelta ? 1 : 0) + (ShowCumulativeDelta ? 1 : 0) + (ShowDeltaPercent ? 1 : 0)
+			int rowCount = (ShowVolume ? 1 : 0) + (ShowVolumePerSecond ? 1 : 0) + (ShowVolumePerRangeTick ? 1 : 0) + (ShowDelta ? 1 : 0) + (ShowDeltaPerSecond ? 1 : 0) + (ShowCumulativeDelta ? 1 : 0) + (ShowDeltaPercent ? 1 : 0)
 						+ (ShowMaxDelta ? 1 : 0) + (ShowMinDelta ? 1 : 0) + (ShowFinishDelta ? 1 : 0)
-						+ (ShowRange ? 1 : 0) + (ShowTime ? 1 : 0);
+						+ (ShowRange ? 1 : 0) + (ShowBody ? 1 : 0) + (ShowBodyPercent ? 1 : 0) + (ShowCloseLocation ? 1 : 0)
+						+ (ShowUpperWick ? 1 : 0) + (ShowLowerWick ? 1 : 0) + (ShowTime ? 1 : 0);
 			if (rowCount == 0) return;
 
 			int fromIdx = Math.Max(0, ChartBars.FromIndex);
 			int toIdx   = Math.Min(ChartBars.ToIndex, Bars.Count - 1);
+			int replayMaxBar = replayBarHorizon == null ? -1 : replayBarHorizon.MaxBarIndex;
+			if (replayMaxBar >= 0) toIdx = Math.Min(toIdx, replayMaxBar);
 			if (fromIdx < 0 || toIdx < 0 || fromIdx > toIdx) return;
 
 			EnsureDxResources();
@@ -415,30 +581,62 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			var rows = new List<KeyValuePair<string, int>>();
 			if (ShowVolume)      rows.Add(new KeyValuePair<string, int>("Volume",       0));
+			if (ShowVolumePerSecond) rows.Add(new KeyValuePair<string, int>("Volume / Sec", 9));
+			if (ShowVolumePerRangeTick) rows.Add(new KeyValuePair<string, int>("Volume / Tick", 10));
 			if (ShowDelta)       rows.Add(new KeyValuePair<string, int>("Delta",        1));
-			if (ShowCumulativeDelta) rows.Add(new KeyValuePair<string, int>("Cumulative \u0394", 7));
+			if (ShowDeltaPerSecond) rows.Add(new KeyValuePair<string, int>("Delta / Sec", 11));
 			if (ShowDeltaPercent) rows.Add(new KeyValuePair<string, int>("\u0394 %",        8));
 			if (ShowMaxDelta)    rows.Add(new KeyValuePair<string, int>("Max \u0394",       5));
 			if (ShowMinDelta)    rows.Add(new KeyValuePair<string, int>("Min \u0394",       6));
 			if (ShowFinishDelta) rows.Add(new KeyValuePair<string, int>("Finish \u0394",  2));
+			if (ShowCumulativeDelta) rows.Add(new KeyValuePair<string, int>("Cumulative \u0394", 7));
 			if (ShowRange)       rows.Add(new KeyValuePair<string, int>("Range",        3));
+			if (ShowBody)        rows.Add(new KeyValuePair<string, int>("Body",         12));
+			if (ShowBodyPercent) rows.Add(new KeyValuePair<string, int>("Body %",       13));
+			if (ShowCloseLocation) rows.Add(new KeyValuePair<string, int>("Close Location", 14));
+			if (ShowUpperWick)   rows.Add(new KeyValuePair<string, int>("Upper Wick",   15));
+			if (ShowLowerWick)   rows.Add(new KeyValuePair<string, int>("Lower Wick",   16));
 			if (ShowTime)        rows.Add(new KeyValuePair<string, int>("Time",         4));
 
-			double maxVol = 1, maxDel = 1, maxCumDel = 1, maxDeltaPercent = 1, maxRange = 1;
+			double maxVol = 1, maxVolumePerSecond = 1, maxVolumePerRangeTick = 1, maxDel = 1, maxDeltaPerSecond = 1, maxCumDel = 1, maxDeltaPercent = 1, maxRange = 1, maxBody = 1, maxBodyPercent = 1, maxUpperWickPercent = 1, maxLowerWickPercent = 1;
 			double tickSize = Math.Max(0.00000001, Instrument.MasterInstrument.TickSize);
 			double[] cumulativeDeltaValues = ShowCumulativeDelta ? BuildCumulativeDeltaValues(toIdx) : null;
+			bool needsCandleMetrics = ShowBody || ShowBodyPercent || ShowCloseLocation || ShowUpperWick || ShowLowerWick;
 
 			for (int i = fromIdx; i <= toIdx; i++)
 			{
-				double vol, range;
-				if (!TryGetBarStats(i, out vol, out range)) continue;
+				double vol, high, low, range;
+				if (!TryGetBarStats(i, out vol, out high, out low, out range)) continue;
 				if (ShowVolume) maxVol = Math.Max(maxVol, vol);
+				double volumePerSecond;
+				if (ShowVolumePerSecond && TryCalculateVolumePerSecond(i, vol, out volumePerSecond))
+					maxVolumePerSecond = Math.Max(maxVolumePerSecond, volumePerSecond);
+				double volumePerRangeTick;
+				if (ShowVolumePerRangeTick && TryCalculateVolumePerRangeTick(vol, range, tickSize, out volumePerRangeTick))
+					maxVolumePerRangeTick = Math.Max(maxVolumePerRangeTick, volumePerRangeTick);
+				CandleMetrics candleMetrics = new CandleMetrics();
+				if (needsCandleMetrics && TryGetCandleMetrics(i, high, low, out candleMetrics))
+				{
+					if (ShowBody) maxBody = Math.Max(maxBody, candleMetrics.Body);
+					if (candleMetrics.HasRangePercentages)
+					{
+						if (ShowBodyPercent) maxBodyPercent = Math.Max(maxBodyPercent, candleMetrics.BodyPercent);
+						if (ShowUpperWick) maxUpperWickPercent = Math.Max(maxUpperWickPercent, candleMetrics.UpperWickPercent);
+						if (ShowLowerWick) maxLowerWickPercent = Math.Max(maxLowerWickPercent, candleMetrics.LowerWickPercent);
+					}
+				}
 				if (ShowRange)  maxRange = Math.Max(maxRange, range);
 				if (ShowCumulativeDelta && cumulativeDeltaValues != null && i < cumulativeDeltaValues.Length)
 					maxCumDel = Math.Max(maxCumDel, Math.Abs(cumulativeDeltaValues[i]));
 				if (HasDeltaForBar(i))
 				{
 					if (ShowDelta) maxDel = Math.Max(maxDel, Math.Abs(barTickDelta[i]));
+					if (ShowDeltaPerSecond)
+					{
+						double deltaPerSecond;
+						if (TryCalculateDeltaPerSecond(i, barTickDelta[i], out deltaPerSecond))
+							maxDeltaPerSecond = Math.Max(maxDeltaPerSecond, Math.Abs(deltaPerSecond));
+					}
 					if (ShowDeltaPercent)
 						maxDeltaPercent = Math.Max(maxDeltaPercent, Math.Abs(CalculateDeltaPercent(barTickDelta[i], vol)));
 					if (ShowMaxDelta) maxDel = Math.Max(maxDel, Math.Abs(barMaxDelta[i]));
@@ -455,18 +653,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			int firstVisibleIdx = Math.Max(0, fromIdx);
 			int lastVisibleIdx = Math.Min(toIdx, Bars.Count - 1);
-			AverageSummary averageSummary = ShowAverageValues ? CalculateAverageSummary(lastVisibleIdx) : null;
+			AverageSummary averageSummary = ShowAverageValues ? CalculateAverageSummary(lastVisibleIdx, tickSize) : null;
 
 			for (int i = fromIdx; i <= toIdx; i++)
 			{
-				double vol, range;
-				if (!TryGetBarStats(i, out vol, out range)) continue;
+				double vol, high, low, range;
+				if (!TryGetBarStats(i, out vol, out high, out low, out range)) continue;
 				float x = chartControl.GetXByBarIndex(ChartBars, i);
 				float barSpacing = (i < toIdx) ? (chartControl.GetXByBarIndex(ChartBars, i + 1) - x) : ((i > fromIdx) ? (x - chartControl.GetXByBarIndex(ChartBars, i - 1)) : (float)chartControl.BarWidth);
 				float boxW = Math.Max(2f, barSpacing);
 
 				bool hasDelta = HasDeltaForBar(i);
 				double del   = hasDelta ? barTickDelta[i] : 0;
+				CandleMetrics candleMetrics = new CandleMetrics();
+				bool hasCandleMetrics = needsCandleMetrics && TryGetCandleMetrics(i, high, low, out candleMetrics);
 
 				for (int r = 0; r < rows.Count; r++)
 				{
@@ -479,12 +679,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 							RenderTarget.FillRectangle(rect, dxVolumeBrush);
 							if (boxW >= 20) DrawCenteredText(FormatVolume(vol), rect);
 							break;
+						case 9: // Volume per second
+							double volumePerSecond;
+							if (!TryCalculateVolumePerSecond(i, vol, out volumePerSecond)) break;
+							dxVolumeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (volumePerSecond / maxVolumePerSecond));
+							RenderTarget.FillRectangle(rect, dxVolumeBrush);
+							if (boxW >= 20) DrawCenteredText(FormatVolume(volumePerSecond), rect);
+							break;
+						case 10: // Volume per range tick
+							double volumePerRangeTick;
+							if (!TryCalculateVolumePerRangeTick(vol, range, tickSize, out volumePerRangeTick)) break;
+							dxVolumeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, volumePerRangeTick / maxVolumePerRangeTick));
+							RenderTarget.FillRectangle(rect, dxVolumeBrush);
+							if (boxW >= 20) DrawCenteredText(FormatVolume(volumePerRangeTick), rect);
+							break;
 						case 1: // Delta
 							if (!hasDelta) break;
 							var dBrush = del >= 0 ? dxPositiveBrush : dxNegativeBrush;
 							dBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (Math.Abs(del) / maxDel));
 							RenderTarget.FillRectangle(rect, dBrush);
 							if (boxW >= 20) DrawCenteredText(FormatDelta(del), rect);
+							break;
+						case 11: // Delta per second
+							if (!hasDelta) break;
+							double deltaPerSecond;
+							if (!TryCalculateDeltaPerSecond(i, del, out deltaPerSecond)) break;
+							var deltaRateBrush = deltaPerSecond >= 0 ? dxPositiveBrush : dxNegativeBrush;
+							deltaRateBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, Math.Abs(deltaPerSecond) / maxDeltaPerSecond));
+							RenderTarget.FillRectangle(rect, deltaRateBrush);
+							if (boxW >= 20) DrawCenteredText(FormatSignedRate(deltaPerSecond), rect);
 							break;
 						case 2: // Finish Delta = (Current Delta - Extreme Delta)
 							if (!hasDelta) break;
@@ -499,6 +722,37 @@ namespace NinjaTrader.NinjaScript.Indicators
 							dxRangeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * (range / maxRange));
 							RenderTarget.FillRectangle(rect, dxRangeBrush);
 							if (boxW >= 20) DrawCenteredText(FormatRange(range, tickSize), rect);
+							break;
+						case 12: // Body
+							if (!hasCandleMetrics) break;
+							dxRangeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, candleMetrics.Body / maxBody));
+							RenderTarget.FillRectangle(rect, dxRangeBrush);
+							if (boxW >= 20) DrawCenteredText(FormatRange(candleMetrics.Body, tickSize), rect);
+							break;
+						case 13: // Body percent
+							if (!hasCandleMetrics || !candleMetrics.HasRangePercentages) break;
+							dxRangeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, candleMetrics.BodyPercent / maxBodyPercent));
+							RenderTarget.FillRectangle(rect, dxRangeBrush);
+							if (boxW >= 28) DrawCenteredText(FormatPercent(candleMetrics.BodyPercent), rect);
+							break;
+						case 14: // Close location
+							if (!hasCandleMetrics || !candleMetrics.HasRangePercentages) break;
+							var closeLocationBrush = candleMetrics.CloseLocationPercent >= 50 ? dxPositiveBrush : dxNegativeBrush;
+							closeLocationBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, Math.Abs(candleMetrics.CloseLocationPercent - 50.0) / 50.0));
+							RenderTarget.FillRectangle(rect, closeLocationBrush);
+							if (boxW >= 28) DrawCenteredText(FormatPercent(candleMetrics.CloseLocationPercent), rect);
+							break;
+						case 15: // Upper wick percent
+							if (!hasCandleMetrics || !candleMetrics.HasRangePercentages) break;
+							dxNegativeBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, candleMetrics.UpperWickPercent / maxUpperWickPercent));
+							RenderTarget.FillRectangle(rect, dxNegativeBrush);
+							if (boxW >= 28) DrawCenteredText(FormatPercent(candleMetrics.UpperWickPercent), rect);
+							break;
+						case 16: // Lower wick percent
+							if (!hasCandleMetrics || !candleMetrics.HasRangePercentages) break;
+							dxPositiveBrush.Opacity = (float)(BaseOpacity + (1.0 - BaseOpacity) * Math.Min(1.0, candleMetrics.LowerWickPercent / maxLowerWickPercent));
+							RenderTarget.FillRectangle(rect, dxPositiveBrush);
+							if (boxW >= 28) DrawCenteredText(FormatPercent(candleMetrics.LowerWickPercent), rect);
 							break;
 						case 4: // Time — bar duration formatted as "Xm Y" or "Xs"
 							dxTimeBrush.Opacity = (float)BaseOpacity;
@@ -555,21 +809,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			float averageLeft, averageWidth;
 			if (ShowAverageValues && averageSummary != null && TryGetAverageColumnLayout(chartControl, fromIdx, toIdx, lastVisibleIdx, out averageLeft, out averageWidth))
-			{
 				DrawAverageColumn(rows, averageSummary, averageLeft, averageWidth, panelY, rowH, tickSize);
-				DrawRowLabels(rows, averageLeft + averageWidth + 4f, ChartPanel.X + ChartPanel.W - averageLeft - averageWidth - 8f, panelY, rowH);
-			}
-			else
-			{
-				for (int r = 0; r < rows.Count; r++)
-					DrawRightLabel(rows[r].Key, ChartPanel.X + ChartPanel.W - 5f, panelY + r * rowH, rowH);
-			}
+
+			for (int r = 0; r < rows.Count; r++)
+				DrawRightLabel(rows[r].Key, ChartPanel.X + ChartPanel.W - 5f, panelY + r * rowH, rowH);
 
 			DrawRightScaleMask(chartControl);
 
 			RenderTarget.AntialiasMode = oldAA;
 			RenderTarget.TextAntialiasMode = oldTAA;
-		}
+            }
+            finally
+            {
+                OrcaDiagnosticsCore.ReportRenderSample(diagnosticsInstanceId, diagnosticsRenderStart);
+            }
+        }
 
 		private bool TryRefreshFromSharedProvider(bool force, bool allowRealtimeLag, bool clearOnUnavailable)
 		{
@@ -604,9 +858,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			RebuildDeltaFromOrderFlowSnapshot(snapshot);
+            OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", "loaded " + snapshot.SourceName + " revision=" + snapshot.Revision);
+            OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, GetDiagnosticsEventTime(), null);
 			providerRevision = snapshot.Revision;
 			providerCurrentBar = CurrentBar;
 			providerDataActive = true;
+			System.Threading.Interlocked.Exchange(ref providerOutageWarningLogged, 0);
 			LogSharedBackfillSuccess(snapshot);
 			return true;
 		}
@@ -647,6 +904,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			providerDataActive = false;
 			providerRevision = -1;
 			providerCurrentBar = -1;
+            ReportDiagnosticsSourceDeclaration("Unavailable");
+            OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", reason);
 			LogProviderWarning(reason);
 		}
 
@@ -675,11 +934,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void LogProviderWarning(string message)
 		{
-			DateTime now = DateTime.UtcNow;
-			if ((now - lastProviderWarningUtc).TotalSeconds < 30)
+			// One Output warning per continuous outage; diagnostics retain the current reason.
+			// Do not use message equality: stale-age text changes while the outage is unchanged.
+			if (System.Threading.Interlocked.Exchange(ref providerOutageWarningLogged, 1) != 0)
 				return;
 
-			lastProviderWarningUtc = now;
 			Print("OrcaTimeStatistics: " + message);
 		}
 
@@ -755,7 +1014,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private AverageSummary CalculateAverageSummary(int lastVisibleIdx)
+		private AverageSummary CalculateAverageSummary(int lastVisibleIdx, double tickSize)
 		{
 			AverageSummary summary = new AverageSummary();
 			if (Bars == null || AverageLookbackBars <= 0 || CurrentBar < 0 || lastVisibleIdx < 0)
@@ -772,14 +1031,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double[] cumulativeDeltaValues = ShowCumulativeDelta ? BuildCumulativeDeltaValues(lastIndex) : null;
 			for (int index = firstIndex; index <= lastIndex; index++)
 			{
-				double volume, range;
-				if (!TryGetBarStats(index, out volume, out range))
+				double volume, high, low, range;
+				if (!TryGetBarStats(index, out volume, out high, out low, out range))
 					continue;
 
 				if (!double.IsNaN(volume) && !double.IsInfinity(volume))
 				{
 					summary.VolumeSum += volume;
 					summary.VolumeCount++;
+				}
+
+				double volumePerSecond;
+				if (ShowVolumePerSecond && TryCalculateVolumePerSecond(index, volume, out volumePerSecond))
+				{
+					summary.VolumePerSecondSum += volumePerSecond;
+					summary.VolumePerSecondCount++;
+				}
+
+				double volumePerRangeTick;
+				if (ShowVolumePerRangeTick && TryCalculateVolumePerRangeTick(volume, range, tickSize, out volumePerRangeTick))
+				{
+					summary.VolumePerRangeTickSum += volumePerRangeTick;
+					summary.VolumePerRangeTickCount++;
+				}
+
+				CandleMetrics candleMetrics = new CandleMetrics();
+				if ((ShowBody || ShowBodyPercent || ShowCloseLocation || ShowUpperWick || ShowLowerWick) && TryGetCandleMetrics(index, high, low, out candleMetrics))
+				{
+					if (ShowBody)
+					{
+						summary.BodySum += candleMetrics.Body;
+						summary.BodyCount++;
+					}
+					if (candleMetrics.HasRangePercentages)
+					{
+						if (ShowBodyPercent) { summary.BodyPercentSum += candleMetrics.BodyPercent; summary.BodyPercentCount++; }
+						if (ShowCloseLocation) { summary.CloseLocationPercentSum += candleMetrics.CloseLocationPercent; summary.CloseLocationPercentCount++; }
+						if (ShowUpperWick) { summary.UpperWickPercentSum += candleMetrics.UpperWickPercent; summary.UpperWickPercentCount++; }
+						if (ShowLowerWick) { summary.LowerWickPercentSum += candleMetrics.LowerWickPercent; summary.LowerWickPercentCount++; }
+					}
 				}
 
 				if (!double.IsNaN(range) && !double.IsInfinity(range))
@@ -806,6 +1096,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				summary.DeltaAbsSum += Math.Abs(barTickDelta[index]);
 				summary.DeltaCount++;
+				double deltaPerSecond;
+				if (ShowDeltaPerSecond && TryCalculateDeltaPerSecond(index, barTickDelta[index], out deltaPerSecond))
+				{
+					summary.DeltaPerSecondAbsSum += Math.Abs(deltaPerSecond);
+					summary.DeltaPerSecondCount++;
+				}
 				if (volume > 0)
 				{
 					summary.DeltaPercentAbsSum += Math.Abs(CalculateDeltaPercent(barTickDelta[index], volume));
@@ -870,6 +1166,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				int rowType = rows[r].Value;
 				SharpDX.Direct2D1.Brush brush = GetAverageCellBrush(rowType);
+				if (rowType == 14 && summary.CloseLocationPercentCount > 0 && summary.CloseLocationPercentSum / summary.CloseLocationPercentCount < 50.0)
+					brush = dxNegativeBrush;
 				if (brush == null)
 					continue;
 
@@ -897,6 +1195,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				case 6: return dxMinDeltaBrush;
 				case 7: return dxPositiveBrush;
 				case 8: return dxPositiveBrush;
+				case 9: return dxVolumeBrush;
+				case 10: return dxVolumeBrush;
+				case 11: return dxPositiveBrush;
+				case 12: return dxRangeBrush;
+				case 13: return dxRangeBrush;
+				case 14: return dxPositiveBrush;
+				case 15: return dxNegativeBrush;
+				case 16: return dxPositiveBrush;
 				default: return dxTextBrush;
 			}
 		}
@@ -910,6 +1216,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				case 0:
 					return summary.VolumeCount > 0 ? FormatVolume(summary.VolumeSum / summary.VolumeCount) : "--";
+				case 9:
+					return summary.VolumePerSecondCount > 0 ? FormatVolume(summary.VolumePerSecondSum / summary.VolumePerSecondCount) : "--";
+				case 10:
+					return summary.VolumePerRangeTickCount > 0 ? FormatVolume(summary.VolumePerRangeTickSum / summary.VolumePerRangeTickCount) : "--";
+				case 11:
+					return summary.DeltaPerSecondCount > 0 ? FormatVolume(summary.DeltaPerSecondAbsSum / summary.DeltaPerSecondCount) : "--";
+				case 12:
+					return summary.BodyCount > 0 ? FormatRange(summary.BodySum / summary.BodyCount, tickSize) : "--";
+				case 13:
+					return summary.BodyPercentCount > 0 ? FormatPercent(summary.BodyPercentSum / summary.BodyPercentCount) : "--";
+				case 14:
+					return summary.CloseLocationPercentCount > 0 ? FormatPercent(summary.CloseLocationPercentSum / summary.CloseLocationPercentCount) : "--";
+				case 15:
+					return summary.UpperWickPercentCount > 0 ? FormatPercent(summary.UpperWickPercentSum / summary.UpperWickPercentCount) : "--";
+				case 16:
+					return summary.LowerWickPercentCount > 0 ? FormatPercent(summary.LowerWickPercentSum / summary.LowerWickPercentCount) : "--";
 				case 1:
 					return summary.DeltaCount > 0 ? FormatDelta(summary.DeltaAbsSum / summary.DeltaCount) : "--";
 				case 7:
@@ -933,6 +1255,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private string FormatVolume(double vol) { return vol >= 1000 ? (vol / 1000.0).ToString("0.##") + "K" : vol.ToString("0.##"); }
 		private string FormatDelta(double delta) { return delta.ToString("#,##0"); }
+		private string FormatSignedRate(double rate)
+		{
+			double absolute = Math.Abs(rate);
+			string value = absolute >= 1000 ? (absolute / 1000.0).ToString("0.##") + "K" : absolute.ToString("0.##");
+			return rate > 0 ? "+" + value : rate < 0 ? "-" + value : "0";
+		}
 		private string FormatSignedDelta(double delta) { return delta.ToString("+#,##0;-#,##0;0"); }
 		private string FormatPercent(double percent) { return percent.ToString("#,##0.#") + "%"; }
 		private string FormatSignedPercent(double percent) { return percent.ToString("+#,##0.#;-#,##0.#;0") + "%"; }
@@ -948,6 +1276,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return 0;
 
 			return (delta / volume) * 100.0;
+		}
+		private bool TryCalculateVolumePerSecond(int barIndex, double volume, out double volumePerSecond)
+		{
+			volumePerSecond = 0;
+			if (volume < 0 || double.IsNaN(volume) || double.IsInfinity(volume))
+				return false;
+
+			int durationSeconds = GetBarDurationSeconds(barIndex);
+			if (durationSeconds <= 0)
+				return false;
+
+			volumePerSecond = volume / durationSeconds;
+			return !double.IsNaN(volumePerSecond) && !double.IsInfinity(volumePerSecond);
+		}
+		private bool TryCalculateVolumePerRangeTick(double volume, double range, double tickSize, out double volumePerRangeTick)
+		{
+			volumePerRangeTick = 0;
+			if (volume < 0 || range <= 0 || tickSize <= 0 || double.IsNaN(volume) || double.IsInfinity(volume))
+				return false;
+
+			double rangeTicks = range / tickSize;
+			if (rangeTicks <= 0 || double.IsNaN(rangeTicks) || double.IsInfinity(rangeTicks))
+				return false;
+
+			volumePerRangeTick = volume / rangeTicks;
+			return !double.IsNaN(volumePerRangeTick) && !double.IsInfinity(volumePerRangeTick);
+		}
+		private bool TryCalculateDeltaPerSecond(int barIndex, double delta, out double deltaPerSecond)
+		{
+			deltaPerSecond = 0;
+			if (double.IsNaN(delta) || double.IsInfinity(delta))
+				return false;
+
+			int durationSeconds = GetBarDurationSeconds(barIndex);
+			if (durationSeconds <= 0)
+				return false;
+
+			deltaPerSecond = delta / durationSeconds;
+			return !double.IsNaN(deltaPerSecond) && !double.IsInfinity(deltaPerSecond);
 		}
 		private double[] BuildCumulativeDeltaValues(int lastIndex)
 		{
@@ -1002,7 +1369,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DateTime GetRthStart(DateTime barTime)
 		{
 			DateTime start = barTime.Date.AddHours(9).AddMinutes(30);
-			if (barTime >= start)
+			if (barTime > start)
 				return start;
 
 			DateTime previousDate = GetPreviousWeekday(barTime.Date.AddDays(-1));
@@ -1029,9 +1396,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double extreme = (curDel >= 0) ? barMaxDelta[barIndex] : barMinDelta[barIndex];
 			return curDel - extreme;
 		}
-		private bool TryGetBarStats(int barIndex, out double volume, out double range)
+		private bool TryGetBarStats(int barIndex, out double volume, out double high, out double low, out double range)
 		{
 			volume = 0;
+			high = 0;
+			low = 0;
 			range = 0;
 			try
 			{
@@ -1039,12 +1408,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 					return false;
 
 				volume = Bars.GetVolume(barIndex);
-				double high = Bars.GetHigh(barIndex);
-				double low = Bars.GetLow(barIndex);
+				high = Bars.GetHigh(barIndex);
+				low = Bars.GetLow(barIndex);
 				if (double.IsNaN(high) || double.IsInfinity(high) || double.IsNaN(low) || double.IsInfinity(low))
 					return false;
 
 				range = Math.Max(0, high - low);
+				return true;
+			}
+			catch
+			{
+				return false;
+			}
+		}
+		private bool TryGetCandleMetrics(int barIndex, double high, double low, out CandleMetrics metrics)
+		{
+			metrics = new CandleMetrics();
+			try
+			{
+				if (Bars == null || barIndex < 0 || barIndex >= Bars.Count)
+					return false;
+
+				double open = Bars.GetOpen(barIndex);
+				double close = Bars.GetClose(barIndex);
+				if (double.IsNaN(open) || double.IsInfinity(open) || double.IsNaN(close) || double.IsInfinity(close))
+					return false;
+
+				double range = Math.Max(0, high - low);
+				metrics.Body = Math.Min(range, Math.Abs(close - open));
+				if (range <= 0)
+					return true;
+
+				metrics.HasRangePercentages = true;
+				metrics.BodyPercent = Math.Max(0, Math.Min(100, metrics.Body / range * 100.0));
+				metrics.CloseLocationPercent = Math.Max(0, Math.Min(100, (close - low) / range * 100.0));
+				metrics.UpperWickPercent = Math.Max(0, Math.Min(100, (high - Math.Max(open, close)) / range * 100.0));
+				metrics.LowerWickPercent = Math.Max(0, Math.Min(100, (Math.Min(open, close) - low) / range * 100.0));
 				return true;
 			}
 			catch
@@ -1122,39 +1521,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void DrawRowLabels(List<KeyValuePair<string, int>> rows, float left, float width, float panelY, float rowH)
-		{
-			if (rows == null || dxTextFormat == null || dxTextBrush == null || width < 22f)
-				return;
-
-			for (int r = 0; r < rows.Count; r++)
-			{
-				using (var layout = new SharpDX.DirectWrite.TextLayout(dwFactory, GetCompactRowLabel(rows[r].Value, rows[r].Key), dxTextFormat, width, rowH))
-				{
-					layout.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
-					layout.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center;
-					RenderTarget.DrawTextLayout(new Vector2(left, panelY + r * rowH), layout, dxTextBrush);
-				}
-			}
-		}
-
-		private string GetCompactRowLabel(int rowType, string fallback)
-		{
-			switch (rowType)
-			{
-				case 0: return "Vol";
-				case 1: return "\u0394";
-				case 2: return "F\u0394";
-				case 3: return "Rng";
-				case 4: return "Time";
-				case 5: return "Max\u0394";
-				case 6: return "Min\u0394";
-				case 7: return "C\u0394";
-				case 8: return "\u0394%";
-				default: return fallback ?? string.Empty;
-			}
-		}
-
 		private void DrawRightScaleMask(ChartControl chartControl)
 		{
 			if (chartControl == null || ChartPanel == null || dxScaleMaskBrush == null)
@@ -1207,10 +1573,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			dxSeparatorBrush = CreateSolidBrush(CellSeparatorColor, 1.0f);
 			dxScaleMaskBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color4(0f, 0f, 0f, 1f));
 			dwFactory    = new SharpDX.DirectWrite.Factory();
+			SharpDX.DirectWrite.FontWeight textFontWeight = ResolveTextFontWeight();
 			try {
-				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, GetTextFontFamily(), SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
+				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, GetTextFontFamily(), textFontWeight, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
 			} catch {
-				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
+				dxTextFormat = new SharpDX.DirectWrite.TextFormat(dwFactory, "Segoe UI", textFontWeight, SharpDX.DirectWrite.FontStyle.Normal, (float)FontSize);
 			}
 			dxResourceRenderTarget = currentTarget;
 		}
@@ -1218,6 +1585,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string GetTextFontFamily()
 		{
 			return string.IsNullOrWhiteSpace(FontFamilyName) ? "Segoe UI" : FontFamilyName.Trim();
+		}
+
+		private SharpDX.DirectWrite.FontWeight ResolveTextFontWeight()
+		{
+			switch (TextFontWeight)
+			{
+				case OrcaTimeStatisticsFontWeight.Light:
+					return SharpDX.DirectWrite.FontWeight.Light;
+				case OrcaTimeStatisticsFontWeight.Regular:
+					return SharpDX.DirectWrite.FontWeight.Normal;
+				case OrcaTimeStatisticsFontWeight.Medium:
+					return SharpDX.DirectWrite.FontWeight.Medium;
+				case OrcaTimeStatisticsFontWeight.SemiBold:
+					return SharpDX.DirectWrite.FontWeight.SemiBold;
+				case OrcaTimeStatisticsFontWeight.ExtraBold:
+					return SharpDX.DirectWrite.FontWeight.ExtraBold;
+				default:
+					return SharpDX.DirectWrite.FontWeight.Bold;
+			}
 		}
 
 		private SharpDX.Direct2D1.Brush CreateSolidBrush(System.Windows.Media.Brush wpfBrush, float opacity)
@@ -1248,6 +1634,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		public override void OnRenderTargetChanged() { DisposeDxResources(); base.OnRenderTargetChanged(); }
 
+		string IOrcaReplayParticipant.ReplayParticipantId { get { return replayBarHorizon == null ? "OrcaTimeStatistics:" + diagnosticsInstanceId : replayBarHorizon.ParticipantId; } }
+		OrcaReplayCapabilities IOrcaReplayParticipant.ReplayCapabilities { get { return replayBarHorizon == null ? new OrcaReplayCapabilities(true, false, true, true, OrcaReplayChartStyleSupport.AllV1) : replayBarHorizon.Capabilities; } }
+		OrcaReplayCheckpoint IOrcaReplayParticipant.CaptureReplayCheckpoint(OrcaReplayContext context) { return replayBarHorizon.Capture(context); }
+		void IOrcaReplayParticipant.PrepareReplay(OrcaReplayContext context, OrcaReplayCheckpoint checkpoint) { replayBarHorizon.Prepare(context, checkpoint); }
+		void IOrcaReplayParticipant.ApplyReplayEvent(OrcaReplayContext context, OrcaReplayTradeEvent tradeEvent) { }
+		void IOrcaReplayParticipant.ApplyReplayBar(OrcaReplayContext context, int primaryBarIndex) { replayBarHorizon.ApplyBar(primaryBarIndex); }
+		void IOrcaReplayParticipant.PublishReplaySnapshot(OrcaReplayContext context) { }
+		void IOrcaReplayParticipant.RestoreLiveState() { if (replayBarHorizon != null) replayBarHorizon.Restore(); }
+
 		[Display(Name = "Order Flow Source", Order = 0, GroupName = "Data",
 			Description = "Internal keeps the existing local market-data calculation. SharedProvider reads only OrcaProfileDataProvider. SharedHistoricalInternalRealtime backfills from the provider, then uses local real-time market data.")]
 		public OrcaOrderFlowSourceMode OrderFlowSourceMode { get; set; }
@@ -1255,35 +1650,67 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Show Volume",           Order = 1, GroupName = "Rows")]
 		public bool ShowVolume { get; set; }
 
-		[Display(Name = "Show Delta",            Order = 2, GroupName = "Rows")]
+		[Display(Name = "Show Volume Per Second", Order = 2, GroupName = "Rows",
+			Description = "Shows bar volume divided by the bar's elapsed seconds.")]
+		public bool ShowVolumePerSecond { get; set; }
+
+		[Display(Name = "Show Volume Per Range Tick", Order = 3, GroupName = "Rows",
+			Description = "Shows bar volume divided by the number of price ticks in the bar range.")]
+		public bool ShowVolumePerRangeTick { get; set; }
+
+		[Display(Name = "Show Delta",            Order = 4, GroupName = "Rows")]
 		public bool ShowDelta { get; set; }
 
-		[Display(Name = "Show Cumulative Delta", Order = 3, GroupName = "Rows",
+		[Display(Name = "Show Delta Per Second", Order = 5, GroupName = "Rows",
+			Description = "Shows signed bar delta divided by the bar's elapsed seconds.")]
+		public bool ShowDeltaPerSecond { get; set; }
+
+		[Display(Name = "Show Delta Percent", Order = 6, GroupName = "Rows",
+			Description = "Shows bar delta divided by bar volume as a signed percent.")]
+		public bool ShowDeltaPercent { get; set; }
+
+		[Display(Name = "Show Max Delta", Order = 7, GroupName = "Rows")]
+		public bool ShowMaxDelta { get; set; }
+
+		[Display(Name = "Show Min Delta", Order = 8, GroupName = "Rows")]
+		public bool ShowMinDelta { get; set; }
+
+		[Display(Name = "Show Finish Delta", Order = 9, GroupName = "Rows")]
+		public bool ShowFinishDelta { get; set; }
+
+		[Display(Name = "Show Cumulative Delta", Order = 10, GroupName = "Rows",
 			Description = "Shows running cumulative delta across the loaded chart bars.")]
 		public bool ShowCumulativeDelta { get; set; }
 
 		[TypeConverter(typeof(OrcaTimeStatisticsCumulativeDeltaStartModeConverter))]
-		[Display(Name = "Cumulative Delta Start", Order = 4, GroupName = "Rows",
+		[Display(Name = "Cumulative Delta Start", Order = 11, GroupName = "Rows",
 			Description = "Controls where the cumulative delta row resets.")]
 		public OrcaTimeStatisticsCumulativeDeltaStartMode CumulativeDeltaStartMode { get; set; }
 
-		[Display(Name = "Show Delta Percent", Order = 5, GroupName = "Rows",
-			Description = "Shows bar delta divided by bar volume as a signed percent.")]
-		public bool ShowDeltaPercent { get; set; }
-
-		[Display(Name = "Show Max Delta", Order = 6, GroupName = "Rows")]
-		public bool ShowMaxDelta { get; set; }
-
-		[Display(Name = "Show Min Delta", Order = 7, GroupName = "Rows")]
-		public bool ShowMinDelta { get; set; }
-
-		[Display(Name = "Show Finish Delta", Order = 8, GroupName = "Rows")]
-		public bool ShowFinishDelta { get; set; }
-
-		[Display(Name = "Show Range",            Order = 9, GroupName = "Rows")]
+		[Display(Name = "Show Range",            Order = 12, GroupName = "Rows")]
 		public bool ShowRange { get; set; }
 
-		[Display(Name = "Show Time",             Order = 10, GroupName = "Rows")]
+		[Display(Name = "Show Body", Order = 13, GroupName = "Rows",
+			Description = "Shows the absolute candle body in the same price units as Range.")]
+		public bool ShowBody { get; set; }
+
+		[Display(Name = "Show Body Percent", Order = 14, GroupName = "Rows",
+			Description = "Shows absolute candle body divided by total range as a percent.")]
+		public bool ShowBodyPercent { get; set; }
+
+		[Display(Name = "Show Close Location", Order = 15, GroupName = "Rows",
+			Description = "Shows where the close sits inside the bar range: 0% at the low and 100% at the high.")]
+		public bool ShowCloseLocation { get; set; }
+
+		[Display(Name = "Show Upper Wick", Order = 16, GroupName = "Rows",
+			Description = "Shows the upper wick as a percent of the total bar range.")]
+		public bool ShowUpperWick { get; set; }
+
+		[Display(Name = "Show Lower Wick", Order = 17, GroupName = "Rows",
+			Description = "Shows the lower wick as a percent of the total bar range.")]
+		public bool ShowLowerWick { get; set; }
+
+		[Display(Name = "Show Time",             Order = 18, GroupName = "Rows")]
 		public bool ShowTime { get; set; }
 
 		[Display(Name = "Show Averages", Order = 1, GroupName = "Averages",
@@ -1376,8 +1803,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "15. Font Family", Order = 15, GroupName = "Visual")]
 		public string FontFamilyName { get; set; }
 
+		[Display(Name = "16. Font Weight", Order = 16, GroupName = "Visual")]
+		public OrcaTimeStatisticsFontWeight TextFontWeight { get; set; }
+
 		[Range(6, 24)]
-		[Display(Name = "16. Font Size", Order = 16, GroupName = "Visual")]
+		[Display(Name = "17. Font Size", Order = 17, GroupName = "Visual")]
 		public int FontSize { get; set; }
 	}
 }

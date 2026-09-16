@@ -272,7 +272,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (GlobexShowVWAP)
 			{
-				if (CrossedTime(time1, time0, GlobexStartTime)) globexSession.Reset();
+				if (CrossedTime(time1, time0, GlobexStartTime))
+				{
+					globexSession.Reset();
+					ResetPlotRange(0, 6, 1);
+				}
 				globexSession.Add(price, tickVol);
 				if (globexSession.SumVol > 0)
 				{
@@ -319,7 +323,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			if (WeeklyShowVWAP)
 			{
-				if (CrossedWeekly(time1, time0, WeeklyStartTime)) weeklySession.Reset();
+				if (CrossedWeekly(time1, time0, WeeklyStartTime))
+				{
+					weeklySession.Reset();
+					ResetPlotRange(21, 27, 1);
+				}
 				weeklySession.Add(price, tickVol);
 				if (weeklySession.SumVol > 0)
 				{
@@ -343,7 +351,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						rollingHistory.Enqueue(rollingDeveloping);
 						int maxBuckets = Math.Max(1, (int)Math.Ceiling(GetRollingWindowSeconds() / (double)bucketSeconds));
-						int missedBuckets = (int)Math.Floor((bucketToken - currentMinuteToken).TotalSeconds / bucketSeconds);
+						int missedBuckets = Bars != null && Bars.IsFirstBarOfSession
+							? 1
+							: (int)Math.Floor((bucketToken - currentMinuteToken).TotalSeconds / bucketSeconds);
 						if (missedBuckets > 1)
 						{
 							int emptyBuckets = Math.Min(missedBuckets - 1, maxBuckets);

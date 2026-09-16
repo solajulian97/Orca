@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Linq;
 using System.Xml.Serialization;
 using NinjaTrader.Cbi;
@@ -11,6 +12,7 @@ using NinjaTrader.Gui;
 using NinjaTrader.Gui.Chart;
 using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
+using NinjaTrader.NinjaScript.DrawingTools;
 using NinjaTrader.NinjaScript.Indicators;
 using NinjaTrader.Core.FloatingPoint;
 using SharpDX;
@@ -28,8 +30,10 @@ using DxSolidBrush = SharpDX.Direct2D1.SolidColorBrush;
 namespace NinjaTrader.NinjaScript
 {
 	public enum MgiPlotStyle { Regular, Edge }
+	public enum MgiPriceTagStyle { Classic, FilledNameAndPrice, FilledNameAndNativePrice }
 	public enum MgiORDuration { Sec30 = -1, Min1 = 1, Min5 = 5, Min15 = 15, Min30 = 30 }
 	public enum MgiDashStyle { Solid, Dash, Dot, DashDot }
+    public enum MgiIntradayCandleFrame { Min5 = 5, Min10 = 10, Min15 = 15, Min30 = 30, Hour1 = 60, Hour2 = 120, Hour4 = 240 }
 
 	/// <summary>
 	/// Determines which price is treated as the Prior Day Close (PDC).
@@ -88,9 +92,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			public double Open = double.NaN, High = double.NaN, Low = double.NaN, Close = double.NaN, Mid = double.NaN;
 			public double VAH = double.NaN, VAL = double.NaN, POC = double.NaN;
-			public Dictionary<double, double> VolByPrice = new Dictionary<double, double>();
 			public VwapAccum Vwap = new VwapAccum();
-			public void ResetPrices() { Open = High = Low = Close = Mid = VAH = VAL = POC = double.NaN; VolByPrice.Clear(); Vwap.Reset(); }
+			public void ResetPrices() { Open = High = Low = Close = Mid = VAH = VAL = POC = double.NaN; Vwap.Reset(); }
 			public void UpdateHL(double h, double l, double c, double openPrice = double.NaN)
 			{
 				// If open is explicitly provided (crossing bar), capture it; else default to close
@@ -100,6 +103,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (double.IsNaN(Low) || l < Low) Low = l;
 				Close = c;
 				if (!double.IsNaN(High) && !double.IsNaN(Low)) Mid = (High + Low) / 2.0;
+			}
+		}
+
+		private class ValueAreaState
+		{
+			public DateTime PeriodStart = DateTime.MinValue;
+			public double VAH = double.NaN, VAL = double.NaN, POC = double.NaN;
+			public Dictionary<double, double> VolByPrice = new Dictionary<double, double>();
+			public List<double> SortedPrices = new List<double>();
+
+			public void Reset(DateTime periodStart)
+			{
+				PeriodStart = periodStart;
+				VAH = VAL = POC = double.NaN;
+				VolByPrice.Clear();
+				SortedPrices.Clear();
+			}
+
+			public void CopyFrom(ValueAreaState source)
+			{
+				if (source == null) return;
+				PeriodStart = source.PeriodStart;
+				VAH = source.VAH; VAL = source.VAL; POC = source.POC;
+				VolByPrice = new Dictionary<double, double>(source.VolByPrice);
+				SortedPrices = new List<double>(source.SortedPrices);
+			}
+
+			public void AddVolume(double price, double volume)
+			{
+				double existing;
+				if (VolByPrice.TryGetValue(price, out existing))
+				{
+					VolByPrice[price] = existing + volume;
+					return;
+				}
+
+				VolByPrice[price] = volume;
+				int insertAt = SortedPrices.BinarySearch(price);
+				if (insertAt < 0) SortedPrices.Insert(~insertAt, price);
 			}
 		}
 
@@ -115,21 +157,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// Session data
 		private LevelSet curRTH, curETH, priorRTH, priorETH, curWeek, priorWeek;
 		private LevelSet overnight;
+		private ValueAreaState fullDayValueArea, rthValueArea, overnightValueArea, weekValueArea;
+		private ValueAreaState priorFullDayValueArea, priorRthValueArea, priorWeekValueArea;
+        private LevelSet intradayCurrent, intradayPrevious;
 		private double trueDailyOpen = double.NaN;
 		private DateTime trueDailyOpenDate = DateTime.MinValue;
+		private double londonOpen = double.NaN, tokyoOpen = double.NaN;
+		private DateTime londonOpenAnchorTime = DateTime.MinValue, tokyoOpenAnchorTime = DateTime.MinValue;
+		private static readonly TimeSpan LondonOpenBoundary = new TimeSpan(3, 0, 0);
+		private static readonly TimeSpan TokyoOpenBoundary = new TimeSpan(20, 0, 0);
 		private double orHigh = double.NaN, orLow = double.NaN, orMid = double.NaN;
 		private double ibHigh = double.NaN, ibLow = double.NaN, ibMid = double.NaN;
+		private double ib30High = double.NaN, ib30Low = double.NaN, ib30Mid = double.NaN;
 		private double halfGap = double.NaN;
-		private bool orComplete, ibComplete;
+		private bool orComplete, ibComplete, orDeveloping;
+		private bool ib30Complete;
 		private DateTime rthOpenTime, rthCloseTime, ethOpenTime;
 		private DateTime curSessionDate = DateTime.MinValue;
 		private DateTime rangeSessionDate = DateTime.MinValue;
 		private DateTime orHighTime = DateTime.MinValue, orLowTime = DateTime.MinValue, ibHighTime = DateTime.MinValue, ibLowTime = DateTime.MinValue;
+		private DateTime ib30HighTime = DateTime.MinValue, ib30LowTime = DateTime.MinValue;
 		private DateTime curRthHighTime = DateTime.MinValue, curRthLowTime = DateTime.MinValue;
 		private DateTime curEthHighTime = DateTime.MinValue, curEthLowTime = DateTime.MinValue;
 		private DateTime curWeekOpenTime = DateTime.MinValue, curWeekHighTime = DateTime.MinValue, curWeekLowTime = DateTime.MinValue;
 		private DateTime overnightHighTime = DateTime.MinValue, overnightLowTime = DateTime.MinValue;
 		private int orHighIdx = -1, orLowIdx = -1, ibHighIdx = -1, ibLowIdx = -1;
+		private int ib30HighIdx = -1, ib30LowIdx = -1;
 		private int curRthHighIdx = -1, curRthLowIdx = -1, curEthHighIdx = -1, curEthLowIdx = -1, overnightHighIdx = -1, overnightLowIdx = -1;
 		private int curWeekOpenIdx = -1, curWeekHighIdx = -1, curWeekLowIdx = -1;
 		private double curRthAnchorHigh = double.NaN, curRthAnchorLow = double.NaN;
@@ -139,6 +192,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool inRTH, inETH;
 		private int orDurationSec, orBarCount;
 		private DateTime orStartTime, ibEndTime;
+        private DateTime intradayCurrentStartTime = DateTime.MinValue, intradayPreviousStartTime = DateTime.MinValue;
+		private MgiIntradayCandleFrame intradayActiveFrame;
+		private bool intradayActiveFrameInitialized;
 
 		// Prior day VA (stored separately for stability)
 		private double priorRTH_VAH = double.NaN, priorRTH_VAL = double.NaN, priorRTH_POC = double.NaN;
@@ -148,17 +204,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// DX resources
 		private DxSolidBrush[] dxBrushes;
 		private SharpDX.Direct2D1.StrokeStyle[] dxStrokes;
-		private SharpDX.DirectWrite.TextFormat dxLabelFormat;
+		private SharpDX.DirectWrite.TextFormat dxLabelFormat, dxPriceMarkerFormat, dxPriceScaleLabelFormat;
 		private DxSolidBrush dxLabelBrush, dxRegionBrush;
+		private DxSolidBrush dxBadgeLightBrush, dxBadgeDarkBrush;
+		private SharpDX.DirectWrite.TextFormat dxBadgeFormat;
 		private bool dxValid;
 		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
 		private DateTime lastRenderSkipUtc = DateTime.MinValue;
+		private readonly string diagnosticsInstanceId = Guid.NewGuid().ToString("N");
+		private bool diagnosticsRegistered;
+		private long nextDiagnosticsLevelCacheReportUtcTicks;
+		private bool diagnosticsPhaseCaptureActive;
+		private long diagnosticsDistributionTicks;
+		private long diagnosticsValueAreaTicks;
+		private long diagnosticsLevelCacheTicks;
+		private long nextNativePriceMarkerSyncUtcTicks;
+		private bool nativePriceMarkersActive;
+		private const string NativePriceMarkerTagPrefix = "OrcaMGIDailyPriceMarker_";
 
 		// Level rendering cache
 		private struct LevelInfo
 		{
 			public double Price;
 			public string Label;
+			public string BaseLabel;
 			public int BrushIdx;
 			public int StrokeIdx;
 			public int Width;
@@ -167,7 +236,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public bool Enabled;
 		}
 		private LevelInfo[] levelCache;
-		private const int LVL_COUNT = 82;
+		private int levelCacheDirty = 1;
+        private const int LVL_COUNT = 92;
+		// Reused render-only geometry; one entry per cached level plus the two mids.
+		private readonly float[] badgeNaturalY = new float[LVL_COUNT + 2];
+		private readonly float[] badgeDrawY = new float[LVL_COUNT + 2];
+		private readonly RectangleF[] badgeRects = new RectangleF[LVL_COUNT + 2];
 
 		// Level indices
 		private const int L_ONH = 0, L_ONL = 1, L_ONMID = 2;
@@ -195,10 +269,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private const int L_PW_O = 71, L_PW_H = 72, L_PW_L = 73, L_PW_C = 74, L_PW_MID = 75;
 		private const int L_CW_VAH = 76, L_CW_VAL = 77, L_CW_POC = 78;
 		private const int L_PW_VAH = 79, L_PW_VAL = 80, L_PW_POC = 81;
+        private const int L_IC_O = 82, L_IC_H = 83, L_IC_L = 84;
+        private const int L_IP_O = 85, L_IP_H = 86, L_IP_L = 87;
+		private const int L_IC_MID = 88, L_IP_MID = 89;
+		private const int L_LONDON_OPEN = 90, L_TOKYO_OPEN = 91;
 
 		private List<SessionInfo> sessionHistory = new List<SessionInfo>();
 		private SessionInfo curSessionInfo;
-		private int lastBarIdx = -1;
+		private int lastThirtySecondValueAreaBarIdx = -1;
+		private int lastThirtySecondInitialBalanceBarIdx = -1;
+		private int lastMinuteVolumeBarIdx = -1;
+		private double lastMinuteCumulativeVolume;
+		private DateTime lastEthSessionRolloverAnchor = DateTime.MinValue;
+		private DateTime lastRthSessionRolloverAnchor = DateTime.MinValue;
 		private Dictionary<DateTime, LevelSet> rthHistoryByDate;
 
 		private Series<double> rthMidSeries, ethMidSeries;
@@ -243,10 +326,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				// Toggles — all on by default
 				ShowONRange = true; ShowONVA = true; ShowOR = true; ShowIB = true;
-				ShowCurRTH = true; ShowCurETH = false; ShowDailyOpen = true; ShowTrueDailyOpen = true; ShowPriorRTH = true; ShowPriorETH = false;
+				ShowCurRTH = true; ShowCurETH = false; ShowDailyOpen = true; ShowTrueDailyOpen = true; ShowLondonOpen = false; ShowTokyoOpen = false; ShowPriorRTH = true; ShowPriorETH = false;
 				ShowCurRTHVA = true; ShowCurETHVA = false; ShowPriorRTHVA = true; ShowPriorETHVA = false;
 				ShowRTHVwap = true; ShowETHVwap = false; ShowHalfGap = true;
 				ShowCurrentWeek = false; ShowPriorWeek = false; ShowCurrentWeekVA = false; ShowPriorWeekVA = false;
+                ShowIntradayCurrentCandle = false; ShowIntradayPreviousCandle = false;
+                ShowIntradayCurrentMidpoint = false; ShowIntradayPreviousMidpoint = false;
+                IntradayCandleTimeframe = MgiIntradayCandleFrame.Hour1;
+				ShowIntradayTimeframeInLabels = true;
+				ShowMagicLevels = false;
 				ShowSessionMarkers = true; ShowLabels = true;
 				ORDuration = MgiORDuration.Min30;
 				MgiStyle = MgiPlotStyle.Regular;
@@ -269,10 +357,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				CurRTHVAColor = WpfBrushes.CornflowerBlue; CurETHVAColor = WpfBrushes.MediumSlateBlue;
 				PriorRTHVAColor = WpfBrushes.Peru; PriorETHVAColor = WpfBrushes.RosyBrown;
 				CurrentWeekColor = WpfBrushes.MediumPurple; PriorWeekColor = WpfBrushes.DarkSeaGreen;
+                IntradayCurrentCandleColor = WpfBrushes.Gold; IntradayPreviousCandleColor = WpfBrushes.DarkOrange;
+				Magic20Color = WpfBrushes.LightSeaGreen; Magic80Color = WpfBrushes.Goldenrod;
 				CurrentWeekVAColor = WpfBrushes.MediumOrchid; PriorWeekVAColor = WpfBrushes.SeaGreen;
 				RTHVwapColor = WpfBrushes.Orchid; ETHVwapColor = WpfBrushes.MediumOrchid;
 				HalfGapColor = WpfBrushes.IndianRed;
 				TrueDailyOpenColor = WpfBrushes.DeepSkyBlue;
+				LondonOpenColor = WpfBrushes.MediumPurple;
+				TokyoOpenColor = WpfBrushes.LightCoral;
 				SessionMarkerColor = WpfBrushes.DimGray;
 				LabelColor = WpfBrushes.WhiteSmoke;
 				SessionLineColor = WpfBrushes.SkyBlue;
@@ -284,6 +376,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DrawBehindCandles = false;
 				EdgeLineLength = 160;
 				ShowIBExtensions = true;
+				ShowIB30BeforeHourlyIB = false;
 				ShowIBFullExtensions = true;
 				ShowIBHalfExtensions = true;
 				ShowIBQuarterExtensions = true;
@@ -291,6 +384,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowSessionLine = false;
 				AbbreviateLabels = true;
 				ShowPriceInLabel = false;
+				ShowPriceAtLineEnd = false;
+				PriceTagStyle = MgiPriceTagStyle.Classic;
+				ShowPriceAtLineEndLabels = true;
+				ShowPricesOnPriceScale = false;
 
 				UseLatestCloseForPdc = true;
 				PriorDayCloseMode = MgiPdcMode.Globex5PM; // default: latest close before the 5 PM maintenance break
@@ -306,10 +403,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				LblRTHO = "RTH Open"; LblRTHH = "RTHH"; LblRTHL = "RTHL";
 				LblETHO = "Daily Open"; LblETHH = "HOD"; LblETHL = "LOD";
 				LblTDO = "TDO";
+				LblLondonOpen = "London Open"; LblTokyoOpen = "Tokyo Open";
 				LblPDH = "RTH PDH"; LblPDL = "RTH PDL"; LblPDC = "RTH PDC"; LblPDO = "RTH PDO"; LblPDM = "RTH PDM";
 				LblPEH = "PDH"; LblPEL = "PDL"; LblPEC = "PDC";
 				LblRVAH = "RVAH"; LblRVAL = "RVAL"; LblRPOC = "RPOC";
-				LblEVAH = "EVAH"; LblEVAL = "EVAL"; LblEPOC = "EPOC";
+				LblEVAH = "VAH"; LblEVAL = "VAL"; LblEPOC = "POC";
 				LblPRVAH = "pRVAH"; LblPRVAL = "pRVAL"; LblPRPOC = "pRPOC";
 				LblPEVAH = "PDVAH"; LblPEVAL = "PDVAL"; LblPEPOC = "PDPOC";
 				LblCWO = "Weekly Open"; LblCWH = "Weekly High"; LblCWL = "Weekly Low"; LblCWM = "Weekly Mid";
@@ -324,29 +422,165 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				AddDataSeries(BarsPeriodType.Minute, 1);
 				AddDataSeries(BarsPeriodType.Second, 30);
+                AddDataSeries(BarsPeriodType.Minute, 15);
+                AddDataSeries(BarsPeriodType.Minute, 30);
+                AddDataSeries(BarsPeriodType.Minute, 60);
+                AddDataSeries(BarsPeriodType.Minute, 240);
 			}
 			else if (State == State.DataLoaded)
 			{
 				NormalizeLegacyLabels();
 				curRTH = new LevelSet(); curETH = new LevelSet(); curWeek = new LevelSet();
+                intradayCurrent = new LevelSet(); intradayPrevious = new LevelSet();
 				priorRTH = new LevelSet(); priorETH = new LevelSet(); priorWeek = new LevelSet();
 				overnight = new LevelSet();
+				fullDayValueArea = new ValueAreaState(); rthValueArea = new ValueAreaState();
+				overnightValueArea = new ValueAreaState(); weekValueArea = new ValueAreaState();
+				priorFullDayValueArea = new ValueAreaState(); priorRthValueArea = new ValueAreaState(); priorWeekValueArea = new ValueAreaState();
 				rthHistoryByDate = new Dictionary<DateTime, LevelSet>();
 				levelCache = new LevelInfo[LVL_COUNT];
-				orComplete = false; ibComplete = false;
+				levelCacheDirty = 1;
+				nextDiagnosticsLevelCacheReportUtcTicks = 0;
+				diagnosticsPhaseCaptureActive = false;
+				diagnosticsDistributionTicks = diagnosticsValueAreaTicks = diagnosticsLevelCacheTicks = 0;
+				lastThirtySecondValueAreaBarIdx = -1;
+				lastThirtySecondInitialBalanceBarIdx = -1;
+				lastMinuteVolumeBarIdx = -1;
+				lastMinuteCumulativeVolume = 0;
+				lastEthSessionRolloverAnchor = DateTime.MinValue;
+				lastRthSessionRolloverAnchor = DateTime.MinValue;
+				orComplete = false; ib30Complete = false; ibComplete = false; orDeveloping = false;
+                intradayCurrentStartTime = DateTime.MinValue; intradayPreviousStartTime = DateTime.MinValue;
+				intradayActiveFrameInitialized = false;
+				londonOpen = tokyoOpen = double.NaN;
+				londonOpenAnchorTime = tokyoOpenAnchorTime = DateTime.MinValue;
 
 				rthMidSeries = new Series<double>(this);
 				ethMidSeries = new Series<double>(this);
+				ReportDiagnosticsState("DataLoaded");
 			}
 			else if (State == State.Historical)
 			{
 				if (DrawBehindCandles && ChartControl != null)
 					SetZOrder(-1000);
+				ReportDiagnosticsState("Historical");
+			}
+			else if (State == State.Realtime)
+			{
+				ReportDiagnosticsState("Realtime");
+				EnsureLevelCacheCurrent();
+				TrySyncNativePriceMarkers(force: true);
 			}
 			else if (State == State.Terminated)
 			{
+				ClearNativePriceMarkers();
 				DisposeDx();
+				OrcaDiagnosticsCore.UnregisterInstance(diagnosticsInstanceId);
+				diagnosticsRegistered = false;
 			}
+		}
+
+		private void EnsureDiagnosticsRegistered()
+		{
+			if (diagnosticsRegistered)
+				return;
+
+			OrcaDiagnosticsCore.RegisterInstance(diagnosticsInstanceId, "OrcaMGIDaily", this);
+			diagnosticsRegistered = true;
+			ReportDiagnosticsSourceDeclaration();
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 0, "PrimaryChartSeries", "Chart", "MGI host chart and opening-range anchors");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 1, "Minute 1", "HiddenSecondarySeries", "Session, OHLC, and VWAP model");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 2, "Second 30", "HiddenSecondarySeries", "Opening-range, initial-balance, and finalized value-area model");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 3, "Minute 15", "HiddenSecondarySeries", "Intraday candle model");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 4, "Minute 30", "HiddenSecondarySeries", "Intraday candle model");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 5, "Minute 60", "HiddenSecondarySeries", "Intraday candle model");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 6, "Minute 240", "HiddenSecondarySeries", "Intraday candle model");
+		}
+
+		private void ReportDiagnosticsState(string stateName)
+		{
+			EnsureDiagnosticsRegistered();
+			OrcaDiagnosticsCore.ReportState(diagnosticsInstanceId, stateName);
+			ReportDiagnosticsSourceDeclaration();
+		}
+
+		private void ReportDiagnosticsSourceDeclaration()
+		{
+			string sourceHealth = State == State.Historical ? "HistoricalReplay" : "Live";
+			OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, "MultiSeriesChartData", sourceHealth, "LocalLevelCache");
+		}
+
+		private DateTime GetDiagnosticsEventTime(int barsInProgress)
+		{
+			try
+			{
+				if (Times != null && Times.Length > barsInProgress && Times[barsInProgress] != null && CurrentBars != null
+					&& CurrentBars.Length > barsInProgress && CurrentBars[barsInProgress] >= 0)
+					return Times[barsInProgress][0];
+			}
+			catch { }
+			return DateTime.UtcNow;
+		}
+
+		private void ReportDiagnosticsLevelCache(DateTime modelTime)
+		{
+			if (!OrcaDiagnosticsCore.IsEnabled)
+				return;
+			if (levelCache == null)
+				return;
+
+			long nowTicks = DateTime.UtcNow.Ticks;
+			long nextTicks = System.Threading.Interlocked.Read(ref nextDiagnosticsLevelCacheReportUtcTicks);
+			if (nowTicks < nextTicks)
+				return;
+			if (System.Threading.Interlocked.CompareExchange(
+				ref nextDiagnosticsLevelCacheReportUtcTicks,
+				nowTicks + TimeSpan.TicksPerSecond,
+				nextTicks) != nextTicks)
+				return;
+
+			int enabled = 0;
+			for (int i = 0; i < levelCache.Length; i++)
+				if (levelCache[i].Enabled)
+					enabled++;
+
+			OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "LocalLevelCache", "levels=" + enabled + "/" + LVL_COUNT);
+			OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, modelTime, null);
+		}
+
+		private void BeginDiagnosticsPhaseCapture()
+		{
+			diagnosticsDistributionTicks = 0;
+			diagnosticsValueAreaTicks = 0;
+			diagnosticsLevelCacheTicks = 0;
+			diagnosticsPhaseCaptureActive = true;
+		}
+
+		private void ReportDiagnosticsPhases(long totalTicks)
+		{
+			diagnosticsPhaseCaptureActive = false;
+			long trackedTicks = diagnosticsDistributionTicks + diagnosticsValueAreaTicks + diagnosticsLevelCacheTicks;
+			OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "MGI distribute", diagnosticsDistributionTicks);
+			OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "MGI value-area", diagnosticsValueAreaTicks);
+			OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "MGI level-cache", diagnosticsLevelCacheTicks);
+			OrcaDiagnosticsCore.ReportWorkPhaseSample(diagnosticsInstanceId, "MGI other", Math.Max(0, totalTicks - trackedTicks));
+		}
+
+		private double GetIncrementalMinuteVolume(int barIndex, double cumulativeVolume)
+		{
+			if (cumulativeVolume <= 0)
+				return 0;
+
+			if (barIndex != lastMinuteVolumeBarIdx)
+			{
+				lastMinuteVolumeBarIdx = barIndex;
+				lastMinuteCumulativeVolume = cumulativeVolume;
+				return cumulativeVolume;
+			}
+
+			double delta = cumulativeVolume - lastMinuteCumulativeVolume;
+			lastMinuteCumulativeVolume = cumulativeVolume;
+			return delta > 0 ? delta : 0;
 		}
 
 		private void NormalizeLegacyLabels()
@@ -369,48 +603,183 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (LblPEVAH == "pEVAH") LblPEVAH = "PDVAH";
 			if (LblPEVAL == "pEVAL") LblPEVAL = "PDVAL";
 			if (LblPEPOC == "pEPOC") LblPEPOC = "PDPOC";
+
+			if (LblEVAH == "EVAH") LblEVAH = "VAH";
+			if (LblEVAL == "EVAL") LblEVAL = "VAL";
+			if (LblEPOC == "EPOC") LblEPOC = "POC";
 		}
 
 		#region Value Area Calculation
-		private void CalcVA(LevelSet ls)
+		private void CalcVA(ValueAreaState state)
 		{
-			if (ls.VolByPrice.Count < 2) return;
-			var sorted = ls.VolByPrice.OrderByDescending(kv => kv.Value).ToList();
-			ls.POC = sorted[0].Key;
-			double totalVol = sorted.Sum(kv => kv.Value);
-			if (totalVol <= 0) return;
-			double target = totalVol * (ValueAreaPct / 100.0);
-
-			var prices = ls.VolByPrice.Keys.OrderBy(p => p).ToList();
-			int pocIdx = prices.IndexOf(ls.POC);
-			if (pocIdx < 0) { pocIdx = prices.Count / 2; ls.POC = prices[pocIdx]; }
-
-			double accum = ls.VolByPrice[ls.POC];
-			int lo = pocIdx, hi = pocIdx;
-			while (accum < target && (lo > 0 || hi < prices.Count - 1))
+			long phaseStart = diagnosticsPhaseCaptureActive ? Stopwatch.GetTimestamp() : 0;
+			try
 			{
-				double vBelow = lo > 0 ? ls.VolByPrice[prices[lo - 1]] : 0;
-				double vAbove = hi < prices.Count - 1 ? ls.VolByPrice[prices[hi + 1]] : 0;
-				if (lo <= 0) { hi++; accum += vAbove; }
-				else if (hi >= prices.Count - 1) { lo--; accum += vBelow; }
-				else if (vAbove >= vBelow) { hi++; accum += vAbove; }
-				else { lo--; accum += vBelow; }
+				if (state == null || state.VolByPrice.Count == 0) return;
+				double totalVol = 0;
+				double maxVolume = double.MinValue;
+				foreach (KeyValuePair<double, double> row in state.VolByPrice)
+				{
+					totalVol += row.Value;
+					if (row.Value > maxVolume)
+					{
+						maxVolume = row.Value;
+						state.POC = row.Key;
+					}
+				}
+				if (totalVol <= 0) return;
+				double target = totalVol * (ValueAreaPct / 100.0);
+
+				List<double> prices = state.SortedPrices;
+				int pocIdx = prices.IndexOf(state.POC);
+				if (pocIdx < 0) { pocIdx = prices.Count / 2; state.POC = prices[pocIdx]; }
+
+				double accum = state.VolByPrice[state.POC];
+				int lo = pocIdx, hi = pocIdx;
+				while (accum < target && (lo > 0 || hi < prices.Count - 1))
+				{
+					double vBelow = lo > 0 ? state.VolByPrice[prices[lo - 1]] : 0;
+					double vAbove = hi < prices.Count - 1 ? state.VolByPrice[prices[hi + 1]] : 0;
+					if (lo <= 0) { hi++; accum += vAbove; }
+					else if (hi >= prices.Count - 1) { lo--; accum += vBelow; }
+					else if (vAbove >= vBelow) { hi++; accum += vAbove; }
+					else { lo--; accum += vBelow; }
+				}
+				state.VAL = prices[lo]; state.VAH = prices[hi];
 			}
-			ls.VAL = prices[lo]; ls.VAH = prices[hi];
+			finally
+			{
+				if (phaseStart > 0)
+					diagnosticsValueAreaTicks += Stopwatch.GetTimestamp() - phaseStart;
+			}
 		}
 
-		private void DistributeVolume(LevelSet ls, double high, double low, double vol)
+		private void DistributeVolume(ValueAreaState state, double high, double low, double vol)
 		{
-			if (vol <= 0 || high <= low) return;
-			double ts = TickSize;
-			int ticks = Math.Max(1, (int)Math.Round((high - low) / ts) + 1);
-			double perTick = vol / ticks;
-			for (int i = 0; i < ticks; i++)
+			long phaseStart = diagnosticsPhaseCaptureActive ? Stopwatch.GetTimestamp() : 0;
+			try
 			{
-				double p = Math.Round((low + i * ts) / ts) * ts;
-				if (ls.VolByPrice.ContainsKey(p)) ls.VolByPrice[p] += perTick;
-				else ls.VolByPrice[p] = perTick;
+				if (state == null || vol <= 0 || double.IsNaN(high) || double.IsNaN(low) || double.IsInfinity(high) || double.IsInfinity(low)) return;
+				double ts = TickSize;
+				if (ts <= 0 || double.IsNaN(ts) || double.IsInfinity(ts)) return;
+				if (high < low) { double swap = high; high = low; low = swap; }
+
+				if (high == low)
+				{
+					double flatPrice = Math.Round(low / ts) * ts;
+					state.AddVolume(flatPrice, vol);
+					return;
+				}
+
+				int ticks = Math.Max(1, (int)Math.Round((high - low) / ts) + 1);
+				double perTick = vol / ticks;
+				for (int i = 0; i < ticks; i++)
+				{
+					double p = Math.Round((low + i * ts) / ts) * ts;
+					state.AddVolume(p, perTick);
+				}
 			}
+			finally
+			{
+				if (phaseStart > 0)
+					diagnosticsDistributionTicks += Stopwatch.GetTimestamp() - phaseStart;
+			}
+		}
+
+		private void ApplyValueArea(ValueAreaState source, LevelSet target)
+		{
+			if (source == null || target == null) return;
+			target.VAH = source.VAH;
+			target.VAL = source.VAL;
+			target.POC = source.POC;
+		}
+
+		private void SnapshotValueArea(ValueAreaState source, ValueAreaState snapshot, ref double vah, ref double val, ref double poc)
+		{
+			if (source == null || snapshot == null || source.VolByPrice.Count == 0) return;
+			snapshot.CopyFrom(source);
+			vah = source.VAH;
+			val = source.VAL;
+			poc = source.POC;
+		}
+
+		private DateTime GetFullDayValueAreaStart(DateTime time)
+		{
+			DateTime boundary = time.Date.Add(ETHOpenTime);
+			return time.TimeOfDay > ETHOpenTime ? boundary : boundary.AddDays(-1);
+		}
+
+		private DateTime GetWeekValueAreaStart(DateTime time)
+		{
+			int daysSinceSunday = (int)time.DayOfWeek;
+			DateTime sundayStart = time.Date.AddDays(-daysSinceSunday).Add(ETHOpenTime);
+			if (time <= sundayStart)
+				sundayStart = sundayStart.AddDays(-7);
+			return sundayStart;
+		}
+
+		private void UpdateThirtySecondValueAreas()
+		{
+			// Tick Replay can call historical OnBarUpdate while the current 30-second bar
+			// is still developing. Always consume the previous bar so historical,
+			// realtime, replay, and reload paths all use finalized OHLCV only.
+			const int barsAgo = 1;
+			if (CurrentBars.Length <= 2 || CurrentBars[2] < barsAgo) return;
+
+			int completedBarIdx = CurrentBars[2] - barsAgo;
+			if (completedBarIdx <= lastThirtySecondValueAreaBarIdx) return;
+
+			DateTime time = Times[2][barsAgo];
+			ProcessCompletedThirtySecondValueAreaBar(time, Highs[2][barsAgo], Lows[2][barsAgo], Volumes[2][barsAgo]);
+			lastThirtySecondValueAreaBarIdx = completedBarIdx;
+		}
+
+		private void ProcessCompletedThirtySecondValueAreaBar(DateTime time, double high, double low, double volume)
+		{
+			DateTime fullDayStart = GetFullDayValueAreaStart(time);
+			if (fullDayValueArea.PeriodStart != fullDayStart)
+			{
+				if (fullDayValueArea.PeriodStart != DateTime.MinValue && (ShowCurETHVA || ShowPriorETHVA))
+					SnapshotValueArea(fullDayValueArea, priorFullDayValueArea, ref priorETH_VAH, ref priorETH_VAL, ref priorETH_POC);
+				if (rthValueArea.PeriodStart != DateTime.MinValue && ShowPriorRTHVA)
+					SnapshotValueArea(rthValueArea, priorRthValueArea, ref priorRTH_VAH, ref priorRTH_VAL, ref priorRTH_POC);
+
+				fullDayValueArea.Reset(fullDayStart);
+				overnightValueArea.Reset(fullDayStart);
+				curETH.VAH = curETH.VAL = curETH.POC = double.NaN;
+				overnight.VAH = overnight.VAL = overnight.POC = double.NaN;
+			}
+
+			DateTime weekStart = GetWeekValueAreaStart(time);
+			if (weekValueArea.PeriodStart != weekStart)
+			{
+				if (weekValueArea.PeriodStart != DateTime.MinValue && (ShowCurrentWeekVA || ShowPriorWeekVA))
+					SnapshotValueArea(weekValueArea, priorWeekValueArea, ref priorWeek_VAH, ref priorWeek_VAL, ref priorWeek_POC);
+				weekValueArea.Reset(weekStart);
+				curWeek.VAH = curWeek.VAL = curWeek.POC = double.NaN;
+			}
+
+			TimeSpan tod = time.TimeOfDay;
+			bool isRthBar = IsInTimeWindow(tod, RTHOpenTime, RTHCloseTime);
+			bool isOvernightBar = IsInTimeWindow(tod, ETHOpenTime, RTHOpenTime);
+
+			if (isRthBar && rthValueArea.PeriodStart != time.Date)
+			{
+				if (rthValueArea.PeriodStart != DateTime.MinValue && (ShowCurRTHVA || ShowPriorRTHVA))
+					SnapshotValueArea(rthValueArea, priorRthValueArea, ref priorRTH_VAH, ref priorRTH_VAL, ref priorRTH_POC);
+				rthValueArea.Reset(time.Date);
+				curRTH.VAH = curRTH.VAL = curRTH.POC = double.NaN;
+			}
+
+			DistributeVolume(fullDayValueArea, high, low, volume);
+			DistributeVolume(weekValueArea, high, low, volume);
+			if (isOvernightBar) DistributeVolume(overnightValueArea, high, low, volume);
+			if (isRthBar) DistributeVolume(rthValueArea, high, low, volume);
+
+			if (ShowCurETHVA || ShowPriorETHVA) { CalcVA(fullDayValueArea); ApplyValueArea(fullDayValueArea, curETH); }
+			if (ShowCurrentWeekVA || ShowPriorWeekVA) { CalcVA(weekValueArea); ApplyValueArea(weekValueArea, curWeek); }
+			if (ShowONVA) { CalcVA(overnightValueArea); ApplyValueArea(overnightValueArea, overnight); }
+			if (ShowCurRTHVA || ShowPriorRTHVA) { CalcVA(rthValueArea); ApplyValueArea(rthValueArea, curRTH); }
 		}
 		#endregion
 
@@ -431,6 +800,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnBarUpdate()
 		{
+			long diagnosticsWorkStart = 0;
+			int diagnosticsBarsInProgress = BarsInProgress;
+			DateTime diagnosticsEventTime = DateTime.MinValue;
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				diagnosticsEventTime = GetDiagnosticsEventTime(BarsInProgress);
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportBarUpdate(diagnosticsInstanceId, BarsInProgress, diagnosticsEventTime);
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+				if (diagnosticsWorkStart > 0)
+					BeginDiagnosticsPhaseCapture();
+			}
+			try
+			{
+
 			if (BarsInProgress == 0)
 			{
 				if (CurrentBars[0] >= 0)
@@ -438,7 +822,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					UpdatePrimaryOpeningRanges(Times[0][0], Highs[0][0], Lows[0][0], CurrentBars[0]);
 					UpdatePrimaryLevelAnchors(Times[0][0], Highs[0][0], Lows[0][0], CurrentBars[0]);
 					UpdateDisplaySeries();
-					BuildLevelCache();
+					MarkLevelCacheDirty();
+					EnsureLevelCacheCurrent();
 				}
 				return;
 			}
@@ -446,11 +831,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (CurrentBars.Length > 2 && CurrentBars[2] >= 0)
 				{
+					int previousIbBar = lastThirtySecondInitialBalanceBarIdx;
+					int previousVaBar = lastThirtySecondValueAreaBarIdx;
 					UpdateThirtySecondOpeningRange(Times[2][0], Highs[2][0], Lows[2][0]);
-					BuildLevelCache();
+					UpdateFinalizedThirtySecondInitialBalance();
+					UpdateThirtySecondValueAreas();
+					// Keep the developing 30-second OR path immediate. Otherwise the
+					// completed-bar consumers cannot change twice for the same source bar.
+					if (ORDuration == MgiORDuration.Sec30
+						|| previousIbBar != lastThirtySecondInitialBalanceBarIdx
+						|| previousVaBar != lastThirtySecondValueAreaBarIdx)
+						MarkLevelCacheDirty();
+					EnsureLevelCacheCurrent();
 				}
 				return;
 			}
+            if (BarsInProgress >= 3 && BarsInProgress <= 6)
+            {
+                if (BarsInProgress == GetIntradayCandleBarsInProgress() && CurrentBars.Length > BarsInProgress && CurrentBars[BarsInProgress] >= 0)
+                {
+                    UpdateIntradayCandleLevels(BarsInProgress);
+                    MarkLevelCacheDirty();
+                    EnsureLevelCacheCurrent();
+                }
+                return;
+            }
 			if (BarsInProgress != 1)
 				return;
 
@@ -460,20 +865,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 			TimeSpan tod = t.TimeOfDay;
 			DateTime prevT = Times[1][1];
 			TimeSpan prevTod = prevT.TimeOfDay;
-			double o = Opens[1][0], h = Highs[1][0], l = Lows[1][0], c = Closes[1][0], vol = Volumes[1][0];
+			double o = Opens[1][0], h = Highs[1][0], l = Lows[1][0], c = Closes[1][0];
+			if (UsesMinuteAggregatedIntradayFrame())
+				UpdateMinuteAggregatedIntradayCandleLevels(1);
+			double vol = GetIncrementalMinuteVolume(barIndex, Volumes[1][0]);
 			double typPrice = (h + l + c) / 3.0;
 			bool isRthBar = IsInTimeWindow(tod, RTHOpenTime, RTHCloseTime);
 			bool isOvernight = IsInTimeWindow(tod, ETHOpenTime, RTHOpenTime);
 			UpdateWeeklyLevels(t, o, h, l, c, typPrice, vol);
 
 			// Detect RTH open crossing
-			bool rthCrossed = CrossedSessionOpenTime(prevTod, tod, RTHOpenTime);
-			bool ethCrossed = CrossedSessionOpenTime(prevTod, tod, ETHOpenTime);
+			DateTime rthBoundaryAnchor = GetSessionOpenDateTime(t, RTHOpenTime);
+			DateTime ethBoundaryAnchor = GetSessionOpenDateTime(t, ETHOpenTime);
+			bool rthCrossed = CrossedSessionOpenTime(prevTod, tod, RTHOpenTime)
+				&& rthBoundaryAnchor != lastRthSessionRolloverAnchor;
+			bool ethCrossed = CrossedSessionOpenTime(prevTod, tod, ETHOpenTime)
+				&& ethBoundaryAnchor != lastEthSessionRolloverAnchor;
 			bool trueDailyOpenCrossed = CrossedSessionOpenTime(prevTod, tod, TimeSpan.Zero) && tod <= RTHOpenTime;
+			bool londonOpenCrossed = CrossedSessionOpenTime(prevTod, tod, LondonOpenBoundary);
+			bool tokyoOpenCrossed = CrossedSessionOpenTime(prevTod, tod, TokyoOpenBoundary);
 
 			if (ethCrossed)
 			{
-				DateTime ethAnchorTime = GetSessionOpenDateTime(t, ETHOpenTime);
+				DateTime ethAnchorTime = ethBoundaryAnchor;
+				lastEthSessionRolloverAnchor = ethAnchorTime;
 				// At Globex 18:00 boundary, also update priorRTH so PDH reflects today's completed RTH.
 				CopyRthToPrior();
 
@@ -500,9 +915,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				curSessionInfo.TrueDailyOpenTime = trueDailyAnchorTime;
 			}
 
+			if (londonOpenCrossed)
+			{
+				londonOpen = o;
+				londonOpenAnchorTime = GetSessionOpenDateTime(t, LondonOpenBoundary);
+			}
+
+			if (tokyoOpenCrossed)
+			{
+				tokyoOpen = o;
+				tokyoOpenAnchorTime = GetSessionOpenDateTime(t, TokyoOpenBoundary);
+			}
+
 			if (rthCrossed)
 			{
-				DateTime rthAnchorTime = GetSessionOpenDateTime(t, RTHOpenTime);
+				DateTime rthAnchorTime = rthBoundaryAnchor;
+				lastRthSessionRolloverAnchor = rthAnchorTime;
 				// Snapshot RTH into priorRTH
 				CopyRthToPrior();
 
@@ -525,7 +953,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// exactly at RTHOpenTime still belongs to the prior window.
 				UpdateLevelSetWithAnchors(curRTH, h, l, c, o, t, ref curRthHighTime, ref curRthLowTime);
 				curRTH.Vwap.Add(typPrice, vol);
-				DistributeVolume(curRTH, h, l, vol);
 
 				// Half gap calc
 				if (!double.IsNaN(priorRTH.Close))
@@ -553,7 +980,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				UpdateLevelSetWithAnchors(curRTH, h, l, c, double.NaN, t, ref curRthHighTime, ref curRthLowTime);
 				curRTH.Vwap.Add(typPrice, vol);
-				DistributeVolume(curRTH, h, l, vol);
 
 				// OR/IB ranges are collected from the primary chart bars so the
 				// visible chart and the levels use the same candle boundaries.
@@ -564,33 +990,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				UpdateLevelSetWithAnchors(curETH, h, l, c, double.NaN, t, ref curEthHighTime, ref curEthLowTime);
 				curETH.Vwap.Add(typPrice, vol);
-				DistributeVolume(curETH, h, l, vol);
 			}
 			else
 			{
 				// Already called UpdateHL above for the crossing bar; still add vol
 				curETH.Vwap.Add(typPrice, vol);
-				DistributeVolume(curETH, h, l, vol);
 			}
 
 			// Overnight tracking (ETH open through RTH open). Once RTH begins, freeze these levels for the day.
 			if ((isOvernight || ethCrossed) && !rthCrossed)
 			{
 				UpdateLevelSetWithAnchors(overnight, h, l, c, ethCrossed ? o : double.NaN, t, ref overnightHighTime, ref overnightLowTime);
-				DistributeVolume(overnight, h, l, vol);
 			}
 
-			// Recalc value areas periodically
-			if (barIndex != lastBarIdx)
+			MarkLevelCacheDirty();
+			EnsureLevelCacheCurrent();
+			}
+			finally
 			{
-				lastBarIdx = barIndex;
-				if (inRTH && curRTH.VolByPrice.Count > 2) CalcVA(curRTH);
-				if (curETH.VolByPrice.Count > 2) CalcVA(curETH);
-				if ((isOvernight || rthCrossed) && overnight.VolByPrice.Count > 2) CalcVA(overnight);
+				if (diagnosticsWorkStart > 0)
+				{
+					long diagnosticsTotalTicks = Stopwatch.GetTimestamp() - diagnosticsWorkStart;
+					diagnosticsPhaseCaptureActive = false;
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.BarUpdate, diagnosticsBarsInProgress, diagnosticsWorkStart);
+					ReportDiagnosticsPhases(diagnosticsTotalTicks);
+					ReportDiagnosticsLevelCache(diagnosticsEventTime);
+				}
 			}
-
-			// Build level cache for rendering
-			BuildLevelCache();
 		}
 
 		private void BeginRthRangeSession(DateTime rthAnchorTime, int primaryIdx)
@@ -599,12 +1025,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				rangeSessionDate = rthAnchorTime.Date;
 				orHigh = orLow = orMid = ibHigh = ibLow = ibMid = double.NaN;
+				ib30High = ib30Low = ib30Mid = double.NaN;
 				orComplete = false;
+				orDeveloping = false;
+				ib30Complete = false;
 				ibComplete = false;
 				orStartTime = rthAnchorTime;
 				ibEndTime = rthAnchorTime + TimeSpan.FromMinutes(60);
 				orHighTime = orLowTime = ibHighTime = ibLowTime = DateTime.MinValue;
+				ib30HighTime = ib30LowTime = DateTime.MinValue;
 				orHighIdx = orLowIdx = ibHighIdx = ibLowIdx = -1;
+				ib30HighIdx = ib30LowIdx = -1;
 			}
 
 			curSessionInfo = GetOrCreateSessionInfo(rthAnchorTime.Date);
@@ -720,6 +1151,209 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+        private int GetIntradayCandleBarsInProgress()
+        {
+            switch (IntradayCandleTimeframe)
+            {
+				case MgiIntradayCandleFrame.Min5:
+				case MgiIntradayCandleFrame.Min10: return 1;
+                case MgiIntradayCandleFrame.Min15: return 3;
+                case MgiIntradayCandleFrame.Min30: return 4;
+				case MgiIntradayCandleFrame.Hour2:
+                case MgiIntradayCandleFrame.Hour4: return 5;
+                case MgiIntradayCandleFrame.Hour1:
+                default: return 5;
+            }
+        }
+
+        private int GetIntradayCandleMinutes()
+        {
+            return Math.Max(1, (int)IntradayCandleTimeframe);
+        }
+
+        private DateTime GetIntradayCandleStartTime(DateTime barCloseTime)
+        {
+            return barCloseTime == DateTime.MinValue
+                ? DateTime.MinValue
+                : barCloseTime.AddMinutes(-GetIntradayCandleMinutes());
+        }
+
+        private void UpdateIntradayCandleLevels(int barsInProgress)
+        {
+            if (BarsArray == null || Times == null || Opens == null || Highs == null || Lows == null || Closes == null)
+                return;
+            if (CurrentBars == null || CurrentBars.Length <= barsInProgress || CurrentBars[barsInProgress] < 0)
+                return;
+
+            if (intradayCurrent == null) intradayCurrent = new LevelSet();
+            if (intradayPrevious == null) intradayPrevious = new LevelSet();
+			PrepareIntradayFrameState();
+
+			if (IntradayCandleTimeframe == MgiIntradayCandleFrame.Hour2)
+			{
+				UpdateSessionAnchoredMultiHourCandleLevels(barsInProgress, 120);
+				return;
+			}
+
+            if (IntradayCandleTimeframe == MgiIntradayCandleFrame.Hour4)
+            {
+				UpdateSessionAnchoredMultiHourCandleLevels(barsInProgress, 240);
+                return;
+            }
+
+            SetIntradayCandleLevelSet(intradayCurrent, Opens[barsInProgress][0], Highs[barsInProgress][0], Lows[barsInProgress][0], Closes[barsInProgress][0]);
+            intradayCurrentStartTime = GetIntradayCandleStartTime(Times[barsInProgress][0]);
+
+            if (CurrentBars[barsInProgress] < 1)
+            {
+                intradayPrevious.ResetPrices();
+                intradayPreviousStartTime = DateTime.MinValue;
+                return;
+            }
+
+            SetIntradayCandleLevelSet(intradayPrevious, Opens[barsInProgress][1], Highs[barsInProgress][1], Lows[barsInProgress][1], Closes[barsInProgress][1]);
+            intradayPreviousStartTime = GetIntradayCandleStartTime(Times[barsInProgress][1]);
+        }
+
+		private bool UsesMinuteAggregatedIntradayFrame()
+		{
+			return IntradayCandleTimeframe == MgiIntradayCandleFrame.Min5
+				|| IntradayCandleTimeframe == MgiIntradayCandleFrame.Min10;
+		}
+
+		private void PrepareIntradayFrameState()
+		{
+			if (intradayActiveFrameInitialized && intradayActiveFrame == IntradayCandleTimeframe)
+				return;
+
+			intradayActiveFrame = IntradayCandleTimeframe;
+			intradayActiveFrameInitialized = true;
+			intradayCurrent?.ResetPrices();
+			intradayPrevious?.ResetPrices();
+			intradayCurrentStartTime = DateTime.MinValue;
+			intradayPreviousStartTime = DateTime.MinValue;
+		}
+
+		private void UpdateMinuteAggregatedIntradayCandleLevels(int barsInProgress)
+		{
+			if (CurrentBars == null || CurrentBars.Length <= barsInProgress || CurrentBars[barsInProgress] < 0)
+				return;
+
+			if (intradayCurrent == null) intradayCurrent = new LevelSet();
+			if (intradayPrevious == null) intradayPrevious = new LevelSet();
+			PrepareIntradayFrameState();
+
+			int blockMinutes = GetIntradayCandleMinutes();
+			DateTime minuteStart = Times[barsInProgress][0].AddMinutes(-1);
+			DateTime blockStart = GetSessionAnchoredIntradayStart(minuteStart, blockMinutes);
+			if (intradayCurrentStartTime == DateTime.MinValue || blockStart < intradayCurrentStartTime)
+			{
+				intradayCurrent.ResetPrices();
+				intradayPrevious.ResetPrices();
+				intradayPreviousStartTime = DateTime.MinValue;
+				intradayCurrentStartTime = blockStart;
+			}
+			else if (blockStart > intradayCurrentStartTime)
+			{
+				SetIntradayCandleLevelSet(intradayPrevious, intradayCurrent.Open, intradayCurrent.High, intradayCurrent.Low, intradayCurrent.Close);
+				intradayPreviousStartTime = intradayCurrentStartTime;
+				intradayCurrent.ResetPrices();
+				intradayCurrentStartTime = blockStart;
+			}
+
+			double open = double.IsNaN(intradayCurrent.Open) ? Opens[barsInProgress][0] : intradayCurrent.Open;
+			double high = double.IsNaN(intradayCurrent.High) ? Highs[barsInProgress][0] : Math.Max(intradayCurrent.High, Highs[barsInProgress][0]);
+			double low = double.IsNaN(intradayCurrent.Low) ? Lows[barsInProgress][0] : Math.Min(intradayCurrent.Low, Lows[barsInProgress][0]);
+			SetIntradayCandleLevelSet(intradayCurrent, open, high, low, Closes[barsInProgress][0]);
+		}
+
+        private void UpdateSessionAnchoredMultiHourCandleLevels(int barsInProgress, int blockMinutes)
+        {
+            DateTime currentHourStart = Times[barsInProgress][0].AddHours(-1);
+			DateTime currentBlockStart = GetSessionAnchoredIntradayStart(currentHourStart, blockMinutes);
+            DateTime previousBlockStart = DateTime.MinValue;
+            int maxBarsAgo = Math.Min(CurrentBars[barsInProgress], 16);
+
+            for (int barsAgo = 0; barsAgo <= maxBarsAgo; barsAgo++)
+            {
+                DateTime hourStart = Times[barsInProgress][barsAgo].AddHours(-1);
+				DateTime blockStart = GetSessionAnchoredIntradayStart(hourStart, blockMinutes);
+                if (blockStart < currentBlockStart)
+                {
+                    previousBlockStart = blockStart;
+                    break;
+                }
+            }
+
+			if (TryBuildSessionAnchoredCandle(barsInProgress, currentBlockStart, blockMinutes, maxBarsAgo, intradayCurrent))
+                intradayCurrentStartTime = currentBlockStart;
+            else
+            {
+                intradayCurrent.ResetPrices();
+                intradayCurrentStartTime = DateTime.MinValue;
+            }
+
+			if (previousBlockStart != DateTime.MinValue && TryBuildSessionAnchoredCandle(barsInProgress, previousBlockStart, blockMinutes, maxBarsAgo, intradayPrevious))
+                intradayPreviousStartTime = previousBlockStart;
+            else
+            {
+                intradayPrevious.ResetPrices();
+                intradayPreviousStartTime = DateTime.MinValue;
+            }
+        }
+
+		private DateTime GetSessionAnchoredIntradayStart(DateTime time, int blockMinutes)
+        {
+            DateTime sessionStart = time.Date.AddHours(18);
+            if (time < sessionStart)
+                sessionStart = sessionStart.AddDays(-1);
+
+            int elapsedMinutes = (int)(time - sessionStart).TotalMinutes;
+			return sessionStart.AddMinutes((elapsedMinutes / blockMinutes) * blockMinutes);
+        }
+
+		private bool TryBuildSessionAnchoredCandle(int barsInProgress, DateTime blockStart, int blockMinutes, int maxBarsAgo, LevelSet target)
+        {
+			DateTime blockEnd = blockStart.AddMinutes(blockMinutes);
+            double open = double.NaN;
+            double high = double.NaN;
+            double low = double.NaN;
+            double close = double.NaN;
+            bool found = false;
+
+            for (int barsAgo = 0; barsAgo <= maxBarsAgo; barsAgo++)
+            {
+                DateTime hourStart = Times[barsInProgress][barsAgo].AddHours(-1);
+                if (hourStart >= blockEnd)
+                    continue;
+                if (hourStart < blockStart)
+                    break;
+
+                if (!found)
+                    close = Closes[barsInProgress][barsAgo];
+                open = Opens[barsInProgress][barsAgo];
+                high = double.IsNaN(high) ? Highs[barsInProgress][barsAgo] : Math.Max(high, Highs[barsInProgress][barsAgo]);
+                low = double.IsNaN(low) ? Lows[barsInProgress][barsAgo] : Math.Min(low, Lows[barsInProgress][barsAgo]);
+                found = true;
+            }
+
+            if (!found)
+                return false;
+
+            SetIntradayCandleLevelSet(target, open, high, low, close);
+            return true;
+        }
+
+        private void SetIntradayCandleLevelSet(LevelSet levelSet, double open, double high, double low, double close)
+        {
+            if (levelSet == null) return;
+            levelSet.Open = open;
+            levelSet.High = high;
+            levelSet.Low = low;
+            levelSet.Close = close;
+            levelSet.Mid = !double.IsNaN(high) && !double.IsNaN(low) ? (high + low) * 0.5 : double.NaN;
+        }
+
 		private void UpdatePrimaryOpeningRanges(DateTime time, double high, double low, int primaryIdx)
 		{
 			if (double.IsNaN(high) || double.IsNaN(low))
@@ -748,21 +1382,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			TimeSpan ibEnd = RTHOpenTime + TimeSpan.FromMinutes(60);
-			if (!ibComplete)
-			{
-				if (IsInOpeningWindow(tod, RTHOpenTime, ibEnd))
-					UpdateIbRange(time, high, low, primaryIdx);
-				if (tod >= ibEnd)
-				{
-					if (curSessionInfo != null)
-					{
-						curSessionInfo.IbEndIdx = primaryIdx;
-						curSessionInfo.IbEndTime = rthAnchorTime + TimeSpan.FromMinutes(60);
-					}
-					ibComplete = true;
-				}
-			}
 		}
 
 		private void UpdateThirtySecondOpeningRange(DateTime time, double high, double low)
@@ -778,13 +1397,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			BeginRthRangeSession(rthAnchorTime, -1);
 
 			TimeSpan orEnd = RTHOpenTime + GetORDurationTimeSpan();
-			if (orComplete)
-				return;
-
-			if (IsInOpeningWindow(tod, RTHOpenTime, orEnd))
+			if (!orComplete && IsInOpeningWindow(tod, RTHOpenTime, orEnd))
+			{
 				UpdateOrRange(time, high, low, -1);
+				orDeveloping = !double.IsNaN(orHigh) && !double.IsNaN(orLow);
+			}
 
-			if (tod >= orEnd)
+			bool canLockOpeningRange = State != State.Realtime
+				? tod >= orEnd
+				: tod > orEnd;
+
+			if (!orComplete && canLockOpeningRange && !double.IsNaN(orHigh) && !double.IsNaN(orLow))
 			{
 				if (curSessionInfo != null)
 				{
@@ -792,7 +1415,69 @@ namespace NinjaTrader.NinjaScript.Indicators
 					curSessionInfo.OrEndTime = rthAnchorTime + GetORDurationTimeSpan();
 				}
 				orComplete = true;
+				orDeveloping = false;
 			}
+		}
+
+		private void UpdateFinalizedThirtySecondInitialBalance()
+		{
+			const int barsAgo = 1;
+			if (CurrentBars.Length <= 2 || CurrentBars[2] < barsAgo) return;
+
+			int completedBarIdx = CurrentBars[2] - barsAgo;
+			if (completedBarIdx <= lastThirtySecondInitialBalanceBarIdx) return;
+
+			UpdateThirtySecondInitialBalance(Times[2][barsAgo], Highs[2][barsAgo], Lows[2][barsAgo]);
+			lastThirtySecondInitialBalanceBarIdx = completedBarIdx;
+		}
+
+		private void UpdateThirtySecondInitialBalance(DateTime time, double high, double low)
+		{
+			if (double.IsNaN(high) || double.IsNaN(low))
+				return;
+
+			TimeSpan tod = time.TimeOfDay;
+			if (!IsInTimeWindow(tod, RTHOpenTime, RTHCloseTime))
+				return;
+
+			DateTime rthAnchorTime = GetSessionOpenDateTime(time, RTHOpenTime);
+			BeginRthRangeSession(rthAnchorTime, -1);
+
+			TimeSpan ib30End = RTHOpenTime + TimeSpan.FromMinutes(30);
+			TimeSpan ibEnd = RTHOpenTime + TimeSpan.FromMinutes(60);
+			bool passedIb30End = tod > ib30End;
+			if (!ib30Complete && passedIb30End)
+				CompleteIb30Snapshot();
+
+			if (!ibComplete && IsInOpeningWindow(tod, RTHOpenTime, ibEnd))
+				UpdateIbRange(time, high, low, -1);
+
+			if (!ib30Complete && !passedIb30End && tod >= ib30End)
+				CompleteIb30Snapshot();
+
+			if (!ibComplete && tod >= ibEnd && !double.IsNaN(ibHigh) && !double.IsNaN(ibLow))
+			{
+				if (curSessionInfo != null)
+				{
+					curSessionInfo.IbEndIdx = -1;
+					curSessionInfo.IbEndTime = rthAnchorTime + TimeSpan.FromMinutes(60);
+				}
+				ibComplete = true;
+			}
+		}
+
+		private void CompleteIb30Snapshot()
+		{
+			ib30Complete = true;
+			if (double.IsNaN(ibHigh) || double.IsNaN(ibLow)) return;
+
+			ib30High = ibHigh;
+			ib30Low = ibLow;
+			ib30Mid = ibMid;
+			ib30HighTime = ibHighTime;
+			ib30LowTime = ibLowTime;
+			ib30HighIdx = ibHighIdx;
+			ib30LowIdx = ibLowIdx;
 		}
 
 		private bool UpdateOrRange(DateTime time, double high, double low, int primaryIdx)
@@ -903,8 +1588,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				day.UpdateHL(high, low, close, open);
 				day.Vwap.Add(typPrice, volume);
-				DistributeVolume(day, high, low, volume);
-				if (day.VolByPrice.Count > 2) CalcVA(day);
 			}
 
 			if (IsInTimeWindowIncludingStart(tod, RTHOpenTime, PdcTimeSpan))
@@ -923,9 +1606,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (priorDate == DateTime.MinValue) return;
 
 			CopyLevelSet(rthHistoryByDate[priorDate], priorRTH);
-			priorRTH_VAH = priorRTH.VAH;
-			priorRTH_VAL = priorRTH.VAL;
-			priorRTH_POC = priorRTH.POC;
 		}
 
 		private void CopyLevelSet(LevelSet source, LevelSet target)
@@ -937,9 +1617,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			target.Low = source.Low;
 			target.Close = source.Close;
 			target.Mid = source.Mid;
-			target.VAH = source.VAH;
-			target.VAL = source.VAL;
-			target.POC = source.POC;
 		}
 
 		private bool CrossedTime(TimeSpan prev, TimeSpan cur, TimeSpan target)
@@ -986,7 +1663,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			priorRTH.Open = curRTH.Open; priorRTH.High = curRTH.High; priorRTH.Low = curRTH.Low;
 			priorRTH.Close = curRTH.Close; priorRTH.Mid = curRTH.Mid;
-			priorRTH_VAH = curRTH.VAH; priorRTH_VAL = curRTH.VAL; priorRTH_POC = curRTH.POC;
 		}
 
 		// Snapshot ETH only (called at ETH open = start of new full day)
@@ -994,7 +1670,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			priorETH.Open = curETH.Open; priorETH.High = curETH.High; priorETH.Low = curETH.Low;
 			priorETH.Close = curETH.Close; priorETH.Mid = curETH.Mid;
-			priorETH_VAH = curETH.VAH; priorETH_VAL = curETH.VAL; priorETH_POC = curETH.POC;
 		}
 
 		private void UpdateWeeklyLevels(DateTime time, double open, double high, double low, double close, double typPrice, double volume)
@@ -1005,9 +1680,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (curWeekOpenTime != DateTime.MinValue && curWeek != null && !double.IsNaN(curWeek.Open))
 				{
 					CopyLevelSet(curWeek, priorWeek);
-					priorWeek_VAH = curWeek.VAH;
-					priorWeek_VAL = curWeek.VAL;
-					priorWeek_POC = curWeek.POC;
 				}
 
 				curWeek.ResetPrices();
@@ -1024,9 +1696,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			curWeek.Vwap.Add(typPrice, volume);
-			DistributeVolume(curWeek, high, low, volume);
-			if (curWeek.VolByPrice.Count > 2)
-				CalcVA(curWeek);
 		}
 
 		private DateTime GetWeekStart(DateTime time)
@@ -1055,6 +1724,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return false;
 		}
 
+		private void MarkLevelCacheDirty()
+		{
+			System.Threading.Interlocked.Exchange(ref levelCacheDirty, 1);
+		}
+
+		private void EnsureLevelCacheCurrent()
+		{
+			if (levelCache == null || System.Threading.Interlocked.Exchange(ref levelCacheDirty, 0) == 0)
+				return;
+
+			long phaseStart = diagnosticsPhaseCaptureActive ? Stopwatch.GetTimestamp() : 0;
+			try
+			{
+				BuildLevelCache();
+				TrySyncNativePriceMarkers(force: false);
+			}
+			catch
+			{
+				System.Threading.Interlocked.Exchange(ref levelCacheDirty, 1);
+				throw;
+			}
+			finally
+			{
+				if (phaseStart > 0)
+					diagnosticsLevelCacheTicks += Stopwatch.GetTimestamp() - phaseStart;
+			}
+		}
+
 		private void BuildLevelCache()
 		{
 			for (int i = 0; i < LVL_COUNT; i++)
@@ -1066,6 +1763,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				levelCache[i].StartIdx = -1;
 			}
 
+			bool showIb30Now = IsIB30DisplayActive();
 			DateTime rthAnchor = curSessionInfo != null ? curSessionInfo.RthOpenTime : DateTime.MinValue;
 			DateTime ethAnchor = curSessionInfo != null ? curSessionInfo.EthOpenTime : DateTime.MinValue;
 			DateTime tdoAnchor = curSessionInfo != null ? curSessionInfo.TrueDailyOpenTime : DateTime.MinValue;
@@ -1075,9 +1773,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int ethAnchorIdx = curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.EthOpenIdx) : -1;
 			int tdoAnchorIdx = curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.TrueDailyOpenIdx) : -1;
 			int orAnchorIdx = curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.OrEndIdx) : -1;
-			int ibAnchorIdx = curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.IbEndIdx) : -1;
+			int ibAnchorIdx = showIb30Now ? -1 : (curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.IbEndIdx) : -1);
 			if (rthAnchor == DateTime.MinValue && rangeSessionDate != DateTime.MinValue)
 				rthAnchor = rangeSessionDate.Date + RTHOpenTime;
+			if (showIb30Now && rthAnchor != DateTime.MinValue)
+				ibAnchor = rthAnchor + TimeSpan.FromMinutes(30);
 			if (tdoAnchor == DateTime.MinValue && trueDailyOpenDate != DateTime.MinValue)
 				tdoAnchor = trueDailyOpenDate.Date;
 			if (orAnchor == DateTime.MinValue && orStartTime != DateTime.MinValue)
@@ -1088,8 +1788,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int onMidAnchorIdx = LaterIdx(overnightHighIdx, overnightLowIdx);
 			DateTime orMidAnchor = LaterTime(orHighTime, orLowTime);
 			int orMidAnchorIdx = LaterIdx(orHighIdx, orLowIdx);
-			DateTime ibMidAnchor = LaterTime(ibHighTime, ibLowTime);
-			int ibMidAnchorIdx = LaterIdx(ibHighIdx, ibLowIdx);
+			double activeIbHigh = showIb30Now ? ib30High : ibHigh;
+			double activeIbLow = showIb30Now ? ib30Low : ibLow;
+			double activeIbMid = showIb30Now ? ib30Mid : ibMid;
+			DateTime activeIbHighTime = showIb30Now ? ib30HighTime : ibHighTime;
+			DateTime activeIbLowTime = showIb30Now ? ib30LowTime : ibLowTime;
+			int activeIbHighIdx = showIb30Now ? ib30HighIdx : ibHighIdx;
+			int activeIbLowIdx = showIb30Now ? ib30LowIdx : ibLowIdx;
+			DateTime ibMidAnchor = LaterTime(activeIbHighTime, activeIbLowTime);
+			int ibMidAnchorIdx = LaterIdx(activeIbHighIdx, activeIbLowIdx);
 			DateTime weekMidAnchor = LaterTime(curWeekHighTime, curWeekLowTime);
 			int weekMidAnchorIdx = LaterIdx(curWeekHighIdx, curWeekLowIdx);
 			bool priorRthOwnsRthSpace = IsAfterEthRollover();
@@ -1097,21 +1804,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ShowONRange)  { SetLvl(L_ONH,    overnight.High,    LblONH,    0, null, 0, overnightHighTime, overnightHighIdx); SetLvl(L_ONL,    overnight.Low,    LblONL,    0, null, 0, overnightLowTime, overnightLowIdx); SetLvl(L_ONMID,  overnight.Mid,    LblONM,    0, null, 0, onMidAnchor, onMidAnchorIdx); }
 			if (ShowONVA)     { SetLvl(L_ONVAH,  overnight.VAH,    LblOVAH,   1, null, 0, rthAnchor, rthAnchorIdx); SetLvl(L_ONVAL,  overnight.VAL,    LblOVAL,   1, null, 0, rthAnchor, rthAnchorIdx); SetLvl(L_ONPOC,  overnight.POC,    LblOPOC,   1, null, 0, rthAnchor, rthAnchorIdx); }
 			if (ShowTrueDailyOpen && trueDailyOpenDate != DateTime.MinValue) SetLvl(L_TDO, trueDailyOpen, LblTDO, 22, null, 0, tdoAnchor, tdoAnchorIdx);
-			if (ShowOR && orComplete)       { SetLvl(L_ORH,    orHigh,           FormatORLabel(LblORH),    2, null, 0, orHighTime, orHighIdx); SetLvl(L_ORL,    orLow,            FormatORLabel(LblORL),    2, null, 0, orLowTime, orLowIdx); SetLvl(L_ORMID,  orMid,            FormatORLabel(LblORM),    2, null, 0, orMidAnchor, orMidAnchorIdx); }
-			if (ShowIB && ibComplete)
+			if (ShowLondonOpen) SetLvl(L_LONDON_OPEN, londonOpen, LblLondonOpen, 31, null, 0, londonOpenAnchorTime, -1);
+			if (ShowTokyoOpen) SetLvl(L_TOKYO_OPEN, tokyoOpen, LblTokyoOpen, 32, null, 0, tokyoOpenAnchorTime, -1);
+			if (ShowOR && (orComplete || orDeveloping))       { SetLvl(L_ORH,    orHigh,           FormatORLabel(LblORH),    2, null, 0, orHighTime, orHighIdx); SetLvl(L_ORL,    orLow,            FormatORLabel(LblORL),    2, null, 0, orLowTime, orLowIdx); SetLvl(L_ORMID,  orMid,            FormatORLabel(LblORM),    2, null, 0, orMidAnchor, orMidAnchorIdx); }
+			bool activeIbComplete = showIb30Now ? ib30Complete : ibComplete;
+			if (ShowIB && activeIbComplete)
 			{
-				SetLvl(L_IBH, ibHigh, LblIBH, 19, MgiDashStyle.Solid, 2, ibHighTime, ibHighIdx);
-				SetLvl(L_IBL, ibLow, LblIBL, 20, MgiDashStyle.Solid, 2, ibLowTime, ibLowIdx);
-				if (!ShowIBExtensions) SetLvl(L_IBMID, ibMid, LblIBM, 21, MgiDashStyle.Solid, 1, ibMidAnchor, ibMidAnchorIdx);
+				SetLvl(L_IBH, activeIbHigh, showIb30Now ? "IB30H" : LblIBH, 19, MgiDashStyle.Solid, 2, activeIbHighTime, activeIbHighIdx);
+				SetLvl(L_IBL, activeIbLow, showIb30Now ? "IB30L" : LblIBL, 20, MgiDashStyle.Solid, 2, activeIbLowTime, activeIbLowIdx);
+				if (!ShowIBExtensions) SetLvl(L_IBMID, activeIbMid, showIb30Now ? "IB30M" : LblIBM, 21, MgiDashStyle.Solid, 1, ibMidAnchor, ibMidAnchorIdx);
 			}
-			if (ShowIBExtensions) BuildIBExtensionLevels();
+			if (ShowIBExtensions && activeIbComplete)
+				BuildIBExtensionLevels(activeIbHigh, activeIbLow, showIb30Now ? "IB30" : "IB", ibAnchor, ibAnchorIdx);
 			if (ShowCurRTH && !priorRthOwnsRthSpace) { SetLvl(L_CRTH_O, curRTH.Open, LblRTHO, 4, null, 0, rthAnchor, rthAnchorIdx); SetLvl(L_CRTH_H, curRTH.High, LblRTHH, 4, null, 0, curRthHighTime, curRthHighIdx); SetLvl(L_CRTH_L, curRTH.Low, LblRTHL, 4, null, 0, curRthLowTime, curRthLowIdx); }
 			if (ShowDailyOpen) SetLvl(L_CETH_O, curETH.Open, LblETHO, 5, null, 0, ethAnchor, ethAnchorIdx);
 			if (ShowCurETH)   { SetLvl(L_CETH_H, curETH.High,      LblETHH,   5, null, 0, curEthHighTime, curEthHighIdx); SetLvl(L_CETH_L, curETH.Low,       LblETHL,   5, null, 0, curEthLowTime, curEthLowIdx); }
 			if (ShowPriorRTH)
 			{
-				if (!SamePrice(priorRTH.High, priorETH.High)) SetLvl(L_PDH, priorRTH.High, LblPDH, 6, null, 0, ethAnchor, ethAnchorIdx);
-				if (!SamePrice(priorRTH.Low, priorETH.Low)) SetLvl(L_PDL, priorRTH.Low, LblPDL, 6, null, 0, ethAnchor, ethAnchorIdx);
+				SetLvl(L_PDH, priorRTH.High, LblPDH, 6, null, 0, ethAnchor, ethAnchorIdx);
+				SetLvl(L_PDL, priorRTH.Low, LblPDL, 6, null, 0, ethAnchor, ethAnchorIdx);
 				SetLvl(L_PDC, priorRTH.Close, LblPDC, 6, null, 0, ethAnchor, ethAnchorIdx);
 				SetLvl(L_PDO, priorRTH.Open, LblPDO, 6, null, 0, ethAnchor, ethAnchorIdx);
 				SetLvl(L_PDMID, priorRTH.Mid, LblPDM, 6, null, 0, ethAnchor, ethAnchorIdx);
@@ -1152,26 +1863,147 @@ namespace NinjaTrader.NinjaScript.Indicators
 				SetLvl(L_PW_VAL, priorWeek_VAL, LblPWVAL, 26, null, 0, curWeekOpenTime, curWeekOpenIdx);
 				SetLvl(L_PW_POC, priorWeek_POC, LblPWPOC, 26, null, 0, curWeekOpenTime, curWeekOpenIdx);
 			}
+			BuildIntradayCandleLevels();
 		}
 
-		private void BuildIBExtensionLevels()
+		private void TrySyncNativePriceMarkers(bool force)
 		{
-			if (!ibComplete) return;
-			if (double.IsNaN(ibHigh) || double.IsNaN(ibLow) || ibHigh <= ibLow) return;
+			if (State != State.Realtime)
+				return;
 
-			double range = ibHigh - ibLow;
+			if (!ShowPricesOnPriceScale && !(ShowPriceAtLineEnd && PriceTagStyle == MgiPriceTagStyle.FilledNameAndNativePrice))
+			{
+				if (nativePriceMarkersActive)
+					ClearNativePriceMarkers();
+				return;
+			}
+
+			long nowTicks = DateTime.UtcNow.Ticks;
+			if (!force && nowTicks < nextNativePriceMarkerSyncUtcTicks)
+				return;
+			nextNativePriceMarkerSyncUtcTicks = nowTicks + TimeSpan.TicksPerSecond;
+
+			for (int i = 0; i < LVL_COUNT; i++)
+			{
+				LevelInfo level = levelCache[i];
+				SyncNativePriceMarker(i, level.Enabled, level.Price, level.BrushIdx);
+			}
+
+			bool priorRthOwnsRthSpace = IsAfterEthRollover();
+			SyncNativePriceMarker(LVL_COUNT, ShowRthMid && !priorRthOwnsRthSpace, curRTH.Mid, 17);
+			SyncNativePriceMarker(LVL_COUNT + 1, ShowEthMid, curETH.Mid, 18);
+			nativePriceMarkersActive = true;
+		}
+
+		private void SyncNativePriceMarker(int index, bool enabled, double price, int brushIndex)
+		{
+			string tag = NativePriceMarkerTagPrefix + index;
+			if (!enabled || double.IsNaN(price) || double.IsInfinity(price))
+			{
+				try { RemoveDrawObject(tag); } catch { }
+				return;
+			}
+
+			WpfBrush brush = GetNativePriceMarkerBrush(brushIndex);
+			if (brush == null)
+				return;
+
+			try
+			{
+				HorizontalLine marker = Draw.HorizontalLine(this, tag, price, brush, DashStyleHelper.Solid, 0);
+				marker.IsLocked = true;
+				marker.IsPriceMarkerVisible = true;
+			}
+			catch { }
+		}
+
+		private void ClearNativePriceMarkers()
+		{
+			for (int i = 0; i < LVL_COUNT + 2; i++)
+			{
+				try { RemoveDrawObject(NativePriceMarkerTagPrefix + i); } catch { }
+			}
+			nativePriceMarkersActive = false;
+			nextNativePriceMarkerSyncUtcTicks = 0;
+		}
+
+		private WpfBrush GetNativePriceMarkerBrush(int brushIndex)
+		{
+			switch (brushIndex)
+			{
+				case 0: return ONColor;
+				case 1: return ONVAColor;
+				case 2: return ORColor;
+				case 3: return IBColor;
+				case 4: return CurRTHColor;
+				case 5: return CurETHColor;
+				case 6: return PriorRTHColor;
+				case 7: return PriorETHColor;
+				case 8: return CurRTHVAColor;
+				case 9: return CurETHVAColor;
+				case 10: return PriorRTHVAColor;
+				case 11: return PriorETHVAColor;
+				case 12: return RTHVwapColor;
+				case 13: return ETHVwapColor;
+				case 14: return HalfGapColor;
+				case 17: return RthMidColor;
+				case 18: return EthMidColor;
+				case 19: return IBExtensionUpColor;
+				case 20: return IBExtensionDownColor;
+				case 21: return IBInnerLevelColor;
+				case 22: return TrueDailyOpenColor;
+				case 23: return CurrentWeekColor;
+				case 24: return PriorWeekColor;
+				case 25: return CurrentWeekVAColor;
+				case 26: return PriorWeekVAColor;
+				case 27: return IntradayCurrentCandleColor;
+				case 28: return IntradayPreviousCandleColor;
+				case 31: return LondonOpenColor;
+				case 32: return TokyoOpenColor;
+				default: return null;
+			}
+		}
+
+		private void BuildIntradayCandleLevels()
+        {
+            if (ShowIntradayCurrentCandle && intradayCurrent != null)
+            {
+                SetLvl(L_IC_O, intradayCurrent.Open, FormatIntradayCandleLabel(false, "O"), 27, MgiDashStyle.Solid, MainLineWidth, intradayCurrentStartTime, -1);
+                SetLvl(L_IC_H, intradayCurrent.High, FormatIntradayCandleLabel(false, "H"), 27, MgiDashStyle.Solid, MainLineWidth, intradayCurrentStartTime, -1);
+                SetLvl(L_IC_L, intradayCurrent.Low, FormatIntradayCandleLabel(false, "L"), 27, MgiDashStyle.Solid, MainLineWidth, intradayCurrentStartTime, -1);
+            }
+
+            if (ShowIntradayPreviousCandle && intradayPrevious != null)
+            {
+                DateTime anchor = intradayCurrentStartTime != DateTime.MinValue ? intradayCurrentStartTime : intradayPreviousStartTime;
+                SetLvl(L_IP_O, intradayPrevious.Open, FormatIntradayCandleLabel(true, "O"), 28, MgiDashStyle.Dash, SecondaryLineWidth, anchor, -1);
+                SetLvl(L_IP_H, intradayPrevious.High, FormatIntradayCandleLabel(true, "H"), 28, MgiDashStyle.Dash, SecondaryLineWidth, anchor, -1);
+                SetLvl(L_IP_L, intradayPrevious.Low, FormatIntradayCandleLabel(true, "L"), 28, MgiDashStyle.Dash, SecondaryLineWidth, anchor, -1);
+            }
+
+            if (ShowIntradayCurrentMidpoint && intradayCurrent != null)
+                SetLvl(L_IC_MID, intradayCurrent.Mid, FormatIntradayCandleLabel(false, "MID"), 27, MgiDashStyle.Solid, MainLineWidth, intradayCurrentStartTime, -1);
+
+            if (ShowIntradayPreviousMidpoint && intradayPrevious != null)
+            {
+                DateTime anchor = intradayCurrentStartTime != DateTime.MinValue ? intradayCurrentStartTime : intradayPreviousStartTime;
+                SetLvl(L_IP_MID, intradayPrevious.Mid, FormatIntradayCandleLabel(true, "MID"), 28, MgiDashStyle.Dash, SecondaryLineWidth, anchor, -1);
+            }
+        }
+
+		private void BuildIBExtensionLevels(double high, double low, string labelPrefix, DateTime ibAnchor, int ibAnchorIdx)
+		{
+			if (double.IsNaN(high) || double.IsNaN(low) || high <= low) return;
+
+			double range = high - low;
 			if (ShowIBQuarterExtensions)
 			{
-				DateTime ibAnchor = curSessionInfo != null ? curSessionInfo.IbEndTime : DateTime.MinValue;
-				int ibAnchorIdx = curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.IbEndIdx) : -1;
-				SetLvl(L_IBQ25, ibLow + range * 0.25, "IB 25%", 21, MgiDashStyle.Dash, 1, ibAnchor, ibAnchorIdx);
-				SetLvl(L_IBQ75, ibLow + range * 0.75, "IB 75%", 21, MgiDashStyle.Dash, 1, ibAnchor, ibAnchorIdx);
+				SetLvl(L_IBQ25, low + range * 0.25, labelPrefix + " 25%", 21, MgiDashStyle.Dash, 1, ibAnchor, ibAnchorIdx);
+				SetLvl(L_IBQ75, low + range * 0.75, labelPrefix + " 75%", 21, MgiDashStyle.Dash, 1, ibAnchor, ibAnchorIdx);
 			}
 			if (ShowIBHalfExtensions)
 			{
-				DateTime ibAnchor = curSessionInfo != null ? curSessionInfo.IbEndTime : DateTime.MinValue;
-				int ibAnchorIdx = curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.IbEndIdx) : -1;
-				SetLvl(L_IBQ50, ibLow + range * 0.50, "IB 50%", 21, MgiDashStyle.Solid, 1, ibAnchor, ibAnchorIdx);
+				SetLvl(L_IBQ50, low + range * 0.50, labelPrefix + " 50%", 21, MgiDashStyle.Solid, 1, ibAnchor, ibAnchorIdx);
 			}
 
 			double[] percentages = { 0.25, 0.50, 0.75, 1.00, 1.50, 2.00, 2.50, 3.00, 3.50, 4.00 };
@@ -1185,13 +2017,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				MgiDashStyle style = IsMajorIBExtension(pct) || IsHalfStepIBExtension(pct) ? MgiDashStyle.Solid : MgiDashStyle.Dash;
 				int width = IsMajorIBExtension(pct) ? 2 : 1;
-				string label = "IB +" + FormatPercentLabel(pct);
-				DateTime ibAnchor = curSessionInfo != null ? curSessionInfo.IbEndTime : DateTime.MinValue;
-				int ibAnchorIdx = curSessionInfo != null ? SanitizePrimaryIndex(curSessionInfo.IbEndIdx) : -1;
+				string label = labelPrefix + " +" + FormatPercentLabel(pct);
 
-				SetLvl(upIndices[i], ibHigh + range * pct, label, 19, style, width, ibAnchor, ibAnchorIdx);
-				SetLvl(downIndices[i], ibLow - range * pct, label.Replace("+", "-"), 20, style, width, ibAnchor, ibAnchorIdx);
+				SetLvl(upIndices[i], high + range * pct, label, 19, style, width, ibAnchor, ibAnchorIdx);
+				SetLvl(downIndices[i], low - range * pct, label.Replace("+", "-"), 20, style, width, ibAnchor, ibAnchorIdx);
 			}
+		}
+
+		private bool IsIB30DisplayActive()
+		{
+			return ShowIB30BeforeHourlyIB && ib30Complete && !ibComplete
+				&& !double.IsNaN(ib30High) && !double.IsNaN(ib30Low);
 		}
 
 		private bool ShouldShowIBExtensionPercent(double pct)
@@ -1229,6 +2065,29 @@ namespace NinjaTrader.NinjaScript.Indicators
 				: label + " (" + (int)ORDuration + "M)";
 		}
 
+        private string FormatIntradayCandleLabel(bool previous, string field)
+        {
+			if (!ShowIntradayTimeframeInLabels)
+				return (previous ? "p" : "") + field;
+
+            return (previous ? "p" : "") + FormatIntradayFrameLabel() + " " + field;
+        }
+
+        private string FormatIntradayFrameLabel()
+        {
+            switch (IntradayCandleTimeframe)
+            {
+				case MgiIntradayCandleFrame.Min5: return "5M";
+				case MgiIntradayCandleFrame.Min10: return "10M";
+                case MgiIntradayCandleFrame.Min15: return "15M";
+                case MgiIntradayCandleFrame.Min30: return "30M";
+				case MgiIntradayCandleFrame.Hour2: return "2H";
+                case MgiIntradayCandleFrame.Hour4: return "4H";
+                case MgiIntradayCandleFrame.Hour1:
+                default: return "1H";
+            }
+        }
+
 		private void SetLvl(int idx, double price, string label, int colorGroup)
 		{
 			SetLvl(idx, price, label, colorGroup, null, 0);
@@ -1248,6 +2107,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (double.IsNaN(price)) return;
 			levelCache[idx].Price = price;
+			levelCache[idx].BaseLabel = label;
 			levelCache[idx].Label = label + (ShowPriceInLabel ? " " + FormatPrice(price) : "");
 			levelCache[idx].BrushIdx = colorGroup;
 			levelCache[idx].StrokeIdx = dashStyle.HasValue ? (int)dashStyle.Value : -1;
@@ -1282,13 +2142,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return primaryBars != null && idx >= 0 && idx < primaryBars.Count ? idx : -1;
 		}
 
-		private bool SamePrice(double a, double b)
-		{
-			if (double.IsNaN(a) || double.IsNaN(b)) return false;
-			double tolerance = TickSize > 0 ? TickSize * 0.5 : 1E-07;
-			return Math.Abs(a - b) <= tolerance;
-		}
-
 		private string FormatPrice(double p)
 		{
 			return Instrument != null ? Instrument.MasterInstrument.FormatPrice(p) : p.ToString("F2");
@@ -1310,16 +2163,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#region Rendering
 		protected override void OnRender(ChartControl cc, ChartScale cs)
 		{
+			long diagnosticsRenderStart = Stopwatch.GetTimestamp();
 			try
 			{
 				base.OnRender(cc, cs);
 				if (cc == null || cs == null || ChartBars == null || ChartPanel == null || RenderTarget == null || levelCache == null) return;
 				EnsureDx();
 				if (!dxValid || dxBrushes == null || dxStrokes == null) return;
-				BuildLevelCache();
 
 				float pT = ChartPanel.Y, pB = pT + ChartPanel.H, pL = ChartPanel.X;
 				float CR = ChartPanel.X + ChartPanel.W;
+				float priceScaleEdge = cc.CanvasRight > pL ? Math.Min(CR, (float)cc.CanvasRight) : CR;
 				bool edgeMode = MgiStyle == MgiPlotStyle.Edge;
 				float edgeEndX = CR;
 				float edgeStartX = Math.Max(pL, edgeEndX - EdgeLineLength);
@@ -1342,9 +2196,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ShowSessionLine && rthX > 0 && dxBrushes.Length > 16 && dxBrushes[16] != null)
 				DrawLineWithOpacity(new Vector2(rthX, pT), new Vector2(rthX, pB), dxBrushes[16], 1f);
 
+			DrawMagicLevels(cs, pT, pB, pL, CR, edgeMode, edgeStartX, edgeEndX, nowX);
+
 			// Draw levels -- Pass 1: lines only, collect labels for stagger pass
-			var pendingLabels = ShowLabels && dxLabelFormat != null
+			bool filledPriceTags = ShowPriceAtLineEnd && PriceTagStyle != MgiPriceTagStyle.Classic;
+			bool attachLabelsToPriceScale = ShowPriceAtLineEndLabels && !ShowPriceAtLineEnd && ShowPricesOnPriceScale;
+			var pendingLabels = ShowLabels && dxLabelFormat != null && !filledPriceTags && !(ShowPriceAtLineEnd && ShowPriceAtLineEndLabels) && !attachLabelsToPriceScale
 				? new System.Collections.Generic.List<(float y, float eX, int bi, string text)>()
+				: null;
+			var pendingPriceScaleLabels = attachLabelsToPriceScale && dxLabelFormat != null
+				? new System.Collections.Generic.List<(float y, int bi, string text)>()
+				: null;
+			var pendingPriceMarkers = ShowPriceAtLineEnd && dxLabelFormat != null
+				? new System.Collections.Generic.List<(float y, int bi, string priceText, string labelText)>()
 				: null;
 			for (int i = 0; i < LVL_COUNT; i++)
 			{
@@ -1382,18 +2246,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// Collect label for Pass 2
 				float labelAnchorX = edgeMode ? sX + 4f - LabelXOffset : eX;
 				pendingLabels?.Add((y, labelAnchorX, bi, levelCache[i].Label));
+				pendingPriceScaleLabels?.Add((y, bi, levelCache[i].BaseLabel));
+				pendingPriceMarkers?.Add((y, bi, FormatPrice(levelCache[i].Price), levelCache[i].BaseLabel));
 			}
 
 			// Mids are dynamic levels, so draw the current value from the bar that made the latest high/low input.
 			if (ShowRthMid && !priorRthOwnsRthSpace)
 			{
-				if (edgeMode) DrawMidLevel(cs, curRTH.Mid, edgeStartX, edgeEndX, pL, CR, 17, 1, "RTH MID", pendingLabels);
-				else DrawAnchoredMidLevel(cc, cs, curRTH.Mid, LaterTime(curRthHighTime, curRthLowTime), LaterIdx(curRthHighIdx, curRthLowIdx), nowX, pL, CR, 17, 1, "RTH MID", pendingLabels);
+				if (edgeMode) DrawMidLevel(cs, curRTH.Mid, edgeStartX, edgeEndX, pL, CR, 17, 1, "RTH MID", pendingLabels, pendingPriceMarkers, pendingPriceScaleLabels);
+				else DrawAnchoredMidLevel(cc, cs, curRTH.Mid, LaterTime(curRthHighTime, curRthLowTime), LaterIdx(curRthHighIdx, curRthLowIdx), nowX, pL, CR, 17, 1, "RTH MID", pendingLabels, pendingPriceMarkers, pendingPriceScaleLabels);
 			}
 			if (ShowEthMid)
 			{
-				if (edgeMode) DrawMidLevel(cs, curETH.Mid, edgeStartX, edgeEndX, pL, CR, 18, 1, "ETH MID", pendingLabels);
-				else DrawAnchoredMidLevel(cc, cs, curETH.Mid, LaterTime(curEthHighTime, curEthLowTime), LaterIdx(curEthHighIdx, curEthLowIdx), nowX, pL, CR, 18, 1, "ETH MID", pendingLabels);
+				if (edgeMode) DrawMidLevel(cs, curETH.Mid, edgeStartX, edgeEndX, pL, CR, 18, 1, "ETH MID", pendingLabels, pendingPriceMarkers, pendingPriceScaleLabels);
+				else DrawAnchoredMidLevel(cc, cs, curETH.Mid, LaterTime(curEthHighTime, curEthLowTime), LaterIdx(curEthHighIdx, curEthLowIdx), nowX, pL, CR, 18, 1, "ETH MID", pendingLabels, pendingPriceMarkers, pendingPriceScaleLabels);
 			}
 
 			// Draw levels -- Pass 2: labels with smarter collision handling.
@@ -1436,7 +2302,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					lastNaturalY = lbl.y;
 					lastDrawY = drawY;
 					float labelWidth = EstimateLabelWidth(lbl.text);
-					float maxTxtX = Math.Max(pL, CR - labelWidth - 2f);
+					float priceMarkerReserve = ShowPriceAtLineEnd ? Math.Max(52f, LabelFontSize * 6f) : 0f;
+					float maxTxtX = Math.Max(pL, priceScaleEdge - priceMarkerReserve - labelWidth - 2f);
 					float txtX = lbl.eX + LabelXOffset + samePriceCol * colStep;
 					if (txtX > maxTxtX)
 						txtX = samePriceCol > 0 ? maxTxtX - samePriceCol * colStep : maxTxtX;
@@ -1446,6 +2313,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					DrawTextWithOpacity(lbl.text, dxLabelFormat, rect, dxBrushes[lbl.bi]);
 				}
 			}
+
+			DrawPriceMarkers(pendingPriceMarkers, pT, pB, pL, priceScaleEdge);
+			DrawPriceScaleLabels(pendingPriceScaleLabels, pT, pB, pL, priceScaleEdge);
 
 				}
 				finally
@@ -1458,6 +2328,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				DisposeDx();
 				PrintRenderSkip(ex);
+			}
+			finally
+			{
+				OrcaDiagnosticsCore.ReportRenderSample(diagnosticsInstanceId, diagnosticsRenderStart);
 			}
 		}
 
@@ -1496,7 +2370,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		private void DrawMidLevel(ChartScale cs, double price, float startX, float endX, float panelLeft, float canvasRight, int brushIdx, int width, string label,
-			System.Collections.Generic.List<(float y, float eX, int bi, string text)> pendingLabels = null)
+			System.Collections.Generic.List<(float y, float eX, int bi, string text)> pendingLabels = null,
+			System.Collections.Generic.List<(float y, int bi, string priceText, string labelText)> pendingPriceMarkers = null,
+			System.Collections.Generic.List<(float y, int bi, string text)> pendingPriceScaleLabels = null)
 		{
 			if (double.IsNaN(price) || brushIdx >= dxBrushes.Length || dxBrushes[brushIdx] == null) return;
 			if (endX < panelLeft || startX > canvasRight) return;
@@ -1506,10 +2382,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DrawLineWithOpacity(new Vector2(startX, y), new Vector2(endX, y), dxBrushes[brushIdx], width, GetStroke(MgiDashStyle.Solid));
 			if (ShowLabels && !string.IsNullOrEmpty(label))
 				pendingLabels?.Add((y, endX, brushIdx, label));
+			pendingPriceMarkers?.Add((y, brushIdx, FormatPrice(price), label));
+			pendingPriceScaleLabels?.Add((y, brushIdx, label));
 		}
 
 		private void DrawAnchoredMidLevel(ChartControl cc, ChartScale cs, double price, DateTime startTime, int startIdx, float endX, float panelLeft, float canvasRight, int brushIdx, int width, string label,
-			System.Collections.Generic.List<(float y, float eX, int bi, string text)> pendingLabels = null)
+			System.Collections.Generic.List<(float y, float eX, int bi, string text)> pendingLabels = null,
+			System.Collections.Generic.List<(float y, int bi, string priceText, string labelText)> pendingPriceMarkers = null,
+			System.Collections.Generic.List<(float y, int bi, string text)> pendingPriceScaleLabels = null)
 		{
 			LevelInfo midLevel = new LevelInfo
 			{
@@ -1527,7 +2407,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (startX < 0)
 				return;
 
-			DrawMidLevel(cs, price, startX, endX, panelLeft, canvasRight, brushIdx, width, label, pendingLabels);
+			DrawMidLevel(cs, price, startX, endX, panelLeft, canvasRight, brushIdx, width, label, pendingLabels, pendingPriceMarkers, pendingPriceScaleLabels);
 		}
 
 		private float GetLevelStartX(ChartControl cc, LevelInfo level, int levelIdx, float panelLeft)
@@ -1639,12 +2519,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (levelIdx == L_TDO)
 				return midnight;
+			if (levelIdx == L_LONDON_OPEN)
+				return GetSessionOpenDateTime(visibleReferenceTime, LondonOpenBoundary);
+			if (levelIdx == L_TOKYO_OPEN)
+				return GetSessionOpenDateTime(visibleReferenceTime, TokyoOpenBoundary);
 
 			if (levelIdx >= L_ORH && levelIdx <= L_ORMID)
 				return rthOpen + GetORDurationTimeSpan();
 
 			if (IsIBProjectionLevel(levelIdx))
-				return rthOpen + TimeSpan.FromMinutes(60);
+				return rthOpen + TimeSpan.FromMinutes(IsIB30DisplayActive() ? 30 : 60);
 
 			if (levelIdx == L_CRTH_O || levelIdx == L_CRVAH || levelIdx == L_CRVAL || levelIdx == L_CRPOC
 				|| levelIdx == L_RVWAP || levelIdx == L_HGAP || (levelIdx >= L_ONVAH && levelIdx <= L_ONPOC))
@@ -1818,6 +2702,273 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+		private void DrawPriceMarkers(System.Collections.Generic.List<(float y, int bi, string priceText, string labelText)> markers, float panelTop, float panelBottom, float panelLeft, float panelRight)
+		{
+			if (markers == null || markers.Count == 0 || dxPriceMarkerFormat == null)
+				return;
+			if (PriceTagStyle != MgiPriceTagStyle.Classic)
+			{
+				DrawFilledPriceBadges(markers, panelTop, panelBottom, panelLeft, panelRight);
+				return;
+			}
+
+			markers.Sort((a, b) => a.y.CompareTo(b.y));
+			float markerHeight = Math.Max(10f, LabelFontSize + 4f);
+			float halfMarkerHeight = markerHeight * 0.5f;
+			float samePriceThreshold = Math.Max(1f, LabelFontSize * 0.2f);
+			float lastY = float.MinValue;
+			string lastPriceText = null;
+
+			foreach (var marker in markers)
+			{
+				if (marker.bi < 0 || marker.bi >= dxBrushes.Length || dxBrushes[marker.bi] == null)
+					continue;
+				if (marker.y < panelTop - halfMarkerHeight || marker.y > panelBottom + halfMarkerHeight)
+					continue;
+				if (lastPriceText == marker.priceText && Math.Abs(marker.y - lastY) <= samePriceThreshold)
+					continue;
+
+				float markerWidth = EstimateLabelWidth(marker.priceText) + 6f;
+				float markerTop = Math.Max(panelTop, Math.Min(panelBottom - markerHeight, marker.y - halfMarkerHeight));
+				var rect = new RectangleF(panelRight - markerWidth, markerTop, markerWidth, markerHeight);
+				DxSolidBrush brush = dxBrushes[marker.bi];
+				float previousOpacity = brush.Opacity;
+				try
+				{
+					brush.Opacity = OpacityPercent(LabelOpacity) * 0.22f;
+					RenderTarget.FillRectangle(rect, brush);
+					brush.Opacity = OpacityPercent(LabelOpacity);
+					RenderTarget.DrawRectangle(rect, brush, 1f);
+					RenderTarget.DrawText(marker.priceText, dxPriceMarkerFormat, rect, brush);
+					if (ShowPriceAtLineEndLabels && !string.IsNullOrEmpty(marker.labelText))
+					{
+						float labelWidth = EstimateLabelWidth(marker.labelText);
+						float labelLeft = Math.Max(panelLeft, rect.X - labelWidth - 4f);
+						RenderTarget.DrawText(marker.labelText, dxLabelFormat, new RectangleF(labelLeft, rect.Y, Math.Max(0f, rect.X - labelLeft - 4f), rect.Height), brush);
+					}
+				}
+				finally
+				{
+					brush.Opacity = previousOpacity;
+				}
+
+				lastY = marker.y;
+				lastPriceText = marker.priceText;
+			}
+		}
+
+		// Pure geometry: forward separation, then move only an overflowing bottom
+		// cluster upward. Call with no more rows than fit in this column.
+		private static void LayoutBadgeRows(float[] naturalY, float[] drawY, int start, int count,
+			float top, float bottom, float height, float gap)
+		{
+			float minimum = top + height * 0.5f;
+			float maximum = bottom - height * 0.5f;
+			for (int i = start; i < start + count; i++)
+			{
+				drawY[i] = Math.Max(minimum, Math.Min(maximum, naturalY[i]));
+				if (i > start) drawY[i] = Math.Max(drawY[i], drawY[i - 1] + height + gap);
+			}
+			if (count == 0) return;
+			int last = start + count - 1;
+			drawY[last] = Math.Min(maximum, drawY[last]);
+			for (int i = last - 1; i >= start; i--)
+				drawY[i] = Math.Min(drawY[i], drawY[i + 1] - height - gap);
+		}
+
+		private void DrawFilledPriceBadges(List<(float y, int bi, string priceText, string labelText)> markers,
+			float panelTop, float panelBottom, float panelLeft, float panelRight)
+		{
+			if (dxBadgeFormat == null || dxBadgeLightBrush == null || dxBadgeDarkBrush == null) return;
+			bool nativePrice = PriceTagStyle == MgiPriceTagStyle.FilledNameAndNativePrice;
+			float height = Math.Max(12f, LabelFontSize + 6f);
+			const float gap = 2f;
+			float top = panelTop + gap, bottom = panelBottom - gap;
+			float right = panelRight - (nativePrice ? 10f : gap);
+			if (bottom - top < height || right - panelLeft < 24f) return;
+
+			// Keep coincident levels, including their individual names and colors.
+			// A deterministic tie break prevents names trading places between frames.
+			markers.Sort((a, b) => {
+				int order = a.y.CompareTo(b.y);
+				if (order == 0) order = string.CompareOrdinal(a.labelText, b.labelText);
+				return order != 0 ? order : a.bi.CompareTo(b.bi);
+			});
+			int count = Math.Min(markers.Count, badgeNaturalY.Length);
+			float priceWidth = 24f, nameWidth = 24f;
+			for (int i = 0; i < count; i++)
+			{
+				badgeNaturalY[i] = markers[i].y;
+				priceWidth = Math.Max(priceWidth, EstimateLabelWidth(markers[i].priceText) + 6f);
+				nameWidth = Math.Max(nameWidth, EstimateLabelWidth(markers[i].labelText) + 6f);
+			}
+			if (nativePrice) priceWidth = 0f;
+			int capacity = Math.Max(1, (int)((bottom - top + gap) / (height + gap)));
+			int columns = (count + capacity - 1) / capacity;
+			float columnWidth = Math.Min(nameWidth + priceWidth, (right - panelLeft) / columns - 8f);
+			if (columnWidth <= 0f) return;
+			priceWidth = Math.Min(priceWidth, columnWidth * 0.65f);
+			for (int column = 0; column < columns; column++)
+			{
+				int start = column * capacity;
+				int rows = Math.Min(capacity, count - start);
+				LayoutBadgeRows(badgeNaturalY, badgeDrawY, start, rows, top, bottom, height, gap);
+				float columnRight = right - column * (columnWidth + 8f);
+				for (int i = start; i < start + rows; i++)
+				{
+					float width = Math.Min(columnWidth, EstimateLabelWidth(markers[i].labelText) + 6f + priceWidth);
+					badgeRects[i] = new RectangleF(columnRight - width, badgeDrawY[i] - height * 0.5f, width, height);
+				}
+			}
+
+			// All connectors precede the badges so none is painted over badge text.
+			for (int i = 0; i < count; i++)
+			{
+				var marker = markers[i];
+				if (marker.bi < 0 || marker.bi >= dxBrushes.Length || dxBrushes[marker.bi] == null) continue;
+				float stubLength = MgiStyle == MgiPlotStyle.Edge ? EdgeLineLength : 24f;
+				float joinX = Math.Max(panelLeft, badgeRects[i].X - 8f);
+				DrawLineWithOpacity(new Vector2(Math.Max(panelLeft, badgeRects[i].X - stubLength), marker.y),
+					new Vector2(joinX, marker.y), dxBrushes[marker.bi], 1f);
+				DrawLineWithOpacity(new Vector2(joinX, marker.y),
+					new Vector2(badgeRects[i].X, badgeDrawY[i]), dxBrushes[marker.bi], 1f);
+				// Native prices never move with the collision layout. Connect the name
+				// back to the exact scale position when it has been displaced.
+				if (nativePrice)
+					DrawLineWithOpacity(new Vector2(badgeRects[i].Right, badgeDrawY[i]),
+						new Vector2(panelRight, marker.y), dxBrushes[marker.bi], 1f);
+			}
+			for (int i = 0; i < count; i++)
+			{
+				var marker = markers[i];
+				if (marker.bi < 0 || marker.bi >= dxBrushes.Length || dxBrushes[marker.bi] == null) continue;
+				DxSolidBrush fill = dxBrushes[marker.bi];
+				Color4 color = fill.Color;
+				DxSolidBrush ink = (0.2126f * color.Red + 0.7152f * color.Green + 0.0722f * color.Blue) > 0.55f
+					? dxBadgeDarkBrush : dxBadgeLightBrush;
+				RectangleF rect = badgeRects[i];
+				float dividerX = rect.Right - priceWidth;
+				float opacity = OpacityPercent(LabelOpacity);
+				float previousOpacity = fill.Opacity;
+				try
+				{
+					fill.Opacity = opacity;
+					RenderTarget.FillRectangle(rect, fill);
+					if (!nativePrice)
+					{
+						ink.Opacity = opacity * 0.35f;
+						RenderTarget.DrawLine(new Vector2(dividerX, rect.Top + 2f), new Vector2(dividerX, rect.Bottom - 2f), ink, 1f);
+					}
+					ink.Opacity = opacity;
+					RenderTarget.DrawText(marker.labelText ?? "", dxBadgeFormat,
+						new RectangleF(rect.X + 3f, rect.Y, Math.Max(0f, dividerX - rect.X - 6f), rect.Height), ink, DrawTextOptions.Clip);
+					if (!nativePrice)
+						RenderTarget.DrawText(marker.priceText, dxBadgeFormat,
+							new RectangleF(dividerX + 2f, rect.Y, Math.Max(0f, priceWidth - 4f), rect.Height), ink, DrawTextOptions.Clip);
+				}
+				finally { fill.Opacity = previousOpacity; ink.Opacity = 1f; }
+			}
+		}
+
+		private void DrawPriceScaleLabels(System.Collections.Generic.List<(float y, int bi, string text)> labels, float panelTop, float panelBottom, float panelLeft, float panelRight)
+		{
+			if (labels == null || labels.Count == 0 || dxPriceScaleLabelFormat == null)
+				return;
+
+			labels.Sort((a, b) => a.y.CompareTo(b.y));
+			float labelHeight = Math.Max(10f, LabelFontSize + 4f);
+			float halfLabelHeight = labelHeight * 0.5f;
+			const float stackedLabelGap = 2f;
+			const float priceScaleLabelRightInset = 10f;
+			float minimumY = panelTop + halfLabelHeight;
+			float maximumY = panelBottom - halfLabelHeight;
+			float previousY = float.MinValue;
+
+			for (int i = 0; i < labels.Count; i++)
+			{
+				var label = labels[i];
+				float drawY = Math.Max(minimumY, Math.Min(maximumY, label.y));
+				if (previousY != float.MinValue && drawY < previousY + labelHeight + stackedLabelGap)
+					drawY = previousY + labelHeight + stackedLabelGap;
+				labels[i] = (drawY, label.bi, label.text);
+				previousY = drawY;
+			}
+
+			if (labels[labels.Count - 1].y > maximumY)
+			{
+				var lastLabel = labels[labels.Count - 1];
+				labels[labels.Count - 1] = (maximumY, lastLabel.bi, lastLabel.text);
+				for (int i = labels.Count - 2; i >= 0; i--)
+				{
+					var label = labels[i];
+					float latestAllowedY = labels[i + 1].y - labelHeight - stackedLabelGap;
+					if (label.y > latestAllowedY)
+						labels[i] = (latestAllowedY, label.bi, label.text);
+				}
+			}
+
+			foreach (var label in labels)
+			{
+				if (string.IsNullOrEmpty(label.text) || label.bi < 0 || label.bi >= dxBrushes.Length || dxBrushes[label.bi] == null)
+					continue;
+				if (label.y < panelTop - halfLabelHeight || label.y > panelBottom + halfLabelHeight)
+					continue;
+
+				float labelTop = Math.Max(panelTop, Math.Min(panelBottom - labelHeight, label.y - halfLabelHeight));
+				DrawTextWithOpacity(label.text, dxPriceScaleLabelFormat,
+					new RectangleF(panelLeft, labelTop, Math.Max(0f, panelRight - panelLeft - priceScaleLabelRightInset), labelHeight), dxBrushes[label.bi]);
+			}
+		}
+
+		private void DrawMagicLevels(ChartScale cs, float panelTop, float panelBottom, float panelLeft,
+			float panelRight, bool edgeMode, float edgeStartX, float edgeEndX, float regularEndX)
+		{
+			const double cycleSize = 100.0;
+			const int maxCycles = 250;
+			const int magic20BrushIndex = 29;
+			const int magic80BrushIndex = 30;
+
+			if (!ShowMagicLevels || cs == null || dxBrushes == null || dxBrushes.Length <= magic80BrushIndex)
+				return;
+
+			double topPrice = cs.GetValueByY(panelTop);
+			double bottomPrice = cs.GetValueByY(panelBottom);
+			if (double.IsNaN(topPrice) || double.IsInfinity(topPrice) || double.IsNaN(bottomPrice) || double.IsInfinity(bottomPrice))
+				return;
+
+			double minPrice = Math.Min(topPrice, bottomPrice);
+			double maxPrice = Math.Max(topPrice, bottomPrice);
+			int cycleCount = (int)Math.Ceiling((maxPrice - minPrice) / cycleSize) + 1;
+			if (cycleCount <= 0 || cycleCount > maxCycles)
+				return;
+
+			float startX = edgeMode ? edgeStartX : panelLeft;
+			float endX = edgeMode ? edgeEndX : regularEndX;
+			startX = Math.Max(panelLeft, startX);
+			endX = Math.Min(panelRight, endX);
+			if (endX <= startX)
+				return;
+
+			SharpDX.Direct2D1.StrokeStyle stroke = GetStroke(MgiDashStyle.Solid);
+			double firstBase = Math.Floor(minPrice / cycleSize) * cycleSize;
+			for (int cycle = 0; cycle < cycleCount; cycle++)
+			{
+				double basePrice = firstBase + cycle * cycleSize;
+				DrawMagicLevel(cs, basePrice + 20.0, minPrice, maxPrice, startX, endX, magic20BrushIndex, stroke);
+				DrawMagicLevel(cs, basePrice + 80.0, minPrice, maxPrice, startX, endX, magic80BrushIndex, stroke);
+			}
+		}
+
+		private void DrawMagicLevel(ChartScale cs, double price, double minPrice, double maxPrice,
+			float startX, float endX, int brushIndex, SharpDX.Direct2D1.StrokeStyle stroke)
+		{
+			if (price < minPrice || price > maxPrice || dxBrushes[brushIndex] == null)
+				return;
+
+			float y = cs.GetYByValue(price);
+			DrawLineWithOpacity(new Vector2(startX, y), new Vector2(endX, y), dxBrushes[brushIndex], SecondaryLineWidth, stroke);
+		}
+
 		private void EnsureDx()
 		{
 			if (RenderTarget == null) return;
@@ -1831,7 +2982,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					PriorRTHColor, PriorETHColor, CurRTHVAColor, CurETHVAColor, PriorRTHVAColor, PriorETHVAColor,
 					RTHVwapColor, ETHVwapColor, HalfGapColor, SessionMarkerColor, SessionLineColor,
 					RthMidColor, EthMidColor, IBExtensionUpColor, IBExtensionDownColor, IBInnerLevelColor,
-					TrueDailyOpenColor, CurrentWeekColor, PriorWeekColor, CurrentWeekVAColor, PriorWeekVAColor };
+                    TrueDailyOpenColor, CurrentWeekColor, PriorWeekColor, CurrentWeekVAColor, PriorWeekVAColor,
+                    IntradayCurrentCandleColor, IntradayPreviousCandleColor, Magic20Color, Magic80Color,
+					LondonOpenColor, TokyoOpenColor };
 				dxBrushes = new DxSolidBrush[colorMap.Length];
 				for (int i = 0; i < colorMap.Length; i++)
 					dxBrushes[i] = new DxSolidBrush(RenderTarget, ToColor4(colorMap[i]));
@@ -1847,6 +3000,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 					NinjaTrader.Core.Globals.DirectWriteFactory,
 					LabelFontName, FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize)
 				{ TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading, ParagraphAlignment = ParagraphAlignment.Center };
+				dxPriceMarkerFormat = new SharpDX.DirectWrite.TextFormat(
+					NinjaTrader.Core.Globals.DirectWriteFactory,
+					LabelFontName, FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize)
+				{ TextAlignment = SharpDX.DirectWrite.TextAlignment.Center, ParagraphAlignment = ParagraphAlignment.Center };
+				dxPriceScaleLabelFormat = new SharpDX.DirectWrite.TextFormat(
+					NinjaTrader.Core.Globals.DirectWriteFactory,
+					LabelFontName, FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize)
+				{ TextAlignment = SharpDX.DirectWrite.TextAlignment.Trailing, ParagraphAlignment = ParagraphAlignment.Center };
+				dxBadgeFormat = new SharpDX.DirectWrite.TextFormat(
+					NinjaTrader.Core.Globals.DirectWriteFactory,
+					LabelFontName, FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, (float)LabelFontSize)
+				{ TextAlignment = SharpDX.DirectWrite.TextAlignment.Center, ParagraphAlignment = ParagraphAlignment.Center,
+					WordWrapping = WordWrapping.NoWrap };
+				dxBadgeLightBrush = new DxSolidBrush(RenderTarget, new Color4(1f, 1f, 1f, 1f));
+				dxBadgeDarkBrush = new DxSolidBrush(RenderTarget, new Color4(0.04f, 0.04f, 0.04f, 1f));
 
 				dxResourceRenderTarget = currentTarget;
 				dxValid = true;
@@ -1864,322 +3032,380 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (dxBrushes != null) foreach (var b in dxBrushes) b?.Dispose();
 				if (dxStrokes != null) foreach (var s in dxStrokes) s?.Dispose();
 				dxLabelFormat?.Dispose();
+				dxPriceMarkerFormat?.Dispose();
+				dxPriceScaleLabelFormat?.Dispose();
+				dxBadgeFormat?.Dispose();
+				dxBadgeLightBrush?.Dispose();
+				dxBadgeDarkBrush?.Dispose();
 				dxLabelBrush?.Dispose();
 				dxRegionBrush?.Dispose();
 			}
 			catch { }
-			dxBrushes = null; dxStrokes = null; dxLabelFormat = null; dxLabelBrush = null; dxRegionBrush = null;
+			dxBrushes = null; dxStrokes = null; dxLabelFormat = null; dxPriceMarkerFormat = null; dxPriceScaleLabelFormat = null; dxLabelBrush = null; dxRegionBrush = null;
 			dxResourceRenderTarget = IntPtr.Zero;
 			dxValid = false;
+			dxBadgeFormat = null; dxBadgeLightBrush = null; dxBadgeDarkBrush = null;
 		}
 
 		public override void OnRenderTargetChanged() { DisposeDx(); base.OnRenderTargetChanged(); }
 		#endregion
 
 		#region Properties
-		// --- 01. Session Times ---
-		[NinjaScriptProperty][Display(Name="RTH Open Time", Description="Regular trading hours open time (Eastern)", Order=1, GroupName="01. Session Times")]
+		// --- Session Times ---
+		[NinjaScriptProperty][Display(Name="RTH Open Time", Description="Regular trading hours open time (Eastern)", Order=1, GroupName="03. Session Times and Opens")]
 		[PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")]
 		public TimeSpan RTHOpenTime { get; set; }
 
-		[NinjaScriptProperty][Display(Name="RTH Close Time", Description="Regular trading hours close time (Eastern)", Order=2, GroupName="01. Session Times")]
+		[NinjaScriptProperty][Display(Name="RTH Close Time", Description="Regular trading hours close time (Eastern)", Order=2, GroupName="03. Session Times and Opens")]
 		[PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")]
 		public TimeSpan RTHCloseTime { get; set; }
 
-		[NinjaScriptProperty][Display(Name="ETH Open Time", Description="Extended/Globex session open time (Eastern)", Order=3, GroupName="01. Session Times")]
+		[NinjaScriptProperty][Display(Name="ETH Open Time", Description="Extended/Globex session open time (Eastern)", Order=3, GroupName="03. Session Times and Opens")]
 		[PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")]
 		public TimeSpan ETHOpenTime { get; set; }
 
-		// --- 02. Overnight Range ---
-		[Display(Name="Show Overnight Range", Description="Show ONH, ONL, ON Mid", Order=1, GroupName="02. Overnight Range")]
+		// --- Overnight Range ---
+		[Display(Name="Show Overnight Range", Description="Show ONH, ONL, ON Mid", Order=1, GroupName="06. Overnight Range")]
 		public bool ShowONRange { get; set; }
-		[XmlIgnore][Display(Name="ON Color", Order=2, GroupName="02. Overnight Range")]
+		[XmlIgnore][Display(Name="ON Color", Order=2, GroupName="06. Overnight Range")]
 		public WpfBrush ONColor { get; set; }
 		[Browsable(false)] public string ONColorS { get { return Serialize.BrushToString(ONColor); } set { ONColor = Serialize.StringToBrush(value); } }
-		[Range(0,100)][Display(Name="ON Region Opacity %", Description="0=off", Order=3, GroupName="02. Overnight Range")]
+		[Range(0,100)][Display(Name="ON Region Opacity %", Description="0=off", Order=3, GroupName="06. Overnight Range")]
 		public int ONRegionOpacity { get; set; }
 
-		// --- 03. Overnight VA ---
-		[Display(Name="Show Overnight VA", Description="Show ONVAH, ONVAL, ONPOC", Order=1, GroupName="03. Overnight VA")]
+		// --- Overnight VA ---
+		[Display(Name="Show Overnight VA", Description="Show ONVAH, ONVAL, ONPOC", Order=10, GroupName="09. Value Areas")]
 		public bool ShowONVA { get; set; }
-		[XmlIgnore][Display(Name="ON VA Color", Order=2, GroupName="03. Overnight VA")]
+		[XmlIgnore][Display(Name="ON VA Color", Order=11, GroupName="09. Value Areas")]
 		public WpfBrush ONVAColor { get; set; }
 		[Browsable(false)] public string ONVAColorS { get { return Serialize.BrushToString(ONVAColor); } set { ONVAColor = Serialize.StringToBrush(value); } }
 
-		// --- 04. Opening Range ---
-		[Display(Name="Show Opening Range", Description="Show ORH, ORL, OR Mid", Order=1, GroupName="04. Opening Range")]
+		// --- Opening Range ---
+		[Display(Name="Show Opening Range", Description="Show ORH, ORL, OR Mid", Order=1, GroupName="07. Opening Range")]
 		public bool ShowOR { get; set; }
-		[NinjaScriptProperty][Display(Name="OR Duration", Description="Opening range time window from RTH open", Order=2, GroupName="04. Opening Range")]
+		[NinjaScriptProperty][Display(Name="OR Duration", Description="Opening range time window from RTH open", Order=2, GroupName="07. Opening Range")]
 		public MgiORDuration ORDuration { get; set; }
-		[XmlIgnore][Display(Name="OR Color", Order=3, GroupName="04. Opening Range")]
+		[XmlIgnore][Display(Name="OR Color", Order=3, GroupName="07. Opening Range")]
 		public WpfBrush ORColor { get; set; }
 		[Browsable(false)] public string ORColorS { get { return Serialize.BrushToString(ORColor); } set { ORColor = Serialize.StringToBrush(value); } }
 
-		// --- 05. Initial Balance ---
-		[Display(Name="Show Initial Balance", Description="Show IBH, IBL, IB Mid (first 60 min RTH)", Order=1, GroupName="05. Initial Balance")]
+		// --- Initial Balance ---
+		[Display(Name="Show Initial Balance", Description="Show IBH, IBL, IB Mid (first 60 min RTH)", Order=1, GroupName="08. Initial Balance")]
 		public bool ShowIB { get; set; }
-		[XmlIgnore][Display(Name="IB Color", Order=2, GroupName="05. Initial Balance")]
+		[Display(Name="Show IB30 Before Hourly IB", Description="From 30 to 60 minutes after the RTH open, show the completed first 30-minute IB before switching to the hourly IB.", Order=2, GroupName="08. Initial Balance")]
+		public bool ShowIB30BeforeHourlyIB { get; set; }
+		[XmlIgnore][Display(Name="IB Color", Order=3, GroupName="08. Initial Balance")]
 		public WpfBrush IBColor { get; set; }
 		[Browsable(false)] public string IBColorS { get { return Serialize.BrushToString(IBColor); } set { IBColor = Serialize.StringToBrush(value); } }
-		[Range(0,100)][Display(Name="IB Region Opacity %", Description="0=off", Order=3, GroupName="05. Initial Balance")]
+		[Range(0,100)][Display(Name="IB Region Opacity %", Description="0=off", Order=4, GroupName="08. Initial Balance")]
 		public int IBRegionOpacity { get; set; }
-		[Display(Name="Show IB Extensions", Order=4, GroupName="05. Initial Balance")]
+		[Display(Name="Show IB Extensions", Order=5, GroupName="08. Initial Balance")]
 		public bool ShowIBExtensions { get; set; }
-		[Display(Name="Show Full Extensions", Description="Show 100%, 200%, 300%, and 400% extensions", Order=5, GroupName="05. Initial Balance")]
+		[Display(Name="Show Full Extensions", Description="Show 100%, 200%, 300%, and 400% extensions", Order=6, GroupName="08. Initial Balance")]
 		public bool ShowIBFullExtensions { get; set; }
-		[Display(Name="Show 50s", Description="Show 50%, 150%, 250%, and 350% extensions", Order=6, GroupName="05. Initial Balance")]
+		[Display(Name="Show 50% Extensions", Description="Show 50%, 150%, 250%, and 350% extensions", Order=7, GroupName="08. Initial Balance")]
 		public bool ShowIBHalfExtensions { get; set; }
-		[Display(Name="Show Quarters", Description="Show 25% and 75% internal levels and extensions", Order=7, GroupName="05. Initial Balance")]
+		[Display(Name="Show Quarter Levels and Extensions", Description="Show 25% and 75% internal levels and extensions", Order=8, GroupName="08. Initial Balance")]
 		public bool ShowIBQuarterExtensions { get; set; }
-		[XmlIgnore][Display(Name="IB Extension Up Color", Order=8, GroupName="05. Initial Balance")]
+		[XmlIgnore][Display(Name="IB Extension Up Color", Order=9, GroupName="08. Initial Balance")]
 		public WpfBrush IBExtensionUpColor { get; set; }
 		[Browsable(false)] public string IBExtensionUpColorS { get { return Serialize.BrushToString(IBExtensionUpColor); } set { IBExtensionUpColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="IB Extension Down Color", Order=9, GroupName="05. Initial Balance")]
+		[XmlIgnore][Display(Name="IB Extension Down Color", Order=10, GroupName="08. Initial Balance")]
 		public WpfBrush IBExtensionDownColor { get; set; }
 		[Browsable(false)] public string IBExtensionDownColorS { get { return Serialize.BrushToString(IBExtensionDownColor); } set { IBExtensionDownColor = Serialize.StringToBrush(value); } }
-		[XmlIgnore][Display(Name="IB Inner Quarter Color", Order=10, GroupName="05. Initial Balance")]
+		[XmlIgnore][Display(Name="IB Inner Quarter Color", Order=11, GroupName="08. Initial Balance")]
 		public WpfBrush IBInnerLevelColor { get; set; }
 		[Browsable(false)] public string IBInnerLevelColorS { get { return Serialize.BrushToString(IBInnerLevelColor); } set { IBInnerLevelColor = Serialize.StringToBrush(value); } }
 
-		// --- 06-07. Current Day ---
-		[Display(Name="Show Current RTH", Description="Show current RTH high and low", Order=1, GroupName="06. Current Day RTH")]
+		// --- Current Day ---
+		[Display(Name="Show Current RTH", Description="Show current RTH high and low", Order=1, GroupName="04. Current Day")]
 		public bool ShowCurRTH { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=2, GroupName="06. Current Day RTH")]
+		[XmlIgnore][Display(Name="Current RTH Color", Order=2, GroupName="04. Current Day")]
 		public WpfBrush CurRTHColor { get; set; }
 		[Browsable(false)] public string CurRTHColorS { get { return Serialize.BrushToString(CurRTHColor); } set { CurRTHColor = Serialize.StringToBrush(value); } }
 
-		[Display(Name="Show Daily Open", Description="Show the 6:00 PM Globex open", Order=1, GroupName="07. Current Day")]
+		[Display(Name="Show Daily Open", Description="Show the 6:00 PM Globex open", Order=4, GroupName="03. Session Times and Opens")]
 		public bool ShowDailyOpen { get; set; }
-		[Display(Name="Show Current Day", Description="Show current day high and low", Order=2, GroupName="07. Current Day")]
+		[Display(Name="Show Current Day", Description="Show current day high and low", Order=5, GroupName="04. Current Day")]
 		public bool ShowCurETH { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=3, GroupName="07. Current Day")]
+		[XmlIgnore][Display(Name="Current Full Day / Daily Open Color", Order=6, GroupName="04. Current Day", Description="Color for current full-day high/low and the daily session open.")]
 		public WpfBrush CurETHColor { get; set; }
 		[Browsable(false)] public string CurETHColorS { get { return Serialize.BrushToString(CurETHColor); } set { CurETHColor = Serialize.StringToBrush(value); } }
-		[Display(Name="Show True Daily Open", Description="Show the opening print of the midnight Eastern candle", Order=4, GroupName="07. Current Day")]
+		[Display(Name="Show True Daily Open", Description="Show the opening print of the midnight Eastern candle", Order=5, GroupName="03. Session Times and Opens")]
 		public bool ShowTrueDailyOpen { get; set; }
-		[XmlIgnore][Display(Name="True Daily Open Color", Order=5, GroupName="07. Current Day")]
+		[XmlIgnore][Display(Name="True Daily Open Color", Order=6, GroupName="03. Session Times and Opens")]
 		public WpfBrush TrueDailyOpenColor { get; set; }
 		[Browsable(false)] public string TrueDailyOpenColorS { get { return Serialize.BrushToString(TrueDailyOpenColor); } set { TrueDailyOpenColor = Serialize.StringToBrush(value); } }
+		[Display(Name="Show London Open", Description="Show the 3:00 AM Eastern opening print", Order=7, GroupName="03. Session Times and Opens")]
+		public bool ShowLondonOpen { get; set; }
+		[XmlIgnore][Display(Name="London Open Color", Order=8, GroupName="03. Session Times and Opens")]
+		public WpfBrush LondonOpenColor { get; set; }
+		[Browsable(false)] public string LondonOpenColorS { get { return Serialize.BrushToString(LondonOpenColor); } set { LondonOpenColor = Serialize.StringToBrush(value); } }
+		[Display(Name="Show Tokyo Open", Description="Show the 8:00 PM Eastern opening print", Order=9, GroupName="03. Session Times and Opens")]
+		public bool ShowTokyoOpen { get; set; }
+		[XmlIgnore][Display(Name="Tokyo Open Color", Order=10, GroupName="03. Session Times and Opens")]
+		public WpfBrush TokyoOpenColor { get; set; }
+		[Browsable(false)] public string TokyoOpenColorS { get { return Serialize.BrushToString(TokyoOpenColor); } set { TokyoOpenColor = Serialize.StringToBrush(value); } }
 
-		// --- 08-09. Prior Levels ---
-		[Display(Name="Show Prior RTH", Description="Show prior RTH high, low, close, open, and mid", Order=1, GroupName="08. Prior RTH")]
+		// --- Prior Levels ---
+		[Display(Name="Show Prior RTH", Description="Show prior RTH high, low, close, open, and mid", Order=1, GroupName="05. Prior Day")]
 		public bool ShowPriorRTH { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=2, GroupName="08. Prior RTH")]
+		[XmlIgnore][Display(Name="Prior RTH Color", Order=2, GroupName="05. Prior Day")]
 		public WpfBrush PriorRTHColor { get; set; }
 		[Browsable(false)] public string PriorRTHColorS { get { return Serialize.BrushToString(PriorRTHColor); } set { PriorRTHColor = Serialize.StringToBrush(value); } }
 
-		[Display(Name="Show Prior Day", Description="Show prior full-day high, low, and close", Order=1, GroupName="09. Prior Day")]
+		[Display(Name="Show Prior Day", Description="Show prior full-day high, low, and close", Order=5, GroupName="05. Prior Day")]
 		public bool ShowPriorETH { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=2, GroupName="09. Prior Day")]
+		[XmlIgnore][Display(Name="Prior Full Day Color", Order=6, GroupName="05. Prior Day")]
 		public WpfBrush PriorETHColor { get; set; }
 		[Browsable(false)] public string PriorETHColorS { get { return Serialize.BrushToString(PriorETHColor); } set { PriorETHColor = Serialize.StringToBrush(value); } }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Prior Day Close Definition",
 			Description = "Which close price to use as PDC. Equities4PM = 4:00 PM equities close. CME415PM = 4:15 PM CME RTH futures close. Globex5PM = 5:00 PM, last price before the 1-hour CME maintenance break.",
-			Order = 4, GroupName = "08. Prior Day RTH")]
+			Order=4, GroupName="05. Prior Day")]
 		public MgiPdcMode PriorDayCloseMode { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Use Latest 5 PM PDC",
 			Description = "Use the latest completed bar close up to 5:00 PM as PDC. Turn off to use Prior Day Close Definition.",
-			Order = 3, GroupName = "08. Prior Day RTH")]
+			Order=3, GroupName="05. Prior Day")]
 		public bool UseLatestCloseForPdc { get; set; }
 
-		// --- 10-13. Value Areas ---
-		[Display(Name="Show Current RTH VA", Order=1, GroupName="10. Current RTH VA")]
+		// --- Value Areas ---
+		[Display(Name="Show Current RTH VA", Order=2, GroupName="09. Value Areas")]
 		public bool ShowCurRTHVA { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=2, GroupName="10. Current RTH VA")]
+		[XmlIgnore][Display(Name="Current RTH VA Color", Order=3, GroupName="09. Value Areas")]
 		public WpfBrush CurRTHVAColor { get; set; }
 		[Browsable(false)] public string CurRTHVAColorS { get { return Serialize.BrushToString(CurRTHVAColor); } set { CurRTHVAColor = Serialize.StringToBrush(value); } }
 
-		[Display(Name="Show Current ETH VA", Order=1, GroupName="11. Current ETH VA")]
+		[Display(Name="Show Full Day VA", Description="Show the developing full-day value area from the 6:00 PM session open through the next session rollover.", Order=6, GroupName="09. Value Areas")]
 		public bool ShowCurETHVA { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=2, GroupName="11. Current ETH VA")]
+		[XmlIgnore][Display(Name="Current Full Day VA Color", Order=7, GroupName="09. Value Areas")]
 		public WpfBrush CurETHVAColor { get; set; }
 		[Browsable(false)] public string CurETHVAColorS { get { return Serialize.BrushToString(CurETHVAColor); } set { CurETHVAColor = Serialize.StringToBrush(value); } }
 
-		[Display(Name="Show Prior RTH VA", Order=1, GroupName="12. Prior RTH VA")]
+		[Display(Name="Show Prior RTH VA", Order=4, GroupName="09. Value Areas")]
 		public bool ShowPriorRTHVA { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=2, GroupName="12. Prior RTH VA")]
+		[XmlIgnore][Display(Name="Prior RTH VA Color", Order=5, GroupName="09. Value Areas")]
 		public WpfBrush PriorRTHVAColor { get; set; }
 		[Browsable(false)] public string PriorRTHVAColorS { get { return Serialize.BrushToString(PriorRTHVAColor); } set { PriorRTHVAColor = Serialize.StringToBrush(value); } }
 
-		[Display(Name="Show Prior Day VA", Order=1, GroupName="13. Prior Day VA")]
+		[Display(Name="Show Prior Day VA", Order=8, GroupName="09. Value Areas")]
 		public bool ShowPriorETHVA { get; set; }
-		[XmlIgnore][Display(Name="Color", Order=2, GroupName="13. Prior Day VA")]
+		[XmlIgnore][Display(Name="Prior Full Day VA Color", Order=9, GroupName="09. Value Areas")]
 		public WpfBrush PriorETHVAColor { get; set; }
 		[Browsable(false)] public string PriorETHVAColorS { get { return Serialize.BrushToString(PriorETHVAColor); } set { PriorETHVAColor = Serialize.StringToBrush(value); } }
 
-		// --- 14. Weekly Levels ---
-		[Display(Name="Show Current Week", Description="Show weekly open, high, low, and mid", Order=1, GroupName="14. Weekly Levels")]
+		// --- Weekly Levels ---
+		[Display(Name="Show Current Week", Description="Show weekly open, high, low, and mid", Order=1, GroupName="10. Weekly Levels")]
 		public bool ShowCurrentWeek { get; set; }
-		[XmlIgnore][Display(Name="Current Week Color", Order=2, GroupName="14. Weekly Levels")]
+		[XmlIgnore][Display(Name="Current Week Color", Order=2, GroupName="10. Weekly Levels")]
 		public WpfBrush CurrentWeekColor { get; set; }
 		[Browsable(false)] public string CurrentWeekColorS { get { return Serialize.BrushToString(CurrentWeekColor); } set { CurrentWeekColor = Serialize.StringToBrush(value); } }
-		[Display(Name="Show Prior Week", Description="Show prior weekly open, high, low, close, and mid", Order=3, GroupName="14. Weekly Levels")]
+		[Display(Name="Show Prior Week", Description="Show prior weekly open, high, low, close, and mid", Order=3, GroupName="10. Weekly Levels")]
 		public bool ShowPriorWeek { get; set; }
-		[XmlIgnore][Display(Name="Prior Week Color", Order=4, GroupName="14. Weekly Levels")]
+		[XmlIgnore][Display(Name="Prior Week Color", Order=4, GroupName="10. Weekly Levels")]
 		public WpfBrush PriorWeekColor { get; set; }
 		[Browsable(false)] public string PriorWeekColorS { get { return Serialize.BrushToString(PriorWeekColor); } set { PriorWeekColor = Serialize.StringToBrush(value); } }
-		[Display(Name="Show Current Week VA", Description="Show current weekly VAH, VAL, and POC", Order=5, GroupName="14. Weekly Levels")]
+		[Display(Name="Show Current Week VA", Description="Show current weekly VAH, VAL, and POC", Order=12, GroupName="09. Value Areas")]
 		public bool ShowCurrentWeekVA { get; set; }
-		[XmlIgnore][Display(Name="Current Week VA Color", Order=6, GroupName="14. Weekly Levels")]
+		[XmlIgnore][Display(Name="Current Week VA Color", Order=13, GroupName="09. Value Areas")]
 		public WpfBrush CurrentWeekVAColor { get; set; }
 		[Browsable(false)] public string CurrentWeekVAColorS { get { return Serialize.BrushToString(CurrentWeekVAColor); } set { CurrentWeekVAColor = Serialize.StringToBrush(value); } }
-		[Display(Name="Show Prior Week VA", Description="Show prior weekly VAH, VAL, and POC", Order=7, GroupName="14. Weekly Levels")]
+		[Display(Name="Show Prior Week VA", Description="Show prior weekly VAH, VAL, and POC", Order=14, GroupName="09. Value Areas")]
 		public bool ShowPriorWeekVA { get; set; }
-		[XmlIgnore][Display(Name="Prior Week VA Color", Order=8, GroupName="14. Weekly Levels")]
+		[XmlIgnore][Display(Name="Prior Week VA Color", Order=15, GroupName="09. Value Areas")]
 		public WpfBrush PriorWeekVAColor { get; set; }
 		[Browsable(false)] public string PriorWeekVAColorS { get { return Serialize.BrushToString(PriorWeekVAColor); } set { PriorWeekVAColor = Serialize.StringToBrush(value); } }
 
-		// --- 14. VWAP ---
-		[Display(Name="Show RTH VWAP", Order=1, GroupName="14. VWAP")]
+        // --- Intraday Candle Levels ---
+        [Display(Name="Show Current Candle OHL", Description="Show the selected intraday candle open, high, and low.", Order=1, GroupName="11. Intraday Candle Levels")]
+        public bool ShowIntradayCurrentCandle { get; set; }
+        [Display(Name="Show Previous Candle OHL", Description="Show the prior selected intraday candle open, high, and low.", Order=2, GroupName="11. Intraday Candle Levels")]
+        public bool ShowIntradayPreviousCandle { get; set; }
+        [Display(Name="Candle Timeframe", Description="Intraday candle timeframe used for current and previous candle OHL levels.", Order=3, GroupName="11. Intraday Candle Levels")]
+        public MgiIntradayCandleFrame IntradayCandleTimeframe { get; set; }
+		[Display(Name="Show Timeframe in Labels", Description="Prefix intraday candle labels with the selected timeframe.", Order=4, GroupName="11. Intraday Candle Levels")]
+		public bool ShowIntradayTimeframeInLabels { get; set; }
+        [Display(Name="Show Current Candle Midpoint", Description="Show the midpoint of the selected current intraday candle.", Order=5, GroupName="11. Intraday Candle Levels")]
+        public bool ShowIntradayCurrentMidpoint { get; set; }
+        [Display(Name="Show Previous Candle Midpoint", Description="Show the midpoint of the prior selected intraday candle.", Order=6, GroupName="11. Intraday Candle Levels")]
+        public bool ShowIntradayPreviousMidpoint { get; set; }
+        [XmlIgnore][Display(Name="Current Candle Color", Order=7, GroupName="11. Intraday Candle Levels")]
+        public WpfBrush IntradayCurrentCandleColor { get; set; }
+        [Browsable(false)] public string IntradayCurrentCandleColorS { get { return Serialize.BrushToString(IntradayCurrentCandleColor); } set { IntradayCurrentCandleColor = Serialize.StringToBrush(value); } }
+        [XmlIgnore][Display(Name="Previous Candle Color", Order=8, GroupName="11. Intraday Candle Levels")]
+        public WpfBrush IntradayPreviousCandleColor { get; set; }
+        [Browsable(false)] public string IntradayPreviousCandleColorS { get { return Serialize.BrushToString(IntradayPreviousCandleColor); } set { IntradayPreviousCandleColor = Serialize.StringToBrush(value); } }
+
+		// --- Magic 20/80 Levels ---
+		[Display(Name="Show Magic 20/80 Levels", Description="Show visible price levels ending in 20 or 80.", Order=11, GroupName="12. Other Overlays")]
+		public bool ShowMagicLevels { get; set; }
+		[XmlIgnore][Display(Name="20 Level Color", Order=12, GroupName="12. Other Overlays")]
+		public WpfBrush Magic20Color { get; set; }
+		[Browsable(false)] public string Magic20ColorS { get { return Serialize.BrushToString(Magic20Color); } set { Magic20Color = Serialize.StringToBrush(value); } }
+		[XmlIgnore][Display(Name="80 Level Color", Order=13, GroupName="12. Other Overlays")]
+		public WpfBrush Magic80Color { get; set; }
+		[Browsable(false)] public string Magic80ColorS { get { return Serialize.BrushToString(Magic80Color); } set { Magic80Color = Serialize.StringToBrush(value); } }
+
+		// --- VWAP ---
+		[Display(Name="Show RTH VWAP", Order=1, GroupName="12. Other Overlays")]
 		public bool ShowRTHVwap { get; set; }
-		[XmlIgnore][Display(Name="RTH VWAP Color", Order=2, GroupName="14. VWAP")]
+		[XmlIgnore][Display(Name="RTH VWAP Color", Order=2, GroupName="12. Other Overlays")]
 		public WpfBrush RTHVwapColor { get; set; }
 		[Browsable(false)] public string RTHVwapColorS { get { return Serialize.BrushToString(RTHVwapColor); } set { RTHVwapColor = Serialize.StringToBrush(value); } }
 
-		[Display(Name="Show ETH VWAP", Order=3, GroupName="14. VWAP")]
+		[Display(Name="Show ETH VWAP", Order=3, GroupName="12. Other Overlays")]
 		public bool ShowETHVwap { get; set; }
-		[XmlIgnore][Display(Name="ETH VWAP Color", Order=4, GroupName="14. VWAP")]
+		[XmlIgnore][Display(Name="ETH VWAP Color", Order=4, GroupName="12. Other Overlays")]
 		public WpfBrush ETHVwapColor { get; set; }
 		[Browsable(false)] public string ETHVwapColorS { get { return Serialize.BrushToString(ETHVwapColor); } set { ETHVwapColor = Serialize.StringToBrush(value); } }
 
-		// --- 15. Half Gap ---
-		[Display(Name="Show Half Gap", Description="50% retracement of RTH open gap from prior close", Order=1, GroupName="15. Half Gap")]
+		// --- Half Gap ---
+		[Display(Name="Show Half Gap", Description="50% retracement of RTH open gap from prior close", Order=5, GroupName="12. Other Overlays")]
 		public bool ShowHalfGap { get; set; }
-		[XmlIgnore][Display(Name="Half Gap Color", Order=2, GroupName="15. Half Gap")]
+		[XmlIgnore][Display(Name="Half Gap Color", Order=6, GroupName="12. Other Overlays")]
 		public WpfBrush HalfGapColor { get; set; }
 		[Browsable(false)] public string HalfGapColorS { get { return Serialize.BrushToString(HalfGapColor); } set { HalfGapColor = Serialize.StringToBrush(value); } }
 
-		// --- 16. Session Markers ---
-		[Display(Name="Show Session Markers", Description="Vertical lines at RTH open/close", Order=1, GroupName="16. Session Markers")]
+		// --- Session Markers ---
+		[Display(Name="Show Session Markers", Description="Vertical lines at RTH open/close", Order=7, GroupName="12. Other Overlays")]
 		public bool ShowSessionMarkers { get; set; }
-		[XmlIgnore][Display(Name="Marker Color", Order=2, GroupName="16. Session Markers")]
+		[XmlIgnore][Display(Name="Marker Color", Order=8, GroupName="12. Other Overlays")]
 		public WpfBrush SessionMarkerColor { get; set; }
 		[Browsable(false)] public string SessionMarkerColorS { get { return Serialize.BrushToString(SessionMarkerColor); } set { SessionMarkerColor = Serialize.StringToBrush(value); } }
 
-		// --- 17. Labels ---
-		[Display(Name="Show Labels", Description="Show price labels next to session breaks", Order=1, GroupName="17. Labels")]
+		// --- Labels ---
+		[Display(Name="Show Floating Labels", Description="Show floating level names. Attached labels and filled badges use their own price-tag controls.", Order=1, GroupName="02. Labels and Price Tags")]
 		public bool ShowLabels { get; set; }
 		[NinjaScriptProperty]
 		[TypeConverter(typeof(OrcaMgiFontFamilyConverter))]
-		[Display(Name="Font Name", Order=2, GroupName="17. Labels")]
+		[Display(Name="Font Name", Order=7, GroupName="02. Labels and Price Tags")]
 		public string LabelFontName { get; set; }
-		[Range(6,24)][Display(Name="Font Size", Order=3, GroupName="17. Labels")]
+		[Range(6,24)][Display(Name="Font Size", Order=8, GroupName="02. Labels and Price Tags")]
 		public int LabelFontSize { get; set; }
-		[XmlIgnore][Display(Name="Label Color", Order=4, GroupName="17. Labels")]
+		[XmlIgnore][Browsable(false)][Display(Name="Label Color", Order=11, GroupName="02. Labels and Price Tags")]
 		public WpfBrush LabelColor { get; set; }
 		[Browsable(false)] public string LabelColorS { get { return Serialize.BrushToString(LabelColor); } set { LabelColor = Serialize.StringToBrush(value); } }
-		[Range(0,100)][Display(Name="Label Opacity", Order=5, GroupName="17. Labels")]
+		[Range(0,100)][Display(Name="Label Opacity", Order=9, GroupName="02. Labels and Price Tags")]
 		public int LabelOpacity { get; set; }
-		[Range(0, 100)][Display(Name="Label X Offset", Order=6, GroupName="17. Labels")]
+		[Range(0, 100)][Display(Name="Label X Offset", Order=10, GroupName="02. Labels and Price Tags", Description="Horizontal offset for floating labels; does not move right-aligned price tags.")]
 		public int LabelXOffset { get; set; }
-		[Display(Name="Abbreviate Labels", Order=7, GroupName="17. Labels")]
+		[Browsable(false)][Display(Name="Abbreviate Labels", Order=12, GroupName="02. Labels and Price Tags")]
 		public bool AbbreviateLabels { get; set; }
-		[Display(Name="Show Price in Label", Order=8, GroupName="17. Labels")]
+		[Display(Name="Show Price in Label", Order=2, GroupName="02. Labels and Price Tags", Description="Append prices to floating labels. Filled badges already include prices.")]
 		public bool ShowPriceInLabel { get; set; }
+		[Display(Name="Show Price at Line End", Description="Show a compact price tag at the right end of each visible MGI level.", Order=3, GroupName="02. Labels and Price Tags")]
+		public bool ShowPriceAtLineEnd { get; set; }
+		[Display(Name="Price Tag Style", Description="Classic preserves existing tags. FilledNameAndPrice joins name and price inside the chart. FilledNameAndNativePrice puts the price on NinjaTrader's native scale with a filled name beside it. Enable Show Price at Line End for either filled style.", Order=4, GroupName="02. Labels and Price Tags")]
+		public MgiPriceTagStyle PriceTagStyle { get; set; }
+		[Display(Name="Attach Labels to Prices", Description="Classic style: attach names to line-end tags, or to native price-scale markers when line-end tags are off. FilledNameAndPrice always includes names.", Order=5, GroupName="02. Labels and Price Tags")]
+		public bool ShowPriceAtLineEndLabels { get; set; }
+		[Display(Name="Show Prices on Price Scale", Description="Show native NinjaTrader price-scale markers for visible MGI levels.", Order=6, GroupName="02. Labels and Price Tags")]
+		public bool ShowPricesOnPriceScale { get; set; }
 
-		// --- 18. Plot Style ---
-		[Display(Name="Show Session Break Line", Order=1, GroupName="18. Plot Style")]
+		// --- Plot Style ---
+		[Display(Name="Show Session Break Line", Order=9, GroupName="12. Other Overlays")]
 		public bool ShowSessionLine { get; set; }
-		[XmlIgnore][Display(Name="Session Line Color", Order=2, GroupName="18. Plot Style")]
+		[XmlIgnore][Display(Name="Session Line Color", Order=10, GroupName="12. Other Overlays")]
 		public WpfBrush SessionLineColor { get; set; }
 		[Browsable(false)] public string SessionLineColorS { get { return Serialize.BrushToString(SessionLineColor); } set { SessionLineColor = Serialize.StringToBrush(value); } }
-		[NinjaScriptProperty][Display(Name="Plot Style", Description="Regular = full lines, Edge = right edge only", Order=3, GroupName="18. Plot Style")]
+		[NinjaScriptProperty][Display(Name="Plot Style", Description="Regular = full lines, Edge = right edge only", Order=1, GroupName="01. Appearance")]
 		public MgiPlotStyle MgiStyle { get; set; }
 		[NinjaScriptProperty]
 		[Range(40, 600)]
-		[Display(Name="Edge Line Length", Description="Horizontal pixel length for Edge plot style stubs.", Order=4, GroupName="18. Plot Style")]
+		[Display(Name="Edge Line Length", Description="Horizontal pixel length for Edge plot style stubs.", Order=2, GroupName="01. Appearance")]
 		public int EdgeLineLength { get; set; }
-		[Range(1,5)][Display(Name="Main Line Width", Order=5, GroupName="18. Plot Style")]
+		[Range(1,5)][Display(Name="Main Line Width", Order=3, GroupName="01. Appearance")]
 		public int MainLineWidth { get; set; }
-		[Range(1,5)][Display(Name="Secondary Line Width", Order=6, GroupName="18. Plot Style")]
+		[Range(1,5)][Display(Name="Secondary Line Width", Order=4, GroupName="01. Appearance")]
 		public int SecondaryLineWidth { get; set; }
-		[Range(1,5)][Display(Name="VA Line Width", Order=7, GroupName="18. Plot Style")]
+		[Range(1,5)][Display(Name="VA Line Width", Order=5, GroupName="01. Appearance")]
 		public int VALineWidth { get; set; }
-		[Display(Name="Main Dash Style", Order=8, GroupName="18. Plot Style")]
+		[Display(Name="Main Dash Style", Order=6, GroupName="01. Appearance")]
 		public MgiDashStyle MainDashStyle { get; set; }
-		[Display(Name="VA Dash Style", Order=9, GroupName="18. Plot Style")]
+		[Display(Name="VA Dash Style", Order=7, GroupName="01. Appearance")]
 		public MgiDashStyle VADashStyle { get; set; }
-		[Range(0,100)][Display(Name="Line Opacity", Order=10, GroupName="18. Plot Style")]
+		[Range(0,100)][Display(Name="Line Opacity", Order=8, GroupName="01. Appearance")]
 		public int LineOpacity { get; set; }
-		[Display(Name="Draw Behind Candles", Description="Attempts to place MGI lines behind chart bars using NinjaTrader z-order.", Order=11, GroupName="18. Plot Style")]
+		[Display(Name="Draw Behind Candles", Description="Attempts to place MGI lines behind chart bars using NinjaTrader z-order.", Order=9, GroupName="01. Appearance")]
 		public bool DrawBehindCandles { get; set; }
-		[Range(50,100)][Display(Name="Value Area %", Description="Percentage for VA calculation (default 70)", Order=12, GroupName="18. Plot Style")]
+		[Range(50,100)][Display(Name="Value Area %", Description="Value-area percentage (default 70). Estimates distribute each completed 30-second bar volume across its high-low ticks; this is not true traded volume at price.", Order=1, GroupName="09. Value Areas")]
 		public int ValueAreaPct { get; set; }
 
-		// --- 19. Mid Levels ---
-		[Display(Name="Show RTH Mid", Order=1, GroupName="19. Mid Levels")]
+		// --- Mid Levels ---
+		[Display(Name="Show RTH Mid", Order=3, GroupName="04. Current Day")]
 		public bool ShowRthMid { get; set; }
-		[XmlIgnore][Display(Name="RTH Mid Color", Order=2, GroupName="19. Mid Levels")]
+		[XmlIgnore][Display(Name="RTH Mid Color", Order=4, GroupName="04. Current Day")]
 		public WpfBrush RthMidColor { get; set; }
 		[Browsable(false)] public string RthMidColorS { get { return Serialize.BrushToString(RthMidColor); } set { RthMidColor = Serialize.StringToBrush(value); } }
 
-		[Display(Name="Show ETH Mid", Order=3, GroupName="19. Mid Levels")]
+		[Display(Name="Show ETH Mid", Order=7, GroupName="04. Current Day")]
 		public bool ShowEthMid { get; set; }
-		[XmlIgnore][Display(Name="ETH Mid Color", Order=4, GroupName="19. Mid Levels")]
+		[XmlIgnore][Display(Name="ETH Mid Color", Order=8, GroupName="04. Current Day")]
 		public WpfBrush EthMidColor { get; set; }
 		[Browsable(false)] public string EthMidColorS { get { return Serialize.BrushToString(EthMidColor); } set { EthMidColor = Serialize.StringToBrush(value); } }
-		// --- 20. Custom Labels ---
-		[Display(Name="ON High",         Order=1,  GroupName="20. Custom Labels")] public string LblONH   { get; set; }
-		[Display(Name="ON Low",          Order=2,  GroupName="20. Custom Labels")] public string LblONL   { get; set; }
-		[Display(Name="ON Mid",          Order=3,  GroupName="20. Custom Labels")] public string LblONM   { get; set; }
-		[Display(Name="ON VAH",          Order=4,  GroupName="20. Custom Labels")] public string LblOVAH  { get; set; }
-		[Display(Name="ON VAL",          Order=5,  GroupName="20. Custom Labels")] public string LblOVAL  { get; set; }
-		[Display(Name="ON POC",          Order=6,  GroupName="20. Custom Labels")] public string LblOPOC  { get; set; }
-		[Display(Name="OR High",         Order=7,  GroupName="20. Custom Labels")] public string LblORH   { get; set; }
-		[Display(Name="OR Low",          Order=8,  GroupName="20. Custom Labels")] public string LblORL   { get; set; }
-		[Display(Name="OR Mid",          Order=9,  GroupName="20. Custom Labels")] public string LblORM   { get; set; }
-		[Display(Name="IB High",         Order=10, GroupName="20. Custom Labels")] public string LblIBH   { get; set; }
-		[Display(Name="IB Low",          Order=11, GroupName="20. Custom Labels")] public string LblIBL   { get; set; }
-		[Display(Name="IB Mid",          Order=12, GroupName="20. Custom Labels")] public string LblIBM   { get; set; }
-		[Display(Name="RTH Open",        Order=13, GroupName="20. Custom Labels")] public string LblRTHO  { get; set; }
-		[Display(Name="RTH High",        Order=14, GroupName="20. Custom Labels")] public string LblRTHH  { get; set; }
-		[Display(Name="RTH Low",         Order=15, GroupName="20. Custom Labels")] public string LblRTHL  { get; set; }
-		[Display(Name="ETH Open",        Order=16, GroupName="20. Custom Labels")] public string LblETHO  { get; set; }
-		[Display(Name="High Of Day",     Order=17, GroupName="20. Custom Labels")] public string LblETHH  { get; set; }
-		[Display(Name="Low Of Day",      Order=18, GroupName="20. Custom Labels")] public string LblETHL  { get; set; }
-		[Display(Name="True Daily Open", Order=19, GroupName="20. Custom Labels")] public string LblTDO   { get; set; }
-		[Display(Name="Prior RTH High",  Order=20, GroupName="20. Custom Labels")] public string LblPDH   { get; set; }
-		[Display(Name="Prior RTH Low",   Order=21, GroupName="20. Custom Labels")] public string LblPDL   { get; set; }
-		[Display(Name="Prior RTH Close", Order=22, GroupName="20. Custom Labels")] public string LblPDC   { get; set; }
-		[Display(Name="Prior RTH Open",  Order=23, GroupName="20. Custom Labels")] public string LblPDO   { get; set; }
-		[Display(Name="Prior RTH Mid",   Order=24, GroupName="20. Custom Labels")] public string LblPDM   { get; set; }
-		[Display(Name="Prior Day High",  Order=25, GroupName="20. Custom Labels")] public string LblPEH   { get; set; }
-		[Display(Name="Prior Day Low",   Order=26, GroupName="20. Custom Labels")] public string LblPEL   { get; set; }
-		[Display(Name="Prior Day Close", Order=27, GroupName="20. Custom Labels")] public string LblPEC   { get; set; }
-		[Display(Name="RTH VAH",         Order=28, GroupName="20. Custom Labels")] public string LblRVAH  { get; set; }
-		[Display(Name="RTH VAL",         Order=29, GroupName="20. Custom Labels")] public string LblRVAL  { get; set; }
-		[Display(Name="RTH POC",         Order=30, GroupName="20. Custom Labels")] public string LblRPOC  { get; set; }
-		[Display(Name="ETH VAH",         Order=31, GroupName="20. Custom Labels")] public string LblEVAH  { get; set; }
-		[Display(Name="ETH VAL",         Order=32, GroupName="20. Custom Labels")] public string LblEVAL  { get; set; }
-		[Display(Name="ETH POC",         Order=33, GroupName="20. Custom Labels")] public string LblEPOC  { get; set; }
-		[Display(Name="Prior RTH VAH",   Order=34, GroupName="20. Custom Labels")] public string LblPRVAH { get; set; }
-		[Display(Name="Prior RTH VAL",   Order=35, GroupName="20. Custom Labels")] public string LblPRVAL { get; set; }
-		[Display(Name="Prior RTH POC",   Order=36, GroupName="20. Custom Labels")] public string LblPRPOC { get; set; }
-		[Display(Name="Prior Day VAH",   Order=37, GroupName="20. Custom Labels")] public string LblPEVAH { get; set; }
-		[Display(Name="Prior Day VAL",   Order=38, GroupName="20. Custom Labels")] public string LblPEVAL { get; set; }
-		[Display(Name="Prior Day POC",   Order=39, GroupName="20. Custom Labels")] public string LblPEPOC { get; set; }
-		[Display(Name="Weekly Open",     Order=40, GroupName="20. Custom Labels")] public string LblCWO   { get; set; }
-		[Display(Name="Weekly High",     Order=41, GroupName="20. Custom Labels")] public string LblCWH   { get; set; }
-		[Display(Name="Weekly Low",      Order=42, GroupName="20. Custom Labels")] public string LblCWL   { get; set; }
-		[Display(Name="Weekly Mid",      Order=43, GroupName="20. Custom Labels")] public string LblCWM   { get; set; }
-		[Display(Name="Prior Weekly Open",  Order=44, GroupName="20. Custom Labels")] public string LblPWO { get; set; }
-		[Display(Name="Prior Weekly High",  Order=45, GroupName="20. Custom Labels")] public string LblPWH { get; set; }
-		[Display(Name="Prior Weekly Low",   Order=46, GroupName="20. Custom Labels")] public string LblPWL { get; set; }
-		[Display(Name="Prior Weekly Close", Order=47, GroupName="20. Custom Labels")] public string LblPWC { get; set; }
-		[Display(Name="Prior Weekly Mid",   Order=48, GroupName="20. Custom Labels")] public string LblPWM { get; set; }
-		[Display(Name="Weekly VAH",      Order=49, GroupName="20. Custom Labels")] public string LblCWVAH { get; set; }
-		[Display(Name="Weekly VAL",      Order=50, GroupName="20. Custom Labels")] public string LblCWVAL { get; set; }
-		[Display(Name="Weekly POC",      Order=51, GroupName="20. Custom Labels")] public string LblCWPOC { get; set; }
-		[Display(Name="Prior Weekly VAH", Order=52, GroupName="20. Custom Labels")] public string LblPWVAH { get; set; }
-		[Display(Name="Prior Weekly VAL", Order=53, GroupName="20. Custom Labels")] public string LblPWVAL { get; set; }
-		[Display(Name="Prior Weekly POC", Order=54, GroupName="20. Custom Labels")] public string LblPWPOC { get; set; }
-		[Display(Name="RTH VWAP",        Order=55, GroupName="20. Custom Labels")] public string LblVWAP  { get; set; }
-		[Display(Name="ETH VWAP",        Order=56, GroupName="20. Custom Labels")] public string LblEVWAP { get; set; }
-		[Display(Name="Half Gap",        Order=57, GroupName="20. Custom Labels")] public string LblHGAP  { get; set; }
+		// --- Custom Labels ---
+		[Display(Name="ON High",         Order=1,  GroupName="13. Custom Labels")] public string LblONH { get; set; }
+		[Display(Name="ON Low",          Order=2,  GroupName="13. Custom Labels")] public string LblONL { get; set; }
+		[Display(Name="ON Mid",          Order=3,  GroupName="13. Custom Labels")] public string LblONM { get; set; }
+		[Display(Name="ON VAH",          Order=4,  GroupName="13. Custom Labels")] public string LblOVAH { get; set; }
+		[Display(Name="ON VAL",          Order=5,  GroupName="13. Custom Labels")] public string LblOVAL { get; set; }
+		[Display(Name="ON POC",          Order=6,  GroupName="13. Custom Labels")] public string LblOPOC { get; set; }
+		[Display(Name="OR High",         Order=7,  GroupName="13. Custom Labels")] public string LblORH { get; set; }
+		[Display(Name="OR Low",          Order=8,  GroupName="13. Custom Labels")] public string LblORL { get; set; }
+		[Display(Name="OR Mid",          Order=9,  GroupName="13. Custom Labels")] public string LblORM { get; set; }
+		[Display(Name="IB High",         Order=10, GroupName="13. Custom Labels")] public string LblIBH { get; set; }
+		[Display(Name="IB Low",          Order=11, GroupName="13. Custom Labels")] public string LblIBL { get; set; }
+		[Display(Name="IB Mid",          Order=12, GroupName="13. Custom Labels")] public string LblIBM { get; set; }
+		[Display(Name="RTH Open",        Order=13, GroupName="13. Custom Labels")] public string LblRTHO { get; set; }
+		[Display(Name="RTH High",        Order=14, GroupName="13. Custom Labels")] public string LblRTHH { get; set; }
+		[Display(Name="RTH Low",         Order=15, GroupName="13. Custom Labels")] public string LblRTHL { get; set; }
+		[Display(Name="ETH Open",        Order=16, GroupName="13. Custom Labels")] public string LblETHO { get; set; }
+		[Display(Name="High Of Day",     Order=17, GroupName="13. Custom Labels")] public string LblETHH { get; set; }
+		[Display(Name="Low Of Day",      Order=18, GroupName="13. Custom Labels")] public string LblETHL { get; set; }
+		[Display(Name="True Daily Open", Order=19, GroupName="13. Custom Labels")] public string LblTDO { get; set; }
+		[Display(Name="London Open",     Order=58, GroupName="13. Custom Labels")] public string LblLondonOpen { get; set; }
+		[Display(Name="Tokyo Open",      Order=59, GroupName="13. Custom Labels")] public string LblTokyoOpen { get; set; }
+		[Display(Name="Prior RTH High",  Order=20, GroupName="13. Custom Labels")] public string LblPDH { get; set; }
+		[Display(Name="Prior RTH Low",   Order=21, GroupName="13. Custom Labels")] public string LblPDL { get; set; }
+		[Display(Name="Prior RTH Close", Order=22, GroupName="13. Custom Labels")] public string LblPDC { get; set; }
+		[Display(Name="Prior RTH Open",  Order=23, GroupName="13. Custom Labels")] public string LblPDO { get; set; }
+		[Display(Name="Prior RTH Mid",   Order=24, GroupName="13. Custom Labels")] public string LblPDM { get; set; }
+		[Display(Name="Prior Day High",  Order=25, GroupName="13. Custom Labels")] public string LblPEH { get; set; }
+		[Display(Name="Prior Day Low",   Order=26, GroupName="13. Custom Labels")] public string LblPEL { get; set; }
+		[Display(Name="Prior Day Close", Order=27, GroupName="13. Custom Labels")] public string LblPEC { get; set; }
+		[Display(Name="RTH VAH",         Order=28, GroupName="13. Custom Labels")] public string LblRVAH { get; set; }
+		[Display(Name="RTH VAL",         Order=29, GroupName="13. Custom Labels")] public string LblRVAL { get; set; }
+		[Display(Name="RTH POC",         Order=30, GroupName="13. Custom Labels")] public string LblRPOC { get; set; }
+		[Display(Name="Full Day VAH",    Order=31, GroupName="13. Custom Labels")] public string LblEVAH { get; set; }
+		[Display(Name="Full Day VAL",    Order=32, GroupName="13. Custom Labels")] public string LblEVAL { get; set; }
+		[Display(Name="Full Day POC",    Order=33, GroupName="13. Custom Labels")] public string LblEPOC { get; set; }
+		[Display(Name="Prior RTH VAH",   Order=34, GroupName="13. Custom Labels")] public string LblPRVAH { get; set; }
+		[Display(Name="Prior RTH VAL",   Order=35, GroupName="13. Custom Labels")] public string LblPRVAL { get; set; }
+		[Display(Name="Prior RTH POC",   Order=36, GroupName="13. Custom Labels")] public string LblPRPOC { get; set; }
+		[Display(Name="Prior Day VAH",   Order=37, GroupName="13. Custom Labels")] public string LblPEVAH { get; set; }
+		[Display(Name="Prior Day VAL",   Order=38, GroupName="13. Custom Labels")] public string LblPEVAL { get; set; }
+		[Display(Name="Prior Day POC",   Order=39, GroupName="13. Custom Labels")] public string LblPEPOC { get; set; }
+		[Display(Name="Weekly Open",     Order=40, GroupName="13. Custom Labels")] public string LblCWO { get; set; }
+		[Display(Name="Weekly High",     Order=41, GroupName="13. Custom Labels")] public string LblCWH { get; set; }
+		[Display(Name="Weekly Low",      Order=42, GroupName="13. Custom Labels")] public string LblCWL { get; set; }
+		[Display(Name="Weekly Mid",      Order=43, GroupName="13. Custom Labels")] public string LblCWM { get; set; }
+		[Display(Name="Prior Weekly Open",  Order=44, GroupName="13. Custom Labels")] public string LblPWO { get; set; }
+		[Display(Name="Prior Weekly High",  Order=45, GroupName="13. Custom Labels")] public string LblPWH { get; set; }
+		[Display(Name="Prior Weekly Low",   Order=46, GroupName="13. Custom Labels")] public string LblPWL { get; set; }
+		[Display(Name="Prior Weekly Close", Order=47, GroupName="13. Custom Labels")] public string LblPWC { get; set; }
+		[Display(Name="Prior Weekly Mid",   Order=48, GroupName="13. Custom Labels")] public string LblPWM { get; set; }
+		[Display(Name="Weekly VAH",      Order=49, GroupName="13. Custom Labels")] public string LblCWVAH { get; set; }
+		[Display(Name="Weekly VAL",      Order=50, GroupName="13. Custom Labels")] public string LblCWVAL { get; set; }
+		[Display(Name="Weekly POC",      Order=51, GroupName="13. Custom Labels")] public string LblCWPOC { get; set; }
+		[Display(Name="Prior Weekly VAH", Order=52, GroupName="13. Custom Labels")] public string LblPWVAH { get; set; }
+		[Display(Name="Prior Weekly VAL", Order=53, GroupName="13. Custom Labels")] public string LblPWVAL { get; set; }
+		[Display(Name="Prior Weekly POC", Order=54, GroupName="13. Custom Labels")] public string LblPWPOC { get; set; }
+		[Display(Name="RTH VWAP",        Order=55, GroupName="13. Custom Labels")] public string LblVWAP { get; set; }
+		[Display(Name="ETH VWAP",        Order=56, GroupName="13. Custom Labels")] public string LblEVWAP { get; set; }
+		[Display(Name="Half Gap",        Order=57, GroupName="13. Custom Labels")] public string LblHGAP { get; set; }
 		#endregion
 	}
 }

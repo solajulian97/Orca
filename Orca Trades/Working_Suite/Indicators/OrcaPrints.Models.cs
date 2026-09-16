@@ -39,6 +39,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		OrcaCandleVolumeProfileCenter
 	}
 
+	public enum PriceLevelHighlightMode
+	{
+		VolumeAndDominance,
+		HighDelta,
+		Either
+	}
+
+	public enum PriceLevelDeltaDirection
+	{
+		Both,
+		PositiveOnly,
+		NegativeOnly
+	}
+
 	internal enum OrcaPrintEventKind
 	{
 		Single,
@@ -69,6 +83,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public long Volume;
 		public AggressorSide Side;
 		public OrcaPrintEventKind Kind;
+		public bool SuppressedByCluster;
 
 		public bool IsCluster
 		{
@@ -85,13 +100,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 	{
 		public DateTime StartTime;
 		public DateTime EndTime;
+		public double MinPrice;
+		public double MaxPrice;
 		public long BuyVolume;
 		public long SellVolume;
+		public long Delta;
 		public int ChildCount;
+		public int WindowTicks;
+		public bool IsHighDelta;
+
+		public long TotalVolume
+		{
+			get { return BuyVolume + SellVolume; }
+		}
 
 		public double DominantPercent
 		{
-			get { return Volume > 0 ? 100.0 * Math.Max(BuyVolume, SellVolume) / Volume : 0.0; }
+			get { return TotalVolume > 0 ? 100.0 * Math.Max(BuyVolume, SellVolume) / TotalVolume : 0.0; }
 		}
 
 		public PriceLevelEvent()
@@ -109,6 +134,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public long SellVolume;
 		public int ChildCount;
 		public PriceLevelEvent Event;
+
+		public long TotalVolume
+		{
+			get { return BuyVolume + SellVolume; }
+		}
+	}
+
+	internal class HighDeltaWindowAccumulator
+	{
+		public DateTime StartTime;
+		public DateTime EndTime;
+		public long StartTickIndex;
+		public long BuyVolume;
+		public long SellVolume;
+		public int ChildCount;
+		public PriceLevelEvent Event;
+
+		public long Delta
+		{
+			get { return BuyVolume - SellVolume; }
+		}
 
 		public long TotalVolume
 		{

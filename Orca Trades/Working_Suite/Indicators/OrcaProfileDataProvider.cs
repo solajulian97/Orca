@@ -37,6 +37,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DateTime lastRegistrationWarningUtc = DateTime.MinValue;
 		private bool registrationAnnounced;
 		private DispatcherTimer registrationRefreshTimer;
+		private readonly string diagnosticsInstanceId = Guid.NewGuid().ToString("N");
+		private bool diagnosticsRegistered;
 
 		protected override void OnStateChange()
 		{
@@ -76,9 +78,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				LoadOrderFlowCache();
 				RegisterDataSource(true);
 				StartRegistrationRefreshTimer();
+				ReportDiagnosticsState();
+			}
+			else if (State == State.Historical || State == State.Realtime)
+			{
+				ReportDiagnosticsState();
 			}
 			else if (State == State.Terminated)
 			{
+				OrcaDiagnosticsCore.UnregisterInstance(diagnosticsInstanceId);
 				StopRegistrationRefreshTimer();
 				SaveOrderFlowCache();
 				OrcaProfileDataCache.UnregisterSource(sourceId);
@@ -87,6 +95,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnMarketData(MarketDataEventArgs e)
 		{
+			if (e == null)
+				return;
+			long diagnosticsWorkStart = 0;
+
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportMarketData(diagnosticsInstanceId, e.MarketDataType, e.Time == DateTime.MinValue ? GetDiagnosticsEventTime() : e.Time);
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+			}
+			try
+			{
+
 			RefreshRegistrationIfNeeded();
 
 			if (e.MarketDataType == MarketDataType.Bid)
@@ -100,10 +121,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (e.Bid > 0 && !double.IsNaN(e.Bid))
 					lastBid = e.Bid;
 			}
+			}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.MarketData, -1, diagnosticsWorkStart);
+			}
 		}
 
 		protected override void OnBarUpdate()
 		{
+			long diagnosticsWorkStart = 0;
+			int diagnosticsBarsInProgress = BarsInProgress;
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportBarUpdate(diagnosticsInstanceId, BarsInProgress, GetDiagnosticsEventTime());
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+			}
+			try
+			{
+
 			if (BarsInProgress == 1)
 			{
 				ProcessTickIntoPrimaryBar();
@@ -126,11 +164,69 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			RefreshRegistrationIfNeeded();
+			}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.BarUpdate, diagnosticsBarsInProgress, diagnosticsWorkStart);
+			}
 		}
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
-			RefreshRegistrationIfNeeded();
+			long diagnosticsRenderStart = 0;
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				diagnosticsRenderStart = System.Diagnostics.Stopwatch.GetTimestamp();
+			}
+
+			try
+			{
+				RefreshRegistrationIfNeeded();
+			}
+			finally
+			{
+				if (diagnosticsRenderStart != 0)
+					OrcaDiagnosticsCore.ReportRenderSample(diagnosticsInstanceId, diagnosticsRenderStart);
+			}
+		}
+
+		private void EnsureDiagnosticsRegistered()
+		{
+			if (diagnosticsRegistered)
+				return;
+
+			OrcaDiagnosticsCore.RegisterInstance(diagnosticsInstanceId, "OrcaProfileDataProvider", this);
+			OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", "Unknown", "SharedOrcaProfileDataProvider");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 0, "PrimaryChartSeries", "Chart", "Primary bars");
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 1, "Tick 1 Last", "Component", "Shared provider order-flow publishing");
+			diagnosticsRegistered = true;
+		}
+
+		private void ReportDiagnosticsState()
+		{
+			EnsureDiagnosticsRegistered();
+			OrcaDiagnosticsCore.ReportState(diagnosticsInstanceId, State.ToString());
+		}
+
+		private DateTime GetDiagnosticsEventTime()
+		{
+			try
+			{
+				if (Times != null && CurrentBars != null && BarsInProgress >= 0 && BarsInProgress < Times.Length && BarsInProgress < CurrentBars.Length && CurrentBars[BarsInProgress] >= 0)
+					return Times[BarsInProgress][0];
+			}
+			catch { }
+
+			try
+			{
+				if (CurrentBar >= 0)
+					return Time[0];
+			}
+			catch { }
+
+			return DateTime.MinValue;
 		}
 
 		private void StartRegistrationRefreshTimer()
@@ -209,6 +305,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					LastUpdatedUtcProvider = () => sourceLastUpdatedUtc,
 					BucketSecondsProvider = () => Math.Max(0, OrderFlowBucketSeconds)
 				});
+				if (OrcaDiagnosticsCore.IsEnabled)
+					OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", "order-flow registered " + instrumentKey);
 				if (announce || !registrationAnnounced)
 				{
 					Print("[" + DateTime.Now.ToString("HH:mm:ss") + "] OrcaProfileDataProvider: registered order-flow source for " + instrumentKey + " bucketSeconds=" + Math.Max(0, OrderFlowBucketSeconds) + " sessionsToKeep=" + TradingSessionsToKeep);
@@ -248,6 +346,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RevisionProvider = () => dataRevision,
 				LastUpdatedUtcProvider = () => sourceLastUpdatedUtc
 			});
+			if (OrcaDiagnosticsCore.IsEnabled)
+				OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedChartCache", "chart profile registered " + key);
 		}
 
 		private void EnsureBarMaps(int primaryBarIndex)
@@ -306,6 +406,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			TryAutoSaveOrderFlowCache();
+			if (OrcaDiagnosticsCore.IsEnabled)
+				OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, tickTime, null);
 		}
 
 		private long ClassifySignedVolume(double price, long volume, out bool usedBidAsk, out bool usedFallback)
@@ -574,6 +676,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				dataRevision++;
 				sourceLastUpdatedUtc = DateTime.UtcNow;
 				orderFlowCacheDirty = false;
+				if (OrcaDiagnosticsCore.IsEnabled)
+					OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", "persistent cache loaded");
 			}
 			catch (Exception ex)
 			{
@@ -636,6 +740,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				orderFlowCacheDirty = false;
 				lastOrderFlowSaveUtc = DateTime.UtcNow;
+				if (OrcaDiagnosticsCore.IsEnabled)
+					OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", "persistent cache saved");
 			}
 			catch (Exception ex)
 			{

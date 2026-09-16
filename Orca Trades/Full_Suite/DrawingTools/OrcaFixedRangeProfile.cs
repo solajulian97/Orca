@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Xml.Serialization;
@@ -44,6 +45,13 @@ namespace NinjaTrader.NinjaScript
 		EstimatedFromBars
 	}
 
+	public enum OrcaFixedRangeProfileDataSourcePreference
+	{
+		ChartLocalOnly,
+		ChartLocalThenMaster,
+		MasterThenChartLocal
+	}
+
 	public enum OrcaFixedRangeProfilePlacement
 	{
 		InsideSelectedBox,
@@ -64,6 +72,23 @@ namespace NinjaTrader.NinjaScript
 		Dash,
 		Dot,
 		DashDot
+	}
+
+	public enum OrcaFixedRangeStatisticsPosition
+	{
+		TopLeft,
+		TopRight,
+		BottomLeft,
+		BottomRight
+	}
+
+	public enum OrcaFixedRangeFontWeight
+	{
+		Light,
+		Normal,
+		Medium,
+		SemiBold,
+		Bold
 	}
 }
 
@@ -109,6 +134,13 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private string noDataLabel = string.Empty;
 		private string totalVolumeLabel = string.Empty;
 		private string dataSourceLabel = string.Empty;
+		private string statisticsLabel = string.Empty;
+		private long statisticsTotalVolume;
+		private long statisticsTotalDelta;
+		private long statisticsFinishDelta;
+		private double statisticsDeltaPercent;
+		private double statisticsPointRange;
+		private TimeSpan statisticsDuration;
 
 		private DateTime cachedStartTime = DateTime.MinValue;
 		private DateTime cachedEndTime = DateTime.MinValue;
@@ -138,6 +170,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private OrcaFixedRangeAggregationMode cachedAggregationMode = (OrcaFixedRangeAggregationMode)(-1);
 		private OrcaFixedRangeAggregationMode cachedDeltaAggregationMode = (OrcaFixedRangeAggregationMode)(-1);
 		private OrcaFixedRangeProfileDataMode cachedProfileDataMode = (OrcaFixedRangeProfileDataMode)(-1);
+		private OrcaFixedRangeProfileDataSourcePreference cachedDataSourcePreference = (OrcaFixedRangeProfileDataSourcePreference)(-1);
 		private bool cachedAllowEstimatedChartFallback;
 
 		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
@@ -155,20 +188,31 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private SharpDX.Direct2D1.SolidColorBrush deltaNegativeLabelBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush textBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush boxFillBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush statisticsTextBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush statisticsBackgroundBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush trendLineBrushDx;
 		private StrokeStyle vaLineStrokeDx;
+		private StrokeStyle trendLineStrokeDx;
 		private SharpDX.Direct2D1.SolidColorBrush[] upGradientBrushes;
 		private SharpDX.Direct2D1.SolidColorBrush[] downGradientBrushes;
 		private SharpDX.Direct2D1.SolidColorBrush[] vaGradientBrushes;
 		private TextFormat textFormatDx;
 		private TextFormat volumeLabelTextFormatDx;
 		private TextFormat deltaLabelTextFormatDx;
+		private TextFormat statisticsTextFormatDx;
 		private int lastBuiltGradientSteps = -1;
 		private float lastBuiltMinBrightness = -1f;
 		private int lastBuiltProfileOpacity = -1;
 		private int lastBuiltDeltaIntensitySteps = -1;
 		private int lastBuiltDeltaIntensityProfileOpacity = -1;
 		private int lastBuiltBoxFillOpacity = -1;
+		private int lastBuiltStatisticsBackgroundOpacity = -1;
+		private int lastBuiltTrendLineOpacity = -1;
+		private float lastBuiltStatisticsFontSize = -1f;
+		private string lastBuiltStatisticsFontFamily = string.Empty;
+		private OrcaFixedRangeFontWeight lastBuiltStatisticsFontWeight = (OrcaFixedRangeFontWeight)(-1);
 		private OrcaFixedRangeVALineStyle lastBuiltVALineStyle = (OrcaFixedRangeVALineStyle)(-1);
+		private OrcaFixedRangeVALineStyle lastBuiltTrendLineStyle = (OrcaFixedRangeVALineStyle)(-1);
 		private string lastBrushSignature = string.Empty;
 
 		public override object Icon
@@ -442,6 +486,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			RenderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
 			EnsureDxResources();
 			DrawSelectionBox(chartControl, boxRect);
+			DrawTrendLine(chartControl, chartScale);
 
 			if (IsInHitTest || DrawingState == DrawingState.Building)
 				return;
@@ -462,7 +507,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (referenceTrack.IsVisible && profileResult != null && profileResult.HasProfile)
 				DrawReferenceLines(chartScale, chartPanel, referenceTrack);
 
-			DrawTotalVolumeLabel(boxRect, volumeTrack, deltaTrack);
+			DrawStatisticsBox(boxRect);
+			if (!ShowProfileStatistics)
+				DrawTotalVolumeLabel(boxRect, volumeTrack, deltaTrack);
 			DrawDataSourceLabel(boxRect, volumeTrack, deltaTrack);
 			DrawNoDataLabel(boxRect);
 		}
@@ -479,6 +526,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				EndAnchor = new ChartAnchor { DisplayName = "End", IsEditing = true, DrawingTool = this };
 
 				ProfileDataMode = OrcaFixedRangeProfileDataMode.TrueVolumeAtPrice;
+				DataSourcePreference = OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly;
 				AllowEstimatedChartFallback = true;
 				ShowDataSourceLabel = true;
 				RowCount = 100;
@@ -502,6 +550,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				DeltaSide = OrcaFixedRangeProfileSide.Left;
 				ProfilePlacement = OrcaFixedRangeProfilePlacement.InsideSelectedBox;
 				MaxProfileWidthPx = 160;
+				VolumeProfileWidthPx = 100;
+				DeltaProfileWidthPx = 60;
 				VolumeProfileBarSpacingPx = 0;
 				DeltaProfileBarSpacingPx = 1;
 				ShowVolumeLabels = false;
@@ -513,6 +563,25 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				ShowVAH = true;
 				ShowVAL = true;
 				ShowTotalVolume = true;
+				ShowProfileStatistics = true;
+				ShowTotalDelta = true;
+				ShowFinishDelta = true;
+				ShowDeltaPercent = true;
+				ShowPointRange = true;
+				ShowDuration = true;
+				StatisticsPosition = OrcaFixedRangeStatisticsPosition.TopLeft;
+				StatisticsFontFamily = "Segoe UI";
+				StatisticsFontWeight = OrcaFixedRangeFontWeight.Bold;
+				StatisticsFontSize = 11f;
+				StatisticsBackgroundOpacity = 70;
+				StatisticsCornerRadius = 6f;
+				StatisticsTextColor = WpfBrushes.WhiteSmoke;
+				StatisticsBackgroundColor = WpfBrushes.Black;
+				ShowTrendLine = true;
+				TrendLineStyle = OrcaFixedRangeVALineStyle.Solid;
+				TrendLineThickness = 1.5f;
+				TrendLineOpacity = 80;
+				TrendLineColor = WpfBrushes.DodgerBlue;
 				DeltaLabelFontSize = 10f;
 				VolumeLabelFontSize = 10f;
 				VALineThickness = 1.5f;
@@ -651,6 +720,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			{
 				profileResult.Clear();
 				deltaResult.Clear();
+				ClearStatistics();
 				noDataLabel = "No chart bars";
 				return;
 			}
@@ -664,6 +734,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			{
 				profileResult.Clear();
 				deltaResult.Clear();
+				ClearStatistics();
 				noDataLabel = "Range too small";
 				return;
 			}
@@ -674,6 +745,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			{
 				profileResult.Clear();
 				deltaResult.Clear();
+				ClearStatistics();
 				noDataLabel = "No loaded bars in range";
 				return;
 			}
@@ -695,16 +767,34 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			if (ProfileDataMode == OrcaFixedRangeProfileDataMode.TrueVolumeAtPrice)
 			{
-				int sharedBucketSeconds;
-				string sharedSourceName;
-				bool gotSharedSnapshot = OrcaProfileDataCache.TrySnapshotOrderFlowPriceMaps(instrumentKey, startTime, endTime, out trueDataSnapshot, out sharedBucketSeconds, out sharedSourceName);
-				if (gotSharedSnapshot)
+				int sharedBucketSeconds = -1;
+				string sharedSourceName = string.Empty;
+				bool tryChartFirst = DataSourcePreference != OrcaFixedRangeProfileDataSourcePreference.MasterThenChartLocal;
+				bool tryMaster = DataSourcePreference != OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly;
+
+				if (tryChartFirst)
 				{
-					effectiveDataKey = instrumentKey + "|orderflow|" + (sharedSourceName ?? string.Empty) + "|bucket0";
-					dataSourceLabel = "Source: master tick";
-					useTrueProfileData = true;
+					string matchedDataKey;
+					if (TrySnapshotChartProfile(chartDataKey, dataKey, firstBar, lastBar, out trueDataSnapshot, out matchedDataKey))
+					{
+						effectiveDataKey = matchedDataKey + "|chart|" + (trueDataSnapshot != null && trueDataSnapshot.SourceName != null ? trueDataSnapshot.SourceName : string.Empty);
+						dataSourceLabel = BuildChartTrueDataLabel(trueDataSnapshot);
+						useTrueProfileData = true;
+					}
 				}
-				else
+
+				if (!useTrueProfileData && tryMaster)
+				{
+					bool gotSharedSnapshot = OrcaProfileDataCache.TrySnapshotOrderFlowPriceMaps(instrumentKey, startTime, endTime, out trueDataSnapshot, out sharedBucketSeconds, out sharedSourceName);
+					if (gotSharedSnapshot)
+					{
+						effectiveDataKey = instrumentKey + "|orderflow|" + (sharedSourceName ?? string.Empty) + "|bucket0";
+						dataSourceLabel = "Source: master tick";
+						useTrueProfileData = true;
+					}
+				}
+
+				if (!useTrueProfileData && !tryChartFirst)
 				{
 					string matchedDataKey;
 					if (TrySnapshotChartProfile(chartDataKey, dataKey, firstBar, lastBar, out trueDataSnapshot, out matchedDataKey))
@@ -727,8 +817,11 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 					{
 						profileResult.Clear();
 						deltaResult.Clear();
+						ClearStatistics();
 						dataSourceLabel = string.Empty;
-						if (sharedBucketSeconds > 0)
+						if (DataSourcePreference == OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly)
+							noDataLabel = "No local Tick Replay cache";
+						else if (sharedBucketSeconds > 0)
 							noDataLabel = "Set master provider bucket to 0";
 						else if (OrcaProfileDataCache.HasOrderFlowSource(instrumentKey))
 							noDataLabel = "Waiting for master provider data";
@@ -764,6 +857,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			}
 
 			totalVolumeLabel = volumeOk ? "Vol " + FormatVolume(profileResult.TotalVolume) : string.Empty;
+			UpdateStatistics(startTime, endTime, lowPrice, highPrice, volumeOk, useTrueProfileData, trueDataSnapshot, bars, firstBar, lastBar, instrumentKey);
 			if (!volumeOk && !deltaOk)
 				noDataLabel = "No volume in range";
 
@@ -795,6 +889,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			cachedAggregationMode = VolumeAggregationMode;
 			cachedDeltaAggregationMode = DeltaAggregationMode;
 			cachedProfileDataMode = ProfileDataMode;
+			cachedDataSourcePreference = DataSourcePreference;
 			cachedAllowEstimatedChartFallback = AllowEstimatedChartFallback;
 			profileDirty = false;
 		}
@@ -830,6 +925,10 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		{
 			if (ProfileDataMode == OrcaFixedRangeProfileDataMode.EstimatedFromBars)
 				return "Source: chart estimate";
+			if (DataSourcePreference == OrcaFixedRangeProfileDataSourcePreference.ChartLocalOnly)
+				return HasChartProfileSource(chartDataKey, dataKey)
+					? "Source: chart estimate (waiting local cache)"
+					: "Source: chart estimate (no local cache)";
 
 			if (sharedBucketSeconds > 0)
 				return "Source: chart estimate (master bucket != 0)";
@@ -858,14 +957,18 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private string BuildChartTrueDataLabel(OrcaProfileDataSnapshot snapshot)
 		{
 			if (snapshot == null || string.IsNullOrEmpty(snapshot.SourceName))
-				return "Source: chart true VAP";
+				return "Source: local chart VAP";
 
+			if (snapshot.SourceName.IndexOf("FixedRangeProfileDataCache", StringComparison.OrdinalIgnoreCase) >= 0)
+				return snapshot.SourceName.IndexOf("SecondaryTick", StringComparison.OrdinalIgnoreCase) >= 0
+					? "Source: local secondary tick cache"
+					: "Source: local Tick Replay cache";
 			if (snapshot.SourceName.IndexOf("OrcaPrints", StringComparison.OrdinalIgnoreCase) >= 0)
 				return "Source: chart live prints";
 			if (snapshot.SourceName.IndexOf("Candle", StringComparison.OrdinalIgnoreCase) >= 0)
-				return "Source: chart candle VAP";
+				return "Source: local candle VAP";
 
-			return "Source: chart true VAP";
+			return "Source: local chart VAP";
 		}
 
 		private bool NeedsProfileRebuild(DateTime startTime, DateTime endTime, double lowPrice, double highPrice, int firstBar, int lastBar, int barsCount, DateTime lastRangeBarTime, double lastRangeBarVolume, string dataKey, int trueDataRevision, double tickSize, int resolvedTicksPerRow, int resolvedDeltaTicksPerRow)
@@ -893,6 +996,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (Math.Abs(cachedValueAreaPercent - ValueAreaPercent) > PriceEpsilon || Math.Abs(cachedDynamicAggregationMultiplier - DynamicAggregationMultiplier) > PriceEpsilon || Math.Abs(cachedDeltaDynamicAggregationMultiplier - DeltaDynamicAggregationMultiplier) > PriceEpsilon)
 				return true;
 			if (cachedAggregationMode != VolumeAggregationMode || cachedDeltaAggregationMode != DeltaAggregationMode || cachedProfileDataMode != ProfileDataMode)
+				return true;
+			if (cachedDataSourcePreference != DataSourcePreference)
 				return true;
 			if (cachedAllowEstimatedChartFallback != AllowEstimatedChartFallback)
 				return true;
@@ -981,30 +1086,40 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			float panelLeft = chartPanel.X;
 			float panelRight = chartPanel.X + chartPanel.W;
-			float bandLeft;
-			float bandRight;
-			float requestedWidth = Math.Max(10f, MaxProfileWidthPx);
+			float volumeWidth = ResolveTrackWidth(VolumeProfileWidthPx);
+			float deltaWidth = ResolveTrackWidth(DeltaProfileWidthPx);
 
 			if (useArrangement && ProfilePlacement == OrcaFixedRangeProfilePlacement.InsideSelectedBox && ShowVolumeProfile && ShowDeltaProfile)
 			{
-				AssignInsideEdgeArrangementTracks(boxRect, requestedWidth, volumeSide, deltaSide, ref volumeTrack, ref deltaTrack);
+				AssignInsideEdgeArrangementTracks(boxRect, volumeWidth, deltaWidth, volumeSide, deltaSide, ref volumeTrack, ref deltaTrack);
 				return;
 			}
+
+			float bandLeft;
+			float bandRight;
+			float requestedBandWidth;
+			if (ShowVolumeProfile && ShowDeltaProfile)
+				requestedBandWidth = volumeWidth + TrackGapPx + deltaWidth;
+			else if (ShowVolumeProfile)
+				requestedBandWidth = volumeWidth;
+			else
+				requestedBandWidth = deltaWidth;
+			requestedBandWidth = Math.Max(10f, requestedBandWidth);
 
 			if (ProfilePlacement == OrcaFixedRangeProfilePlacement.OutsideRightEdge)
 			{
 				bandLeft = boxRect.Right + OutsideProfileGapPx;
-				bandRight = Math.Min(panelRight, bandLeft + requestedWidth);
+				bandRight = Math.Min(panelRight, bandLeft + requestedBandWidth);
 			}
 			else if (ProfilePlacement == OrcaFixedRangeProfilePlacement.OutsideLeftEdge)
 			{
 				bandRight = boxRect.Left - OutsideProfileGapPx;
-				bandLeft = Math.Max(panelLeft, bandRight - requestedWidth);
+				bandLeft = Math.Max(panelLeft, bandRight - requestedBandWidth);
 			}
 			else
 			{
 				float innerWidth = Math.Max(1f, boxRect.Width - (BoxPaddingPx * 2f));
-				float bandWidth = Math.Min(requestedWidth, innerWidth);
+				float bandWidth = Math.Min(requestedBandWidth, innerWidth);
 				bandLeft = boxRect.Left + BoxPaddingPx;
 				bandRight = bandLeft + bandWidth;
 				if (volumeSide == OrcaFixedRangeProfileSide.Right || deltaSide == OrcaFixedRangeProfileSide.Right)
@@ -1025,36 +1140,92 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			{
 				if (volumeSide != deltaSide)
 				{
-					float mid = bandLeft + ((bandRight - bandLeft) * 0.5f);
+					float available = Math.Max(1f, bandRight - bandLeft - TrackGapPx);
+					float scaledVolume = volumeWidth;
+					float scaledDelta = deltaWidth;
+					float needed = scaledVolume + scaledDelta;
+					if (needed > available && needed > 0.1f)
+					{
+						float scale = available / needed;
+						scaledVolume *= scale;
+						scaledDelta *= scale;
+					}
+
+					float mid = volumeSide == OrcaFixedRangeProfileSide.Left
+						? bandLeft + scaledVolume + (TrackGapPx * 0.5f)
+						: bandRight - scaledVolume - (TrackGapPx * 0.5f);
 					AssignSideTrack(ref volumeTrack, volumeSide, bandLeft, mid - (TrackGapPx * 0.5f), mid + (TrackGapPx * 0.5f), bandRight, useArrangement);
 					AssignSideTrack(ref deltaTrack, deltaSide, bandLeft, mid - (TrackGapPx * 0.5f), mid + (TrackGapPx * 0.5f), bandRight, useArrangement);
+
+					// Clamp each track to its requested width when the band is wider than needed.
+					ClampTrackWidth(ref volumeTrack, volumeSide, scaledVolume);
+					ClampTrackWidth(ref deltaTrack, deltaSide, scaledDelta);
 				}
 				else
 				{
-					float mid = bandLeft + ((bandRight - bandLeft) * 0.5f);
+					float available = Math.Max(1f, bandRight - bandLeft - TrackGapPx);
+					float scaledVolume = volumeWidth;
+					float scaledDelta = deltaWidth;
+					float needed = scaledVolume + scaledDelta;
+					if (needed > available && needed > 0.1f)
+					{
+						float scale = available / needed;
+						scaledVolume *= scale;
+						scaledDelta *= scale;
+					}
+
 					volumeTrack.Left = bandLeft;
-					volumeTrack.Right = Math.Max(bandLeft, mid - (TrackGapPx * 0.5f));
-					deltaTrack.Left = Math.Min(bandRight, mid + (TrackGapPx * 0.5f));
-					deltaTrack.Right = bandRight;
+					volumeTrack.Right = Math.Max(bandLeft, bandLeft + scaledVolume);
+					deltaTrack.Left = Math.Min(bandRight, volumeTrack.Right + TrackGapPx);
+					deltaTrack.Right = Math.Min(bandRight, deltaTrack.Left + scaledDelta);
 					volumeTrack.DrawFromRight = ShouldDrawFromRight(volumeSide, useArrangement);
 					deltaTrack.DrawFromRight = ShouldDrawFromRight(deltaSide, useArrangement);
 				}
 			}
 			else if (ShowVolumeProfile)
 			{
-				volumeTrack.Left = bandLeft;
-				volumeTrack.Right = bandRight;
-				volumeTrack.DrawFromRight = ShouldDrawFromRight(volumeSide, useArrangement);
+				AssignSingleTrack(ref volumeTrack, volumeSide, bandLeft, bandRight, volumeWidth, useArrangement);
 			}
 			else if (ShowDeltaProfile)
 			{
-				deltaTrack.Left = bandLeft;
-				deltaTrack.Right = bandRight;
-				deltaTrack.DrawFromRight = ShouldDrawFromRight(deltaSide, useArrangement);
+				AssignSingleTrack(ref deltaTrack, deltaSide, bandLeft, bandRight, deltaWidth, useArrangement);
 			}
 
 			volumeTrack.IsVisible = volumeTrack.IsVisible && volumeTrack.Right > volumeTrack.Left + 1f;
 			deltaTrack.IsVisible = deltaTrack.IsVisible && deltaTrack.Right > deltaTrack.Left + 1f;
+		}
+
+		private float ResolveTrackWidth(int requestedWidthPx)
+		{
+			int capped = Math.Min(Math.Max(10, requestedWidthPx), Math.Max(10, MaxProfileWidthPx));
+			return capped;
+		}
+
+		private void AssignSingleTrack(ref ProfileTrack track, OrcaFixedRangeProfileSide side, float bandLeft, float bandRight, float requestedWidth, bool pointInward)
+		{
+			float available = Math.Max(1f, bandRight - bandLeft);
+			float width = Math.Min(requestedWidth, available);
+			if (side == OrcaFixedRangeProfileSide.Right)
+			{
+				track.Right = bandRight;
+				track.Left = bandRight - width;
+			}
+			else
+			{
+				track.Left = bandLeft;
+				track.Right = bandLeft + width;
+			}
+			track.DrawFromRight = ShouldDrawFromRight(side, pointInward);
+		}
+
+		private static void ClampTrackWidth(ref ProfileTrack track, OrcaFixedRangeProfileSide side, float width)
+		{
+			float available = Math.Max(1f, track.Right - track.Left);
+			float clamped = Math.Min(Math.Max(1f, width), available);
+			if (side == OrcaFixedRangeProfileSide.Right)
+				track.Left = track.Right - clamped;
+			else
+				track.Right = track.Left + clamped;
 		}
 
 		private bool ResolveArrangementSides(out OrcaFixedRangeProfileSide volumeSide, out OrcaFixedRangeProfileSide deltaSide)
@@ -1079,15 +1250,27 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			return false;
 		}
 
-		private void AssignInsideEdgeArrangementTracks(DxRectangleF boxRect, float requestedWidth, OrcaFixedRangeProfileSide volumeSide, OrcaFixedRangeProfileSide deltaSide, ref ProfileTrack volumeTrack, ref ProfileTrack deltaTrack)
+		private void AssignInsideEdgeArrangementTracks(DxRectangleF boxRect, float volumeWidth, float deltaWidth, OrcaFixedRangeProfileSide volumeSide, OrcaFixedRangeProfileSide deltaSide, ref ProfileTrack volumeTrack, ref ProfileTrack deltaTrack)
 		{
 			float innerLeft = boxRect.Left + BoxPaddingPx;
 			float innerRight = boxRect.Right - BoxPaddingPx;
 			float innerWidth = Math.Max(1f, innerRight - innerLeft);
-			float trackWidth = Math.Min(Math.Max(4f, (requestedWidth - TrackGapPx) * 0.5f), Math.Max(1f, (innerWidth - TrackGapPx) * 0.5f));
+			float scaledVolume = Math.Min(Math.Max(4f, volumeWidth), Math.Max(1f, innerWidth - TrackGapPx));
+			float scaledDelta = Math.Min(Math.Max(4f, deltaWidth), Math.Max(1f, innerWidth - TrackGapPx));
+			if (volumeSide != deltaSide)
+			{
+				float available = Math.Max(1f, innerWidth - TrackGapPx);
+				float needed = scaledVolume + scaledDelta;
+				if (needed > available && needed > 0.1f)
+				{
+					float scale = available / needed;
+					scaledVolume *= scale;
+					scaledDelta *= scale;
+				}
+			}
 
-			AssignInsideEdgeTrack(ref volumeTrack, volumeSide, innerLeft, innerRight, trackWidth);
-			AssignInsideEdgeTrack(ref deltaTrack, deltaSide, innerLeft, innerRight, trackWidth);
+			AssignInsideEdgeTrack(ref volumeTrack, volumeSide, innerLeft, innerRight, scaledVolume);
+			AssignInsideEdgeTrack(ref deltaTrack, deltaSide, innerLeft, innerRight, scaledDelta);
 
 			volumeTrack.IsVisible = volumeTrack.IsVisible && volumeTrack.Right > volumeTrack.Left + 1f;
 			deltaTrack.IsVisible = deltaTrack.IsVisible && deltaTrack.Right > deltaTrack.Left + 1f;
@@ -1148,6 +1331,26 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				if (borderBrush != null)
 					RenderTarget.DrawRectangle(boxRect, borderBrush, BoxBorderStroke.Width, BoxBorderStroke.StrokeStyle);
 			}
+		}
+
+		private void DrawTrendLine(ChartControl chartControl, ChartScale chartScale)
+		{
+			if (!ShowTrendLine || IsInHitTest || chartControl == null || chartScale == null || StartAnchor == null || EndAnchor == null)
+				return;
+			if (trendLineBrushDx == null || trendLineStrokeDx == null)
+				return;
+			if (chartControl.ChartPanels == null || PanelIndex < 0 || PanelIndex >= chartControl.ChartPanels.Count)
+				return;
+
+			ChartPanel chartPanel = chartControl.ChartPanels[PanelIndex];
+			Point startPoint = StartAnchor.GetPoint(chartControl, chartPanel, chartScale);
+			Point endPoint = EndAnchor.GetPoint(chartControl, chartPanel, chartScale);
+			RenderTarget.DrawLine(
+				new DxVector2((float)startPoint.X, (float)startPoint.Y),
+				new DxVector2((float)endPoint.X, (float)endPoint.Y),
+				trendLineBrushDx,
+				Math.Max(0.5f, TrendLineThickness),
+				trendLineStrokeDx);
 		}
 
 		private void DrawVolumeRows(ChartScale chartScale, ChartPanel chartPanel, OrcaVolumeProfileResult result, ProfileTrack track)
@@ -1309,8 +1512,19 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (labelBrush == null)
 				return;
 
-			float textLeft = Math.Max(track.Left, drawX + 1f);
-			float textRight = Math.Min(track.Right, drawX + barWidth - 2f);
+			// Keep delta labels beside the fixed spine instead of following each bar endpoint.
+			float textLeft;
+			float textRight;
+			if (track.DrawFromRight)
+			{
+				textRight = track.Right - 1f;
+				textLeft = Math.Max(track.Left, textRight - labelWidth - 1f);
+			}
+			else
+			{
+				textLeft = track.Left + 1f;
+				textRight = Math.Min(track.Right, textLeft + labelWidth + 1f);
+			}
 			if (textRight <= textLeft)
 				return;
 
@@ -1326,6 +1540,356 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			float right = volumeTrack.IsVisible ? volumeTrack.Right : (deltaTrack.IsVisible ? deltaTrack.Right : boxRect.Right);
 			float width = Math.Max(60f, right - left);
 			RenderTarget.DrawText(totalVolumeLabel, textFormatDx, new DxRectangleF(left, boxRect.Top + 4f, width, 18f), textBrushDx);
+		}
+
+		private void DrawStatisticsBox(DxRectangleF boxRect)
+		{
+			if (!ShowProfileStatistics || statisticsTextFormatDx == null || statisticsTextBrushDx == null)
+				return;
+
+			string label = BuildStatisticsLabel();
+			if (string.IsNullOrEmpty(label))
+				return;
+
+			float fontSize = Math.Max(8f, StatisticsFontSize);
+			float paddingX = 8f;
+			float paddingY = 5f;
+			float maxWidth = Math.Max(80f, boxRect.Width - 8f);
+			float textWidth;
+			float textHeight;
+			using (TextLayout layout = new TextLayout(Core.Globals.DirectWriteFactory, label, statisticsTextFormatDx, maxWidth, 400f))
+			{
+				textWidth = Math.Max(fontSize, layout.Metrics.Width);
+				textHeight = Math.Max(fontSize, layout.Metrics.Height);
+			}
+
+			float boxWidth = textWidth + (paddingX * 2f);
+			float boxHeight = textHeight + (paddingY * 2f);
+			float left;
+			float top;
+			const float inset = 4f;
+			switch (StatisticsPosition)
+			{
+				case OrcaFixedRangeStatisticsPosition.TopRight:
+					left = boxRect.Right - boxWidth - inset;
+					top = boxRect.Top + inset;
+					break;
+				case OrcaFixedRangeStatisticsPosition.BottomLeft:
+					left = boxRect.Left + inset;
+					top = boxRect.Bottom - boxHeight - inset;
+					break;
+				case OrcaFixedRangeStatisticsPosition.BottomRight:
+					left = boxRect.Right - boxWidth - inset;
+					top = boxRect.Bottom - boxHeight - inset;
+					break;
+				default:
+					left = boxRect.Left + inset;
+					top = boxRect.Top + inset;
+					break;
+			}
+
+			DxRectangleF rect = new DxRectangleF(left, top, boxWidth, boxHeight);
+			float radius = Math.Max(0f, StatisticsCornerRadius);
+			if (statisticsBackgroundBrushDx != null && StatisticsBackgroundOpacity > 0)
+			{
+				RoundedRectangle rounded = new RoundedRectangle
+				{
+					Rect = rect,
+					RadiusX = radius,
+					RadiusY = radius
+				};
+				RenderTarget.FillRoundedRectangle(rounded, statisticsBackgroundBrushDx);
+			}
+
+			RenderTarget.DrawText(
+				label,
+				statisticsTextFormatDx,
+				new DxRectangleF(left + paddingX, top + paddingY, Math.Max(1f, textWidth + 1f), Math.Max(1f, textHeight + 1f)),
+				statisticsTextBrushDx);
+		}
+
+		private void ClearStatistics()
+		{
+			statisticsLabel = string.Empty;
+			statisticsTotalVolume = 0;
+			statisticsTotalDelta = 0;
+			statisticsFinishDelta = 0;
+			statisticsDeltaPercent = 0;
+			statisticsPointRange = 0;
+			statisticsDuration = TimeSpan.Zero;
+			totalVolumeLabel = string.Empty;
+		}
+
+		private void UpdateStatistics(DateTime startTime, DateTime endTime, double lowPrice, double highPrice, bool volumeOk, bool useTrueProfileData, OrcaProfileDataSnapshot snapshot, Bars bars, int firstBar, int lastBar, string instrumentKey)
+		{
+			statisticsPointRange = Math.Max(0.0, highPrice - lowPrice);
+			statisticsDuration = endTime >= startTime ? endTime - startTime : TimeSpan.Zero;
+
+			statisticsTotalVolume = volumeOk && profileResult != null ? (long)Math.Round(profileResult.TotalVolume) : 0;
+			statisticsTotalDelta = SumProfileDelta(profileResult);
+			// Prefer the delta profile total when present; both should match on true data, but this keeps D aligned with the visible delta histogram.
+			if (deltaResult != null && deltaResult.HasProfile)
+				statisticsTotalDelta = SumProfileDelta(deltaResult);
+
+			statisticsFinishDelta = ComputeFinishDelta(useTrueProfileData, snapshot, bars, firstBar, lastBar, lowPrice, highPrice, startTime, endTime, instrumentKey);
+			statisticsDeltaPercent = statisticsTotalVolume > 0 ? statisticsTotalDelta / (double)statisticsTotalVolume * 100.0 : 0.0;
+			statisticsLabel = BuildStatisticsLabel();
+		}
+
+		private static long SumProfileDelta(OrcaVolumeProfileResult result)
+		{
+			if (result == null || result.Rows == null || result.RowCount <= 0)
+				return 0;
+
+			double total = 0;
+			int rowLimit = Math.Min(result.RowCount, result.Rows.Length);
+			for (int index = 0; index < rowLimit; index++)
+				total += result.Rows[index].UpVolume - result.Rows[index].DownVolume;
+			return (long)Math.Round(total);
+		}
+
+		private long ComputeFinishDelta(bool useTrueProfileData, OrcaProfileDataSnapshot snapshot, Bars bars, int firstBar, int lastBar, double lowPrice, double highPrice, DateTime startTime, DateTime endTime, string instrumentKey)
+		{
+			long finishDelta;
+			if (TryComputeFinishDeltaFromPriceMaps(snapshot, lowPrice, highPrice, out finishDelta))
+				return finishDelta;
+
+			if (TryComputeFinishDeltaFromOrderFlowBuckets(instrumentKey, startTime, endTime, lowPrice, highPrice, out finishDelta))
+				return finishDelta;
+
+			if (!useTrueProfileData && TryComputeFinishDeltaFromEstimatedBars(bars, firstBar, lastBar, lowPrice, highPrice, out finishDelta))
+				return finishDelta;
+
+			// Without a chronological path, finish delta is unknown; do not invent it from the flat total.
+			return 0;
+		}
+
+		private static bool TryComputeFinishDeltaFromPriceMaps(OrcaProfileDataSnapshot snapshot, double lowPrice, double highPrice, out long finishDelta)
+		{
+			finishDelta = 0;
+			if (snapshot == null || snapshot.UpVolumeByBar == null || snapshot.DownVolumeByBar == null)
+				return false;
+
+			// Chart snapshots store maps in list order 0..Count-1 (BuildFixedRange uses the same).
+			// Do not use snapshot.FromIndex here — that field retains the original chart bar index.
+			int count = Math.Min(snapshot.UpVolumeByBar.Count, snapshot.DownVolumeByBar.Count);
+			if (count <= 0)
+				return false;
+
+			// A single collapsed map (master order-flow aggregate) has no chronology for finish delta.
+			if (count == 1)
+				return false;
+
+			long running = 0;
+			long maxCumulative = 0;
+			long minCumulative = 0;
+			bool sawAny = false;
+			for (int index = 0; index < count; index++)
+			{
+				long barDelta = SumSignedDeltaInPriceRange(GetMap(snapshot.UpVolumeByBar, index), GetMap(snapshot.DownVolumeByBar, index), lowPrice, highPrice);
+				if (barDelta == 0 && (GetMap(snapshot.VolumeByBar, index) == null || GetMap(snapshot.VolumeByBar, index).Count == 0))
+					continue;
+
+				running += barDelta;
+				if (!sawAny)
+				{
+					maxCumulative = running;
+					minCumulative = running;
+					sawAny = true;
+				}
+				else
+				{
+					if (running > maxCumulative) maxCumulative = running;
+					if (running < minCumulative) minCumulative = running;
+				}
+			}
+
+			if (!sawAny)
+				return false;
+
+			finishDelta = CalculateFinishDelta(running, maxCumulative, minCumulative);
+			return true;
+		}
+
+		private static bool TryComputeFinishDeltaFromOrderFlowBuckets(string instrumentKey, DateTime startTime, DateTime endTime, double lowPrice, double highPrice, out long finishDelta)
+		{
+			finishDelta = 0;
+			if (string.IsNullOrEmpty(instrumentKey))
+				return false;
+
+			OrcaOrderFlowDataSnapshot orderFlowSnapshot;
+			if (!OrcaProfileDataCache.TrySnapshotOrderFlow(instrumentKey, startTime, endTime, out orderFlowSnapshot)
+				|| orderFlowSnapshot == null
+				|| orderFlowSnapshot.Buckets == null
+				|| orderFlowSnapshot.Buckets.Count == 0)
+				return false;
+
+			long running = 0;
+			long maxCumulative = 0;
+			long minCumulative = 0;
+			bool sawAny = false;
+			for (int index = 0; index < orderFlowSnapshot.Buckets.Count; index++)
+			{
+				OrcaOrderFlowBucket bucket = orderFlowSnapshot.Buckets[index];
+				if (bucket == null || bucket.Volume <= 0 || double.IsNaN(bucket.Price) || double.IsInfinity(bucket.Price))
+					continue;
+				if (bucket.Price < lowPrice - PriceEpsilon || bucket.Price > highPrice + PriceEpsilon)
+					continue;
+
+				long askVolume = bucket.AskVolume;
+				long bidVolume = bucket.BidVolume;
+				long barDelta;
+				if (askVolume > 0 || bidVolume > 0)
+					barDelta = askVolume - bidVolume;
+				else
+					barDelta = bucket.Delta;
+
+				running += barDelta;
+				if (!sawAny)
+				{
+					maxCumulative = running;
+					minCumulative = running;
+					sawAny = true;
+				}
+				else
+				{
+					if (running > maxCumulative) maxCumulative = running;
+					if (running < minCumulative) minCumulative = running;
+				}
+			}
+
+			if (!sawAny)
+				return false;
+
+			finishDelta = CalculateFinishDelta(running, maxCumulative, minCumulative);
+			return true;
+		}
+
+		private static bool TryComputeFinishDeltaFromEstimatedBars(Bars bars, int firstBar, int lastBar, double lowPrice, double highPrice, out long finishDelta)
+		{
+			finishDelta = 0;
+			if (bars == null || firstBar < 0 || lastBar < firstBar || lastBar >= bars.Count)
+				return false;
+
+			long running = 0;
+			long maxCumulative = 0;
+			long minCumulative = 0;
+			bool sawAny = false;
+			for (int index = firstBar; index <= lastBar; index++)
+			{
+				double open = bars.GetOpen(index);
+				double close = bars.GetClose(index);
+				double high = bars.GetHigh(index);
+				double low = bars.GetLow(index);
+				if (high < lowPrice - PriceEpsilon || low > highPrice + PriceEpsilon)
+					continue;
+
+				long volume = (long)Math.Round((double)bars.GetVolume(index));
+				long barDelta = close >= open ? volume : -volume;
+				running += barDelta;
+				if (!sawAny)
+				{
+					maxCumulative = running;
+					minCumulative = running;
+					sawAny = true;
+				}
+				else
+				{
+					if (running > maxCumulative) maxCumulative = running;
+					if (running < minCumulative) minCumulative = running;
+				}
+			}
+
+			if (!sawAny)
+				return false;
+
+			finishDelta = CalculateFinishDelta(running, maxCumulative, minCumulative);
+			return true;
+		}
+
+		private static Dictionary<double, long> GetMap(IList<Dictionary<double, long>> maps, int index)
+		{
+			if (maps == null || index < 0 || index >= maps.Count)
+				return null;
+			return maps[index];
+		}
+
+		private static long SumSignedDeltaInPriceRange(Dictionary<double, long> upMap, Dictionary<double, long> downMap, double lowPrice, double highPrice)
+		{
+			long delta = 0;
+			if (upMap != null)
+			{
+				foreach (KeyValuePair<double, long> kvp in upMap)
+				{
+					if (kvp.Key >= lowPrice - PriceEpsilon && kvp.Key <= highPrice + PriceEpsilon)
+						delta += kvp.Value;
+				}
+			}
+			if (downMap != null)
+			{
+				foreach (KeyValuePair<double, long> kvp in downMap)
+				{
+					if (kvp.Key >= lowPrice - PriceEpsilon && kvp.Key <= highPrice + PriceEpsilon)
+						delta -= kvp.Value;
+				}
+			}
+			return delta;
+		}
+
+		private static long CalculateFinishDelta(long currentDelta, long maxCumulativeDelta, long minCumulativeDelta)
+		{
+			return currentDelta - (currentDelta >= 0 ? maxCumulativeDelta : minCumulativeDelta);
+		}
+
+		private string BuildStatisticsLabel()
+		{
+			string text = string.Empty;
+			if (ShowTotalDelta)
+				text = AppendStatisticsToken(text, "D " + FormatSignedValue(statisticsTotalDelta));
+			if (ShowFinishDelta)
+				text = AppendStatisticsToken(text, "FD " + FormatSignedValue(statisticsFinishDelta));
+			if (ShowDeltaPercent)
+				text = AppendStatisticsToken(text, statisticsDeltaPercent.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture) + "%");
+			if (ShowTotalVolume)
+				text = AppendStatisticsToken(text, "V " + FormatCompactVolume(statisticsTotalVolume));
+			if (ShowPointRange)
+				text = AppendStatisticsToken(text, "Pts " + statisticsPointRange.ToString("0.##", CultureInfo.InvariantCulture));
+			if (ShowDuration)
+				text = AppendStatisticsToken(text, FormatDurationHms(statisticsDuration));
+			return text;
+		}
+
+		private static string AppendStatisticsToken(string text, string token)
+		{
+			return string.IsNullOrEmpty(text) ? token : text + " | " + token;
+		}
+
+		private static string FormatSignedValue(long value)
+		{
+			return value.ToString("+#;-#;0", CultureInfo.InvariantCulture);
+		}
+
+		private static string FormatCompactVolume(long volume)
+		{
+			long absoluteVolume = volume == long.MinValue ? long.MaxValue : Math.Abs(volume);
+			if (absoluteVolume >= 1000000)
+				return (volume / 1000000.0).ToString("0.0", CultureInfo.InvariantCulture) + "M";
+			if (absoluteVolume >= 1000)
+				return (volume / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + "K";
+			return volume.ToString(CultureInfo.InvariantCulture);
+		}
+
+		private static string FormatDurationHms(TimeSpan duration)
+		{
+			int totalSeconds = (int)Math.Max(0, Math.Round(Math.Abs(duration.TotalSeconds)));
+			int hours = totalSeconds / 3600;
+			int minutes = (totalSeconds % 3600) / 60;
+			int seconds = totalSeconds % 60;
+			if (hours > 0)
+				return hours.ToString(CultureInfo.InvariantCulture) + "h " + minutes.ToString(CultureInfo.InvariantCulture) + "m " + seconds.ToString(CultureInfo.InvariantCulture) + "s";
+			if (minutes > 0)
+				return minutes.ToString(CultureInfo.InvariantCulture) + "m " + seconds.ToString(CultureInfo.InvariantCulture) + "s";
+			return seconds.ToString(CultureInfo.InvariantCulture) + "s";
 		}
 
 		private void DrawNoDataLabel(DxRectangleF boxRect)
@@ -1358,7 +1922,11 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			string brushSignature = BuildBrushSignature();
 			int steps = Math.Max(2, GradientSteps);
-			if (brushSignature != lastBrushSignature || lastBuiltProfileOpacity != ProfileOpacity || lastBuiltBoxFillOpacity != BoxFillOpacity)
+			if (brushSignature != lastBrushSignature
+				|| lastBuiltProfileOpacity != ProfileOpacity
+				|| lastBuiltBoxFillOpacity != BoxFillOpacity
+				|| lastBuiltStatisticsBackgroundOpacity != StatisticsBackgroundOpacity
+				|| lastBuiltTrendLineOpacity != TrendLineOpacity)
 				DisposeDxResources();
 
 			float alpha = ProfileOpacity / 255f;
@@ -1374,12 +1942,22 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (deltaNegativeLabelBrushDx == null) deltaNegativeLabelBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(DeltaNegativeLabelColor, 1f));
 			if (textBrushDx == null) textBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(TextColor, 1f));
 			if (boxFillBrushDx == null) boxFillBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(BoxFillColor, BoxFillOpacity / 100f));
+			if (statisticsTextBrushDx == null) statisticsTextBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(StatisticsTextColor, 1f));
+			if (statisticsBackgroundBrushDx == null) statisticsBackgroundBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(StatisticsBackgroundColor, StatisticsBackgroundOpacity / 100f));
+			if (trendLineBrushDx == null) trendLineBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(TrendLineColor, TrendLineOpacity / 100f));
 
 			if (vaLineStrokeDx == null || lastBuiltVALineStyle != VALineStyle)
 			{
 				if (vaLineStrokeDx != null) vaLineStrokeDx.Dispose();
 				vaLineStrokeDx = new StrokeStyle(RenderTarget.Factory, new StrokeStyleProperties { DashStyle = ToDxDashStyle(VALineStyle) });
 				lastBuiltVALineStyle = VALineStyle;
+			}
+
+			if (trendLineStrokeDx == null || lastBuiltTrendLineStyle != TrendLineStyle)
+			{
+				if (trendLineStrokeDx != null) trendLineStrokeDx.Dispose();
+				trendLineStrokeDx = new StrokeStyle(RenderTarget.Factory, new StrokeStyleProperties { DashStyle = ToDxDashStyle(TrendLineStyle) });
+				lastBuiltTrendLineStyle = TrendLineStyle;
 			}
 
 			if (textFormatDx == null)
@@ -1398,8 +1976,30 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (deltaLabelTextFormatDx == null)
 			{
 				deltaLabelTextFormatDx = new TextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, (float)Clamp(DeltaLabelFontSize, 6.0, 30.0));
-				deltaLabelTextFormatDx.TextAlignment = SharpDX.DirectWrite.TextAlignment.Trailing;
+				deltaLabelTextFormatDx.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
 				deltaLabelTextFormatDx.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Center;
+			}
+
+			float statisticsFontSize = (float)Clamp(StatisticsFontSize, 8.0, 36.0);
+			string statisticsFontFamily = string.IsNullOrWhiteSpace(StatisticsFontFamily) ? "Segoe UI" : StatisticsFontFamily.Trim();
+			if (statisticsTextFormatDx == null
+				|| Math.Abs(lastBuiltStatisticsFontSize - statisticsFontSize) > 0.001f
+				|| !string.Equals(lastBuiltStatisticsFontFamily, statisticsFontFamily, StringComparison.OrdinalIgnoreCase)
+				|| lastBuiltStatisticsFontWeight != StatisticsFontWeight)
+			{
+				if (statisticsTextFormatDx != null) statisticsTextFormatDx.Dispose();
+				statisticsTextFormatDx = new TextFormat(
+					Core.Globals.DirectWriteFactory,
+					statisticsFontFamily,
+					ToDxFontWeight(StatisticsFontWeight),
+					SharpDX.DirectWrite.FontStyle.Normal,
+					statisticsFontSize);
+				statisticsTextFormatDx.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
+				statisticsTextFormatDx.ParagraphAlignment = SharpDX.DirectWrite.ParagraphAlignment.Near;
+				statisticsTextFormatDx.WordWrapping = SharpDX.DirectWrite.WordWrapping.Wrap;
+				lastBuiltStatisticsFontSize = statisticsFontSize;
+				lastBuiltStatisticsFontFamily = statisticsFontFamily;
+				lastBuiltStatisticsFontWeight = StatisticsFontWeight;
 			}
 
 			if (UseGradient && (upGradientBrushes == null || downGradientBrushes == null || vaGradientBrushes == null || lastBuiltGradientSteps != steps || Math.Abs(lastBuiltMinBrightness - MinBrightness) > 0.0001f))
@@ -1432,6 +2032,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			lastBuiltProfileOpacity = ProfileOpacity;
 			lastBuiltBoxFillOpacity = BoxFillOpacity;
+			lastBuiltStatisticsBackgroundOpacity = StatisticsBackgroundOpacity;
+			lastBuiltTrendLineOpacity = TrendLineOpacity;
 			lastBrushSignature = brushSignature;
 			dxResourceRenderTarget = currentTarget;
 		}
@@ -1452,20 +2054,31 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (deltaNegativeLabelBrushDx != null) { deltaNegativeLabelBrushDx.Dispose(); deltaNegativeLabelBrushDx = null; }
 			if (textBrushDx != null) { textBrushDx.Dispose(); textBrushDx = null; }
 			if (boxFillBrushDx != null) { boxFillBrushDx.Dispose(); boxFillBrushDx = null; }
+			if (statisticsTextBrushDx != null) { statisticsTextBrushDx.Dispose(); statisticsTextBrushDx = null; }
+			if (statisticsBackgroundBrushDx != null) { statisticsBackgroundBrushDx.Dispose(); statisticsBackgroundBrushDx = null; }
+			if (trendLineBrushDx != null) { trendLineBrushDx.Dispose(); trendLineBrushDx = null; }
 			if (vaLineStrokeDx != null) { vaLineStrokeDx.Dispose(); vaLineStrokeDx = null; }
+			if (trendLineStrokeDx != null) { trendLineStrokeDx.Dispose(); trendLineStrokeDx = null; }
 			DisposePalette(ref upGradientBrushes);
 			DisposePalette(ref downGradientBrushes);
 			DisposePalette(ref vaGradientBrushes);
 			if (textFormatDx != null) { textFormatDx.Dispose(); textFormatDx = null; }
 			if (volumeLabelTextFormatDx != null) { volumeLabelTextFormatDx.Dispose(); volumeLabelTextFormatDx = null; }
 			if (deltaLabelTextFormatDx != null) { deltaLabelTextFormatDx.Dispose(); deltaLabelTextFormatDx = null; }
+			if (statisticsTextFormatDx != null) { statisticsTextFormatDx.Dispose(); statisticsTextFormatDx = null; }
 			lastBuiltGradientSteps = -1;
 			lastBuiltMinBrightness = -1f;
 			lastBuiltProfileOpacity = -1;
 			lastBuiltDeltaIntensitySteps = -1;
 			lastBuiltDeltaIntensityProfileOpacity = -1;
 			lastBuiltBoxFillOpacity = -1;
+			lastBuiltStatisticsBackgroundOpacity = -1;
+			lastBuiltTrendLineOpacity = -1;
+			lastBuiltStatisticsFontSize = -1f;
+			lastBuiltStatisticsFontFamily = string.Empty;
+			lastBuiltStatisticsFontWeight = (OrcaFixedRangeFontWeight)(-1);
 			lastBuiltVALineStyle = (OrcaFixedRangeVALineStyle)(-1);
+			lastBuiltTrendLineStyle = (OrcaFixedRangeVALineStyle)(-1);
 			lastBrushSignature = string.Empty;
 			dxResourceRenderTarget = IntPtr.Zero;
 		}
@@ -1494,12 +2107,21 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				+ Serialize.BrushToString(DeltaPositiveLabelColor) + "|"
 				+ Serialize.BrushToString(DeltaNegativeLabelColor) + "|"
 				+ Serialize.BrushToString(TextColor) + "|"
+				+ Serialize.BrushToString(StatisticsTextColor) + "|"
+				+ Serialize.BrushToString(StatisticsBackgroundColor) + "|"
+				+ Serialize.BrushToString(TrendLineColor) + "|"
 				+ DeltaLabelFontSize.ToString("0.###") + "|"
 				+ VolumeLabelFontSize.ToString("0.###") + "|"
+				+ StatisticsFontSize.ToString("0.###") + "|"
+				+ (StatisticsFontFamily ?? string.Empty) + "|"
+				+ StatisticsFontWeight.ToString() + "|"
 				+ UseDeltaIntensityColoring.ToString() + "|"
 				+ DeltaIntensityMinOpacity.ToString("0.###") + "|"
 				+ ProfileOpacity.ToString() + "|"
-				+ BoxFillOpacity.ToString();
+				+ BoxFillOpacity.ToString() + "|"
+				+ StatisticsBackgroundOpacity.ToString() + "|"
+				+ TrendLineOpacity.ToString() + "|"
+				+ TrendLineStyle.ToString();
 		}
 
 		private DxColor4 ToDxColor(WpfBrush brush, float opacity)
@@ -1568,6 +2190,23 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			}
 		}
 
+		private static SharpDX.DirectWrite.FontWeight ToDxFontWeight(OrcaFixedRangeFontWeight weight)
+		{
+			switch (weight)
+			{
+				case OrcaFixedRangeFontWeight.Light:
+					return SharpDX.DirectWrite.FontWeight.Light;
+				case OrcaFixedRangeFontWeight.Medium:
+					return SharpDX.DirectWrite.FontWeight.Medium;
+				case OrcaFixedRangeFontWeight.SemiBold:
+					return SharpDX.DirectWrite.FontWeight.SemiBold;
+				case OrcaFixedRangeFontWeight.Bold:
+					return SharpDX.DirectWrite.FontWeight.Bold;
+				default:
+					return SharpDX.DirectWrite.FontWeight.Normal;
+			}
+		}
+
 		private string FormatVolume(double volume)
 		{
 			double absVolume = Math.Abs(volume);
@@ -1608,12 +2247,17 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		public OrcaFixedRangeProfileDataMode ProfileDataMode { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Fallback To Chart Estimate", Order = 2, GroupName = "1. Data",
+		[Display(Name = "True Data Source", Order = 2, GroupName = "1. Data",
+			Description = "Chart Local Only uses same-chart Tick Replay/local profile maps and never waits for a master provider. The other modes expose the master only as an explicit fallback.")]
+		public OrcaFixedRangeProfileDataSourcePreference DataSourcePreference { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Fallback To Chart Estimate", Order = 3, GroupName = "1. Data",
 			Description = "When true tick/provider data is unavailable, draw an estimated profile from the chart bars and label it as estimated.")]
 		public bool AllowEstimatedChartFallback { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Data Source Label", Order = 3, GroupName = "1. Data")]
+		[Display(Name = "Show Data Source Label", Order = 4, GroupName = "1. Data")]
 		public bool ShowDataSourceLabel { get; set; }
 
 		[NinjaScriptProperty]
@@ -1706,17 +2350,27 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 		[NinjaScriptProperty]
 		[Range(10, 600)]
-		[Display(Name = "Max Profile Width Px", Order = 7, GroupName = "2. Display")]
+		[Display(Name = "Max Profile Width Px", Description = "Hard cap applied to each of the volume and delta profile widths.", Order = 7, GroupName = "2. Display")]
 		public int MaxProfileWidthPx { get; set; }
 
 		[NinjaScriptProperty]
+		[Range(10, 600)]
+		[Display(Name = "Volume Profile Width Px", Order = 8, GroupName = "2. Display")]
+		public int VolumeProfileWidthPx { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(10, 600)]
+		[Display(Name = "Delta Profile Width Px", Order = 9, GroupName = "2. Display")]
+		public int DeltaProfileWidthPx { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(0, 10)]
-		[Display(Name = "Volume Profile Bar Spacing Px", Order = 8, GroupName = "2. Display")]
+		[Display(Name = "Volume Profile Bar Spacing Px", Order = 10, GroupName = "2. Display")]
 		public int VolumeProfileBarSpacingPx { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(0, 10)]
-		[Display(Name = "Delta Profile Bar Spacing Px", Order = 9, GroupName = "2. Display")]
+		[Display(Name = "Delta Profile Bar Spacing Px", Order = 11, GroupName = "2. Display")]
 		public int DeltaProfileBarSpacingPx { get; set; }
 
 		[Browsable(false)]
@@ -1731,16 +2385,62 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		}
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Volume Labels", Order = 10, GroupName = "2. Display")]
+		[Display(Name = "Show Volume Labels", Order = 12, GroupName = "2. Display")]
 		public bool ShowVolumeLabels { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Delta Labels", Order = 11, GroupName = "2. Display")]
+		[Display(Name = "Show Delta Labels", Order = 13, GroupName = "2. Display")]
 		public bool ShowDeltaLabels { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Total Volume", Order = 12, GroupName = "2. Display")]
+		[Display(Name = "Show Total Volume", Order = 14, GroupName = "2. Display")]
 		public bool ShowTotalVolume { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Profile Statistics", Description = "Shows the statistics box for the fixed range.", Order = 15, GroupName = "2. Display")]
+		public bool ShowProfileStatistics { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Total Delta", Order = 16, GroupName = "2. Display")]
+		public bool ShowTotalDelta { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Finish Delta", Order = 17, GroupName = "2. Display")]
+		public bool ShowFinishDelta { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Delta Percent", Order = 18, GroupName = "2. Display")]
+		public bool ShowDeltaPercent { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Point Range", Order = 19, GroupName = "2. Display")]
+		public bool ShowPointRange { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Duration", Order = 20, GroupName = "2. Display")]
+		public bool ShowDuration { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Statistics Position", Order = 21, GroupName = "2. Display")]
+		public OrcaFixedRangeStatisticsPosition StatisticsPosition { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Trend Line", Description = "Draws a line between the start and finish anchors so the range stays visible without the box border.", Order = 22, GroupName = "2. Display")]
+		public bool ShowTrendLine { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Trend Line Style", Order = 23, GroupName = "2. Display")]
+		public OrcaFixedRangeVALineStyle TrendLineStyle { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.5, 10.0)]
+		[Display(Name = "Trend Line Thickness", Order = 24, GroupName = "2. Display")]
+		public float TrendLineThickness { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Trend Line Opacity", Order = 25, GroupName = "2. Display")]
+		public int TrendLineOpacity { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Show POC", Order = 1, GroupName = "3. References")]
@@ -1812,6 +2512,29 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		[Range(6.0, 30.0)]
 		[Display(Name = "Delta Label Font Size", Order = 6, GroupName = "5. Style")]
 		public float DeltaLabelFontSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Statistics Font Family", Order = 7, GroupName = "5. Style")]
+		public string StatisticsFontFamily { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Statistics Font Weight", Order = 8, GroupName = "5. Style")]
+		public OrcaFixedRangeFontWeight StatisticsFontWeight { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(8.0, 36.0)]
+		[Display(Name = "Statistics Font Size", Order = 9, GroupName = "5. Style")]
+		public float StatisticsFontSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 100)]
+		[Display(Name = "Statistics Background Opacity", Order = 10, GroupName = "5. Style")]
+		public int StatisticsBackgroundOpacity { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.0, 24.0)]
+		[Display(Name = "Statistics Corner Radius", Order = 11, GroupName = "5. Style")]
+		public float StatisticsCornerRadius { get; set; }
 
 		[XmlIgnore]
 		[Display(Name = "Box Fill Color", Order = 1, GroupName = "6. Colors")]
@@ -1944,6 +2667,39 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		{
 			get { return Serialize.BrushToString(TextColor); }
 			set { TextColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "Statistics Text Color", Order = 15, GroupName = "6. Colors")]
+		public WpfBrush StatisticsTextColor { get; set; }
+
+		[Browsable(false)]
+		public string StatisticsTextColorSerialize
+		{
+			get { return Serialize.BrushToString(StatisticsTextColor); }
+			set { StatisticsTextColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "Statistics Background Color", Order = 16, GroupName = "6. Colors")]
+		public WpfBrush StatisticsBackgroundColor { get; set; }
+
+		[Browsable(false)]
+		public string StatisticsBackgroundColorSerialize
+		{
+			get { return Serialize.BrushToString(StatisticsBackgroundColor); }
+			set { StatisticsBackgroundColor = Serialize.StringToBrush(value); }
+		}
+
+		[XmlIgnore]
+		[Display(Name = "Trend Line Color", Order = 17, GroupName = "6. Colors")]
+		public WpfBrush TrendLineColor { get; set; }
+
+		[Browsable(false)]
+		public string TrendLineColorSerialize
+		{
+			get { return Serialize.BrushToString(TrendLineColor); }
+			set { TrendLineColor = Serialize.StringToBrush(value); }
 		}
 	}
 }

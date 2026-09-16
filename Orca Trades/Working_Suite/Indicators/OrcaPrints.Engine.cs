@@ -18,6 +18,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			printEvents = new List<PrintEvent>(2048);
 			clusterCooldowns = new Dictionary<string, DateTime>();
 			priceLevelAccumulators = new Dictionary<double, PriceLevelAccumulator>();
+			highDeltaWindowAccumulators = new Dictionary<long, HighDeltaWindowAccumulator>();
 			sharedProfileVolumeMaps = new List<Dictionary<double, long>>(4096);
 			sharedProfileUpVolumeMaps = new List<Dictionary<double, long>>(4096);
 			sharedProfileDownVolumeMaps = new List<Dictionary<double, long>>(4096);
@@ -48,6 +49,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (printEvents != null) printEvents.Clear();
 					if (clusterCooldowns != null) clusterCooldowns.Clear();
 					if (priceLevelAccumulators != null) priceLevelAccumulators.Clear();
+					if (highDeltaWindowAccumulators != null) highDeltaWindowAccumulators.Clear();
 					if (sharedProfileVolumeMaps != null) sharedProfileVolumeMaps.Clear();
 					if (sharedProfileUpVolumeMaps != null) sharedProfileUpVolumeMaps.Clear();
 					if (sharedProfileDownVolumeMaps != null) sharedProfileDownVolumeMaps.Clear();
@@ -65,6 +67,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			printEvents = null;
 			clusterCooldowns = null;
 			priceLevelAccumulators = null;
+			highDeltaWindowAccumulators = null;
 			sharedProfileVolumeMaps = null;
 			sharedProfileUpVolumeMaps = null;
 			sharedProfileDownVolumeMaps = null;
@@ -83,6 +86,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (printEvents != null) printEvents.Clear();
 				if (clusterCooldowns != null) clusterCooldowns.Clear();
 				if (priceLevelAccumulators != null) priceLevelAccumulators.Clear();
+				if (highDeltaWindowAccumulators != null) highDeltaWindowAccumulators.Clear();
 				currentBid = double.NaN;
 				currentAsk = double.NaN;
 				priceLevelAccumulatorBarIndex = -1;
@@ -98,6 +102,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (e == null)
 				return;
+			long diagnosticsWorkStart = 0;
+
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportMarketData(diagnosticsInstanceId, e.MarketDataType, e.Time == DateTime.MinValue ? GetDiagnosticsEventTime() : e.Time);
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+			}
+			try
+			{
 
 			if (e.MarketDataType == MarketDataType.Bid)
 			{
@@ -136,6 +150,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (side == AggressorSide.Unknown)
 				return;
+			if (IsInsideExcludedMocWindow(time))
+				return;
 
 			OrcaPrintTick tick = new OrcaPrintTick(time, e.Price, size, side);
 			bool includeInSingleAndCluster = size >= MinTradeSize;
@@ -152,6 +168,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			finally
 			{
 				localLock.ExitWriteLock();
+			}
+			}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.MarketData, -1, diagnosticsWorkStart);
 			}
 		}
 
@@ -183,6 +205,62 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			TrimStoredEvents();
+		}
+
+		private void InitializeOrcaPrintTimeZones()
+		{
+			try
+			{
+				orcaPrintChartTimeZone = NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo ?? TimeZoneInfo.Local;
+			}
+			catch
+			{
+				orcaPrintChartTimeZone = TimeZoneInfo.Local;
+			}
+
+			try
+			{
+				orcaPrintEasternTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+			}
+			catch
+			{
+				orcaPrintEasternTimeZone = TimeZoneInfo.Local;
+			}
+		}
+
+		private bool IsInsideExcludedMocWindow(DateTime chartTime)
+		{
+			if (!ExcludeMocPrints)
+				return false;
+
+			DateTime easternTime = ConvertOrcaPrintTimeToEastern(chartTime);
+			TimeSpan start = MocStartTimeEt;
+			TimeSpan end = MocEndTimeEt;
+			TimeSpan timeOfDay = easternTime.TimeOfDay;
+
+			if (start == end)
+				return false;
+			if (start < end)
+				return timeOfDay >= start && timeOfDay < end;
+
+			return timeOfDay >= start || timeOfDay < end;
+		}
+
+		private DateTime ConvertOrcaPrintTimeToEastern(DateTime chartTime)
+		{
+			TimeZoneInfo source = orcaPrintChartTimeZone ?? TimeZoneInfo.Local;
+			TimeZoneInfo destination = orcaPrintEasternTimeZone ?? TimeZoneInfo.Local;
+			if (string.Equals(source.Id, destination.Id, StringComparison.OrdinalIgnoreCase))
+				return DateTime.SpecifyKind(chartTime, DateTimeKind.Unspecified);
+
+			try
+			{
+				return TimeZoneInfo.ConvertTime(DateTime.SpecifyKind(chartTime, DateTimeKind.Unspecified), source, destination);
+			}
+			catch
+			{
+				return DateTime.SpecifyKind(chartTime, DateTimeKind.Unspecified);
+			}
 		}
 
 		private void RefreshSharedProfileRegistrationIfNeeded()
@@ -229,6 +307,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				LastUpdatedUtcProvider = () => sharedProfileLastUpdatedUtc,
 				CoverageProvider = () => sharedProfileCoverageBarCount
 			});
+
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedChartCache", "registered " + key);
+			}
 		}
 
 		private void ClearSharedProfileCache()
@@ -244,6 +328,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				sharedProfileRevision++;
 				sharedProfileLastUpdatedUtc = DateTime.UtcNow;
 			}
+
 		}
 
 		private void UpdateSharedProfileCache(DateTime tickTime, double price, long volume, AggressorSide side)
@@ -279,6 +364,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				sharedProfileRevision++;
 				sharedProfileLastUpdatedUtc = DateTime.UtcNow;
 			}
+
+			if (OrcaDiagnosticsCore.IsEnabled)
+				OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, tickTime, null);
 		}
 
 		private int GetSharedProfilePrimaryIndex(DateTime tickTime)
@@ -347,12 +435,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void UpdatePriceLevelAccumulation(OrcaPrintTick tick)
 		{
-			if (priceLevelAccumulators == null || CurrentBar < 0)
+			if (priceLevelAccumulators == null || highDeltaWindowAccumulators == null || CurrentBar < 0)
 				return;
 
 			if (priceLevelAccumulatorBarIndex != CurrentBar)
 			{
 				priceLevelAccumulators.Clear();
+				highDeltaWindowAccumulators.Clear();
 				priceLevelAccumulatorBarIndex = CurrentBar;
 			}
 
@@ -376,15 +465,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 			else if (tick.Side == AggressorSide.Sell)
 				accumulator.SellVolume += tick.Size;
 
+			UpdateVolumeDominancePriceLevel(accumulator);
+			if (UsesHighDeltaPriceLevels())
+				UpdateHighDeltaWindows(tick);
+		}
+
+		private bool UsesVolumeDominancePriceLevels()
+		{
+			return PriceLevelHighlightMode == NinjaTrader.NinjaScript.Indicators.PriceLevelHighlightMode.VolumeAndDominance
+				|| PriceLevelHighlightMode == NinjaTrader.NinjaScript.Indicators.PriceLevelHighlightMode.Either;
+		}
+
+		private bool UsesHighDeltaPriceLevels()
+		{
+			return PriceLevelHighlightMode == NinjaTrader.NinjaScript.Indicators.PriceLevelHighlightMode.HighDelta
+				|| PriceLevelHighlightMode == NinjaTrader.NinjaScript.Indicators.PriceLevelHighlightMode.Either;
+		}
+
+		private void UpdateVolumeDominancePriceLevel(PriceLevelAccumulator accumulator)
+		{
+			if (accumulator == null)
+				return;
+
 			bool passesVolume = accumulator.TotalVolume >= PriceLevelMinVolume;
 			bool passesDominance = !PriceLevelRequireMinDominance || GetPriceLevelDominantPercent(accumulator) >= PriceLevelMinDominancePercent;
-			if (!passesVolume || !passesDominance)
+			if (!UsesVolumeDominancePriceLevels() || !passesVolume || !passesDominance)
 			{
-				if (accumulator.Event != null)
-				{
-					RemovePrintEvent(accumulator.Event);
-					accumulator.Event = null;
-				}
+				RemovePriceLevelEvent(accumulator);
 				return;
 			}
 
@@ -395,6 +502,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			UpdatePriceLevelEvent(accumulator);
+		}
+
+		private void RemovePriceLevelEvent(PriceLevelAccumulator accumulator)
+		{
+			if (accumulator == null || accumulator.Event == null)
+				return;
+
+			RemovePrintEvent(accumulator.Event);
+			accumulator.Event = null;
 		}
 
 		private double GetPriceLevelDominantPercent(PriceLevelAccumulator accumulator)
@@ -415,11 +531,177 @@ namespace NinjaTrader.NinjaScript.Indicators
 			printEvent.EndTime = accumulator.EndTime;
 			printEvent.Time = accumulator.EndTime;
 			printEvent.Price = accumulator.Price;
+			printEvent.MinPrice = accumulator.Price;
+			printEvent.MaxPrice = accumulator.Price;
 			printEvent.Volume = accumulator.TotalVolume;
 			printEvent.BuyVolume = accumulator.BuyVolume;
 			printEvent.SellVolume = accumulator.SellVolume;
+			printEvent.Delta = accumulator.BuyVolume - accumulator.SellVolume;
 			printEvent.ChildCount = accumulator.ChildCount;
-			printEvent.Side = accumulator.BuyVolume >= accumulator.SellVolume ? AggressorSide.Buy : AggressorSide.Sell;
+			printEvent.WindowTicks = 1;
+			printEvent.IsHighDelta = false;
+			printEvent.Side = printEvent.Delta >= 0 ? AggressorSide.Buy : AggressorSide.Sell;
+		}
+
+		private void UpdateHighDeltaWindows(OrcaPrintTick tick)
+		{
+			if (TickSize <= 0 || highDeltaWindowAccumulators == null)
+				return;
+
+			int windowTicks = Math.Max(1, PriceLevelDeltaWindowTicks);
+			long tickIndex = GetPriceLevelTickIndex(tick.Price);
+			for (int offset = 0; offset < windowTicks; offset++)
+			{
+				long startTickIndex = tickIndex - offset;
+				HighDeltaWindowAccumulator window;
+				if (!highDeltaWindowAccumulators.TryGetValue(startTickIndex, out window) || window == null)
+				{
+					window = new HighDeltaWindowAccumulator
+					{
+						StartTime = tick.Time,
+						EndTime = tick.Time,
+						StartTickIndex = startTickIndex
+					};
+					highDeltaWindowAccumulators[startTickIndex] = window;
+				}
+
+				if (tick.Time < window.StartTime)
+					window.StartTime = tick.Time;
+				if (tick.Time > window.EndTime)
+					window.EndTime = tick.Time;
+				window.ChildCount++;
+				if (tick.Side == AggressorSide.Buy)
+					window.BuyVolume += tick.Size;
+				else if (tick.Side == AggressorSide.Sell)
+					window.SellVolume += tick.Size;
+			}
+
+			long reevaluateStart = tickIndex - (2L * (windowTicks - 1));
+			long reevaluateEnd = tickIndex + (windowTicks - 1);
+			for (long startTickIndex = reevaluateStart; startTickIndex <= reevaluateEnd; startTickIndex++)
+				RefreshHighDeltaWindowEvent(startTickIndex, windowTicks);
+		}
+
+		private void RefreshHighDeltaWindowEvent(long startTickIndex, int windowTicks)
+		{
+			HighDeltaWindowAccumulator window;
+			if (!highDeltaWindowAccumulators.TryGetValue(startTickIndex, out window) || window == null)
+				return;
+
+			if (!QualifiesAsHighDelta(window.Delta) || !IsStrongestOverlappingDeltaWindow(window, windowTicks))
+			{
+				RemoveHighDeltaWindowEvent(window);
+				return;
+			}
+
+			if (window.Event == null)
+			{
+				window.Event = new PriceLevelEvent();
+				AddPrintEvent(window.Event);
+			}
+
+			UpdateHighDeltaWindowEvent(window, windowTicks);
+		}
+
+		private bool QualifiesAsHighDelta(long delta)
+		{
+			long magnitude = GetAbsoluteDelta(delta);
+			if (magnitude < Math.Max(1L, PriceLevelMinDelta))
+				return false;
+
+			if (PriceLevelDeltaDirection == NinjaTrader.NinjaScript.Indicators.PriceLevelDeltaDirection.PositiveOnly)
+				return delta > 0;
+			if (PriceLevelDeltaDirection == NinjaTrader.NinjaScript.Indicators.PriceLevelDeltaDirection.NegativeOnly)
+				return delta < 0;
+			return delta != 0;
+		}
+
+		private bool IsStrongestOverlappingDeltaWindow(HighDeltaWindowAccumulator window, int windowTicks)
+		{
+			long magnitude = GetAbsoluteDelta(window.Delta);
+			long firstOverlappingStart = window.StartTickIndex - (windowTicks - 1);
+			long lastOverlappingStart = window.StartTickIndex + (windowTicks - 1);
+			for (long otherStart = firstOverlappingStart; otherStart <= lastOverlappingStart; otherStart++)
+			{
+				if (otherStart == window.StartTickIndex)
+					continue;
+
+				HighDeltaWindowAccumulator other;
+				if (!highDeltaWindowAccumulators.TryGetValue(otherStart, out other) || other == null || !QualifiesAsHighDelta(other.Delta))
+					continue;
+
+				long otherMagnitude = GetAbsoluteDelta(other.Delta);
+				if (otherMagnitude > magnitude || (otherMagnitude == magnitude && otherStart < window.StartTickIndex))
+					return false;
+			}
+
+			return true;
+		}
+
+		private void RemoveHighDeltaWindowEvent(HighDeltaWindowAccumulator window)
+		{
+			if (window == null || window.Event == null)
+				return;
+
+			RemovePrintEvent(window.Event);
+			window.Event = null;
+		}
+
+		private void UpdateHighDeltaWindowEvent(HighDeltaWindowAccumulator window, int windowTicks)
+		{
+			if (window == null || window.Event == null)
+				return;
+
+			PriceLevelEvent printEvent = window.Event;
+			printEvent.StartTime = window.StartTime;
+			printEvent.EndTime = window.EndTime;
+			printEvent.Time = window.EndTime;
+			printEvent.Price = GetHighDeltaRepresentativePrice(window, windowTicks);
+			printEvent.MinPrice = window.StartTickIndex * TickSize;
+			printEvent.MaxPrice = (window.StartTickIndex + windowTicks - 1) * TickSize;
+			printEvent.Volume = GetAbsoluteDelta(window.Delta);
+			printEvent.BuyVolume = window.BuyVolume;
+			printEvent.SellVolume = window.SellVolume;
+			printEvent.Delta = window.Delta;
+			printEvent.ChildCount = window.ChildCount;
+			printEvent.WindowTicks = windowTicks;
+			printEvent.IsHighDelta = true;
+			printEvent.Side = window.Delta > 0 ? AggressorSide.Buy : AggressorSide.Sell;
+		}
+
+		private double GetHighDeltaRepresentativePrice(HighDeltaWindowAccumulator window, int windowTicks)
+		{
+			long representativeTick = window.StartTickIndex;
+			long strongestContribution = 0;
+			bool positiveWindow = window.Delta > 0;
+
+			for (int offset = 0; offset < windowTicks; offset++)
+			{
+				long tickIndex = window.StartTickIndex + offset;
+				double price = tickIndex * TickSize;
+				PriceLevelAccumulator level;
+				if (!priceLevelAccumulators.TryGetValue(price, out level) || level == null)
+					continue;
+
+				long contribution = level.BuyVolume - level.SellVolume;
+				if ((positiveWindow && contribution > strongestContribution) || (!positiveWindow && contribution < strongestContribution))
+				{
+					strongestContribution = contribution;
+					representativeTick = tickIndex;
+				}
+			}
+
+			return representativeTick * TickSize;
+		}
+
+		private long GetPriceLevelTickIndex(double price)
+		{
+			return TickSize > 0 ? (long)Math.Round(price / TickSize) : (long)Math.Round(price * 100000000.0);
+		}
+
+		private long GetAbsoluteDelta(long delta)
+		{
+			return delta >= 0 ? delta : -delta;
 		}
 
 		private double NormalizePriceToTick(double price)
@@ -516,7 +798,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (IsClusterInCooldown(cluster))
 				return;
 
+			MarkMatchingSinglePrintsSuppressed(cluster);
 			AddPrintEvent(cluster);
+		}
+
+		private void MarkMatchingSinglePrintsSuppressed(ClusterEvent cluster)
+		{
+			if (cluster == null || printEvents == null || printEvents.Count == 0)
+				return;
+
+			double clusterPrice = NormalizePriceToTick(cluster.Price);
+			double priceTolerance = TickSize > 0 ? TickSize * 0.001 : 0.0000001;
+
+			for (int i = printEvents.Count - 1; i >= 0; i--)
+			{
+				PrintEvent candidate = printEvents[i];
+				if (candidate == null)
+					continue;
+				if (candidate.Time < cluster.Time)
+					break;
+				if (candidate.Time != cluster.Time || candidate.Kind != OrcaPrintEventKind.Single)
+					continue;
+
+				double candidatePrice = NormalizePriceToTick(candidate.Price);
+				if (Math.Abs(candidatePrice - clusterPrice) <= priceTolerance)
+					candidate.SuppressedByCluster = true;
+			}
 		}
 
 		private ClusterEvent BuildClusterEvent(int firstIndex, int lastIndex, AggressorSide dominantSide, long totalVolume, long buyVolume, long sellVolume, double minPrice, double maxPrice)

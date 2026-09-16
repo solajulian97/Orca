@@ -1,4 +1,4 @@
-#region Using declarations
+﻿#region Using declarations
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -45,9 +45,53 @@ namespace NinjaTrader.NinjaScript.Indicators
 		FullRange
 	}
 
-	public class OrcaCumulativeDelta : Indicator
+	public class OrcaCumulativeDelta : Indicator, IOrcaReplayParticipant
 	{
 		#region Private Fields
+		private sealed class ReplayDeltaBaseline
+		{
+			public int SelectionBarIndex;
+			public double RunningDelta;
+			public int ResetKey;
+			public double[] Open;
+			public double[] High;
+			public double[] Low;
+			public double[] Close;
+			public double[] Value;
+			public double[] MaxValue;
+			public double[] MinValue;
+			public bool[] HasData;
+		}
+
+		private struct ReplayDeltaBar
+		{
+			public double Open;
+			public double High;
+			public double Low;
+			public double Close;
+			public double Value;
+			public double MaxValue;
+			public double MinValue;
+			public bool HasData;
+		}
+
+		private struct BarDeltaRun
+		{
+			public int StartIndex;
+			public int EndIndex;
+			public int Count;
+			public double Value;
+			public double MaxValue;
+			public double MinValue;
+		}
+
+		private sealed class ReplayDeltaSnapshot
+		{
+			public ReplayDeltaBaseline Baseline;
+			public Dictionary<int, ReplayDeltaBar> Bars;
+			public int MaxIndex;
+		}
+
 		private double	lastBid;
 		private double	lastAsk;
 		private double	prevLast;
@@ -63,6 +107,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private List<double>	barDeltaValue;
 		private List<double>	barDeltaMaxValue;
 		private List<double>	barDeltaMinValue;
+		private List<double>	barDeltaBundledValue;
 		private List<bool>		barHasData;
 		private readonly object deltaDataSync = new object();
 		private DateTime lastRenderSkipUtc = DateTime.MinValue;
@@ -73,6 +118,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DateTime lastSharedBackfillAttemptUtc = DateTime.MinValue;
 		private DateTime lastSharedBackfillSuccessLogUtc = DateTime.MinValue;
 		private const int SharedProviderMaxRealtimeLagSeconds = 30;
+        private readonly string diagnosticsInstanceId = Guid.NewGuid().ToString("N");
+        private bool diagnosticsRegistered;
 
 		// SharpDX brushes
 		private SharpDX.Direct2D1.Brush	dxUpFillBrush;
@@ -83,6 +130,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SharpDX.Direct2D1.Brush	dxZeroBrush;
 		private SharpDX.Direct2D1.Brush	dxPriceLineBrush;
 		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
+		private readonly OrcaReplayTradeClassifier replayTradeClassifier = new OrcaReplayTradeClassifier();
+		private ReplayDeltaBaseline replayBaseline;
+		private Dictionary<int, ReplayDeltaBar> replayBars;
+		private volatile ReplayDeltaSnapshot replayDeltaSnapshot;
+		private double replayRunningDelta;
+		private int replayLastResetKey;
+		private int replayLastPrimaryBar;
+		private bool replayPaintPriceMarkersCaptured;
+		private bool replayPaintPriceMarkers;
+		private volatile bool sameSignBundleZoomActive;
 		#endregion
 
 		protected override void OnStateChange()
@@ -115,6 +172,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DeltaMode			= CumulativeDeltaMode.BidAsk;
 				DeltaDisplayMode	= CumulativeDeltaDisplayMode.Cumulative;
 				BarHistogramStyle	= BarDeltaHistogramStyle.Mirrored;
+				BundleSameSignBars	= false;
+				BundleOnlyWhenZoomedOut = false;
+				BundleAtBarSpacingPx = 6;
 				ShowBarDeltaWicks	= true;
 				BarDeltaGapPx		= 1;
 				ResetPeriod			= CumulativeDeltaResetPeriod.ETHDaily;
@@ -137,6 +197,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			else if (State == State.DataLoaded)
 			{
+                ReportDiagnosticsState();
 				barDeltaOpen	= new List<double>(4096);
 				barDeltaHigh	= new List<double>(4096);
 				barDeltaLow		= new List<double>(4096);
@@ -144,6 +205,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				barDeltaValue	= new List<double>(4096);
 				barDeltaMaxValue = new List<double>(4096);
 				barDeltaMinValue = new List<double>(4096);
+				barDeltaBundledValue = new List<double>(4096);
 				barHasData		= new List<bool>(4096);
 
 				lastBid			= double.NaN;
@@ -153,15 +215,100 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastPrimaryBarProcessed = -1;
 				lastResetKey	= int.MinValue;
 				lastDirection	= 0;
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+			}
+			else if (State == State.Historical || State == State.Transition || State == State.Realtime)
+			{
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+				ReportDiagnosticsState();
 			}
 			else if (State == State.Terminated)
 			{
+				if (ChartControl != null) OrcaReplayCore.UnregisterParticipant(ChartControl, this);
+				RestoreLiveState();
+				OrcaDiagnosticsCore.UnregisterInstance(diagnosticsInstanceId);
 				DisposeDxResources();
 			}
 		}
 
+
+        private void EnsureDiagnosticsRegistered()
+        {
+            if (diagnosticsRegistered)
+                return;
+
+            OrcaDiagnosticsCore.RegisterInstance(diagnosticsInstanceId, "OrcaCumulativeDelta", this);
+            ReportDiagnosticsSourceDeclaration("Unknown");
+            OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 0, "PrimaryChartSeries", "Chart", "Cumulative delta primary bars");
+            if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.Internal)
+                OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 1, "Tick 1 Last", "Hidden", "Internal cumulative-delta tick series");
+            diagnosticsRegistered = true;
+        }
+
+        private void ReportDiagnosticsState()
+        {
+            EnsureDiagnosticsRegistered();
+            OrcaDiagnosticsCore.ReportState(diagnosticsInstanceId, State.ToString());
+            ReportDiagnosticsSourceDeclaration(null);
+        }
+
+        private void ReportDiagnosticsSourceDeclaration(string sourceHealth)
+        {
+            string sourceMode;
+            string cacheProvider;
+            if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedProvider)
+            {
+                sourceMode = "SharedOrcaProfileDataProvider";
+                cacheProvider = "SharedOrcaProfileDataProvider";
+            }
+            else if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedHistoricalInternalRealtime)
+            {
+                sourceMode = "SharedHistoricalInternalRealtime";
+                cacheProvider = "SharedOrcaProfileDataProvider";
+            }
+            else
+            {
+                sourceMode = "HiddenSecondaryTickSeries";
+                cacheProvider = "LocalBarSeries";
+            }
+
+            OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, sourceMode, sourceHealth, cacheProvider);
+        }
+
+        private DateTime GetDiagnosticsEventTime()
+        {
+            try
+            {
+                if (Times != null && CurrentBars != null && BarsInProgress >= 0 && BarsInProgress < Times.Length && BarsInProgress < CurrentBars.Length && CurrentBars[BarsInProgress] >= 0)
+                    return Times[BarsInProgress][0];
+            }
+            catch { }
+
+            try
+            {
+                if (CurrentBar >= 0)
+                    return Time[0];
+            }
+            catch { }
+
+            return DateTime.MinValue;
+        }
+
 		protected override void OnMarketData(MarketDataEventArgs e)
 		{
+            if (e == null)
+                return;
+            long diagnosticsWorkStart = 0;
+
+            if (OrcaDiagnosticsCore.IsEnabled)
+            {
+                EnsureDiagnosticsRegistered();
+                long diagnosticsSequence = OrcaDiagnosticsCore.ReportMarketData(diagnosticsInstanceId, e.MarketDataType, e.Time == DateTime.MinValue ? GetDiagnosticsEventTime() : e.Time);
+                diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+            }
+            try
+            {
+
 			if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedProvider)
 				return;
 
@@ -190,6 +337,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 						ApplySignedDeltaToBar(e.Time, signed);
 				}
 			}
+            }
+            finally
+            {
+                if (diagnosticsWorkStart > 0)
+                    OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.MarketData, -1, diagnosticsWorkStart);
+            }
 		}
 
 		private void EnsureBarLists(int idx)
@@ -203,12 +356,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 				barDeltaValue.Add(0);
 				barDeltaMaxValue.Add(0);
 				barDeltaMinValue.Add(0);
+				barDeltaBundledValue.Add(0);
 				barHasData.Add(false);
 			}
 		}
 
 		protected override void OnBarUpdate()
 		{
+            long diagnosticsWorkStart = 0;
+            int diagnosticsBarsInProgress = BarsInProgress;
+            if (OrcaDiagnosticsCore.IsEnabled)
+            {
+                EnsureDiagnosticsRegistered();
+                long diagnosticsSequence = OrcaDiagnosticsCore.ReportBarUpdate(diagnosticsInstanceId, BarsInProgress, GetDiagnosticsEventTime());
+                diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+            }
+            try
+            {
+
 			if (OrderFlowSourceMode == OrcaOrderFlowSourceMode.SharedProvider)
 			{
 				if (BarsInProgress == 0 && CurrentBar >= 0)
@@ -274,6 +439,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			EnsureBarLists(CurrentBar);
 
 			UpdateCurrentValuesFromArrays();
+            }
+            finally
+            {
+                if (diagnosticsWorkStart > 0)
+                    OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.BarUpdate, diagnosticsBarsInProgress, diagnosticsWorkStart);
+            }
 		}
 
 		private bool ShouldRefreshSharedHistorical()
@@ -302,11 +473,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar)
 				{
-					double value = barDeltaValue[CurrentBar];
+					bool bundleValues = BundleSameSignBars && (!BundleOnlyWhenZoomedOut || sameSignBundleZoomActive);
+					double value = bundleValues ? barDeltaBundledValue[CurrentBar] : barDeltaValue[CurrentBar];
+					double renderedValue = GetRenderedBarDeltaValue(value);
+					if (bundleValues)
+					{
+						Values[0][0] = renderedValue;
+						Values[1][0] = Math.Max(0, renderedValue);
+						Values[2][0] = BarHistogramStyle == BarDeltaHistogramStyle.SameFloor ? 0 : Math.Min(0, renderedValue);
+						return;
+					}
 					if (ShowBarDeltaWicks)
 					{
-						Values[0][0] = GetRenderedBarDeltaValue(CurrentBar);
-						Values[1][0] = Math.Max(GetRenderedBarDeltaValue(CurrentBar), barDeltaMaxValue[CurrentBar]);
+						Values[0][0] = renderedValue;
+						Values[1][0] = Math.Max(renderedValue, barDeltaMaxValue[CurrentBar]);
 						Values[2][0] = Math.Min(0, barDeltaMinValue[CurrentBar]);
 					}
 					else
@@ -414,6 +594,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (currentBarDelta < barDeltaMinValue[primaryIdx])
 					barDeltaMinValue[primaryIdx] = currentBarDelta;
 			}
+			UpdateBundledValueAt(primaryIdx);
+            OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, tradeTime, null);
 		}
 
 		private bool TryRefreshFromSharedProvider(bool force, bool allowRealtimeLag, bool clearOnUnavailable)
@@ -449,6 +631,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			RebuildFromOrderFlowSnapshot(snapshot);
+            OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", "loaded " + snapshot.SourceName + " revision=" + snapshot.Revision);
+            OrcaDiagnosticsCore.ReportModelUpdate(diagnosticsInstanceId, GetDiagnosticsEventTime(), null);
 			providerRevision = snapshot.Revision;
 			providerCurrentBar = CurrentBar;
 			providerDataActive = true;
@@ -492,6 +676,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			providerDataActive = false;
 			providerRevision = -1;
 			providerCurrentBar = -1;
+            ReportDiagnosticsSourceDeclaration("Unavailable");
+            OrcaDiagnosticsCore.ReportCacheStatus(diagnosticsInstanceId, "SharedOrcaProfileDataProvider", reason);
 			LogProviderWarning(reason);
 		}
 
@@ -619,6 +805,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			CarryForwardMissingCumulativeBars(CurrentBar);
+			RebuildBundledValues(CurrentBar);
 			runningDelta = providerRunningDelta;
 			lastResetKey = activeResetKey;
 			lastPrimaryBarProcessed = CurrentBar;
@@ -679,13 +866,215 @@ namespace NinjaTrader.NinjaScript.Indicators
 				barDeltaValue[index] = 0;
 				barDeltaMaxValue[index] = 0;
 				barDeltaMinValue[index] = 0;
+				barDeltaBundledValue[index] = 0;
 				barHasData[index] = false;
 			}
+		}
+
+		private void RebuildBundledValues(int lastIndex)
+		{
+			int count = Math.Min(lastIndex, barDeltaValue.Count - 1);
+			for (int index = 0; index <= count; index++)
+				UpdateBundledValueAt(index);
+		}
+
+		private void UpdateBundledValueAt(int index)
+		{
+			if (index < 0 || index >= barDeltaValue.Count || index >= barDeltaBundledValue.Count || !barHasData[index])
+				return;
+
+			double rawValue = barDeltaValue[index];
+			int sign = GetDeltaSign(rawValue);
+			double bundledValue = rawValue;
+			if (sign != 0 && index > 0 && barHasData[index - 1]
+				&& GetDeltaSign(barDeltaValue[index - 1]) == sign
+				&& IsSameResetPeriod(index - 1, index))
+				bundledValue += barDeltaBundledValue[index - 1];
+
+			barDeltaBundledValue[index] = bundledValue;
+		}
+
+		private string ReplayParticipantKey { get { return "OrcaCumulativeDelta:" + diagnosticsInstanceId; } }
+
+		string IOrcaReplayParticipant.ReplayParticipantId { get { return ReplayParticipantKey; } }
+
+		OrcaReplayCapabilities IOrcaReplayParticipant.ReplayCapabilities
+		{
+			get
+			{
+				return new OrcaReplayCapabilities(true, true, true, false,
+					OrcaReplayChartStyleSupport.AllV1);
+			}
+		}
+
+		public OrcaReplayCheckpoint CaptureReplayCheckpoint(OrcaReplayContext context)
+		{
+			int selectionBar = context == null ? -1 : context.PrimaryBarIndex;
+			int available = Math.Min(
+				Math.Min(Math.Min(barDeltaOpen.Count, barDeltaHigh.Count), Math.Min(barDeltaLow.Count, barDeltaClose.Count)),
+				Math.Min(Math.Min(barDeltaValue.Count, barHasData.Count), Math.Min(barDeltaMaxValue.Count, barDeltaMinValue.Count)));
+			selectionBar = Math.Min(selectionBar, available - 1);
+			if (selectionBar < 0)
+				throw new InvalidOperationException("Cumulative Delta has no completed replay baseline at the selected bar.");
+
+			int count = selectionBar + 1;
+			var baseline = new ReplayDeltaBaseline
+			{
+				SelectionBarIndex = selectionBar,
+				Open = barDeltaOpen.GetRange(0, count).ToArray(),
+				High = barDeltaHigh.GetRange(0, count).ToArray(),
+				Low = barDeltaLow.GetRange(0, count).ToArray(),
+				Close = barDeltaClose.GetRange(0, count).ToArray(),
+				Value = barDeltaValue.GetRange(0, count).ToArray(),
+				MaxValue = barDeltaMaxValue.GetRange(0, count).ToArray(),
+				MinValue = barDeltaMinValue.GetRange(0, count).ToArray(),
+				HasData = barHasData.GetRange(0, count).ToArray()
+			};
+
+			int lastData = selectionBar;
+			while (lastData >= 0 && !baseline.HasData[lastData]) lastData--;
+			baseline.RunningDelta = lastData >= 0 ? baseline.Close[lastData] : 0;
+			DateTime baselineTime = context.CurrentTime;
+			try { baselineTime = BarsArray[0].GetTime(selectionBar); } catch { }
+			baseline.ResetKey = GetResetKey(baselineTime);
+			return new OrcaReplayCheckpoint(baselineTime, 0, selectionBar, ReplayParticipantKey, baseline);
+		}
+
+		public void PrepareReplay(OrcaReplayContext context, OrcaReplayCheckpoint checkpoint)
+		{
+			replayBaseline = checkpoint == null ? null : checkpoint.State as ReplayDeltaBaseline;
+			if (replayBaseline == null)
+				throw new InvalidOperationException("Cumulative Delta replay baseline is unavailable.");
+
+			replayBars = new Dictionary<int, ReplayDeltaBar>();
+			replayRunningDelta = replayBaseline.RunningDelta;
+			replayLastResetKey = replayBaseline.ResetKey;
+			replayLastPrimaryBar = replayBaseline.SelectionBarIndex;
+			replayTradeClassifier.Reset();
+			replayDeltaSnapshot = null;
+			if (!replayPaintPriceMarkersCaptured)
+			{
+				replayPaintPriceMarkers = PaintPriceMarkers;
+				replayPaintPriceMarkersCaptured = true;
+			}
+			PaintPriceMarkers = false;
+		}
+
+		public void ApplyReplayEvent(OrcaReplayContext context, OrcaReplayTradeEvent tradeEvent)
+		{
+			if (tradeEvent == null || tradeEvent.Volume <= 0 || replayBaseline == null || replayBars == null)
+				return;
+
+			long signed = replayTradeClassifier.Classify(tradeEvent, DeltaMode == CumulativeDeltaMode.BidAsk);
+			// Prefix events rebuild only the tick-rule classifier. The immutable completed-bar
+			// baseline already contains their delta and prevents double counting.
+			if (tradeEvent.PrimaryBarIndex <= replayBaseline.SelectionBarIndex || signed == 0)
+				return;
+
+			if (tradeEvent.PrimaryBarIndex != replayLastPrimaryBar)
+			{
+				int resetKey = GetResetKey(tradeEvent.Time);
+				if (resetKey != replayLastResetKey)
+				{
+					replayRunningDelta = 0;
+					replayLastResetKey = resetKey;
+				}
+				replayLastPrimaryBar = tradeEvent.PrimaryBarIndex;
+			}
+
+			ReplayDeltaBar bar;
+			if (!replayBars.TryGetValue(tradeEvent.PrimaryBarIndex, out bar))
+				bar = new ReplayDeltaBar();
+			replayRunningDelta += signed;
+			bar.Value += signed;
+			if (!bar.HasData)
+			{
+				bar.Open = replayRunningDelta;
+				bar.High = replayRunningDelta;
+				bar.Low = replayRunningDelta;
+				bar.Close = replayRunningDelta;
+				bar.MaxValue = Math.Max(0, bar.Value);
+				bar.MinValue = Math.Min(0, bar.Value);
+				bar.HasData = true;
+			}
+			else
+			{
+				bar.Close = replayRunningDelta;
+				bar.High = Math.Max(bar.High, replayRunningDelta);
+				bar.Low = Math.Min(bar.Low, replayRunningDelta);
+				bar.MaxValue = Math.Max(bar.MaxValue, bar.Value);
+				bar.MinValue = Math.Min(bar.MinValue, bar.Value);
+			}
+			replayBars[tradeEvent.PrimaryBarIndex] = bar;
+		}
+
+		public void ApplyReplayBar(OrcaReplayContext context, int primaryBarIndex)
+		{
+			replayLastPrimaryBar = Math.Max(replayLastPrimaryBar, primaryBarIndex);
+		}
+
+		public void PublishReplaySnapshot(OrcaReplayContext context)
+		{
+			if (replayBaseline == null || replayBars == null) return;
+			replayDeltaSnapshot = new ReplayDeltaSnapshot
+			{
+				Baseline = replayBaseline,
+				Bars = new Dictionary<int, ReplayDeltaBar>(replayBars),
+				MaxIndex = Math.Max(replayBaseline.SelectionBarIndex, replayLastPrimaryBar)
+			};
+		}
+
+		public void RestoreLiveState()
+		{
+			replayDeltaSnapshot = null;
+			replayBaseline = null;
+			replayBars = null;
+			replayTradeClassifier.Reset();
+			if (replayPaintPriceMarkersCaptured)
+			{
+				PaintPriceMarkers = replayPaintPriceMarkers;
+				replayPaintPriceMarkersCaptured = false;
+			}
+		}
+
+		private bool TryGetRenderBar(ReplayDeltaSnapshot snapshot, int barIndex, out ReplayDeltaBar bar)
+		{
+			bar = new ReplayDeltaBar();
+			if (barIndex < 0) return false;
+			if (snapshot != null)
+			{
+				if (snapshot.Bars != null && snapshot.Bars.TryGetValue(barIndex, out bar))
+					return bar.HasData;
+				ReplayDeltaBaseline baseline = snapshot.Baseline;
+				if (baseline == null || barIndex >= baseline.HasData.Length || !baseline.HasData[barIndex])
+					return false;
+				bar.Open = baseline.Open[barIndex];
+				bar.High = baseline.High[barIndex];
+				bar.Low = baseline.Low[barIndex];
+				bar.Close = baseline.Close[barIndex];
+				bar.Value = baseline.Value[barIndex];
+				bar.MaxValue = baseline.MaxValue[barIndex];
+				bar.MinValue = baseline.MinValue[barIndex];
+				bar.HasData = true;
+				return true;
+			}
+
+			if (barHasData == null || barIndex >= barHasData.Count || !barHasData[barIndex]) return false;
+			bar.Open = barDeltaOpen[barIndex];
+			bar.High = barDeltaHigh[barIndex];
+			bar.Low = barDeltaLow[barIndex];
+			bar.Close = barDeltaClose[barIndex];
+			bar.Value = barDeltaValue[barIndex];
+			bar.MaxValue = barDeltaMaxValue[barIndex];
+			bar.MinValue = barDeltaMinValue[barIndex];
+			bar.HasData = true;
+			return true;
 		}
 
 		#region OnRender — OTM-style OHLC delta candles
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
+            long diagnosticsRenderStart = System.Diagnostics.Stopwatch.GetTimestamp();
 			try
 			{
 				RenderCumulativeDelta(chartControl, chartScale);
@@ -695,19 +1084,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DisposeDxResources();
 				LogRenderSkip(ex);
 			}
-		}
+            finally
+            {
+                OrcaDiagnosticsCore.ReportRenderSample(diagnosticsInstanceId, diagnosticsRenderStart);
+            }
+        }
 
 		private void RenderCumulativeDelta(ChartControl chartControl, ChartScale chartScale)
 		{
 			if (chartControl == null || chartScale == null || Bars == null || RenderTarget == null)
 				return;
-			TryEnsureSharedBackfillFromRender();
+			ReplayDeltaSnapshot renderSnapshot = replayDeltaSnapshot;
+			if (renderSnapshot == null) TryEnsureSharedBackfillFromRender();
 			if (ChartBars == null || barDeltaOpen == null || barDeltaHigh == null || barDeltaLow == null || barDeltaClose == null || barDeltaValue == null || barDeltaMaxValue == null || barDeltaMinValue == null || barHasData == null)
 				return;
 
 			int fromIdx = ChartBars.FromIndex;
 			int toIdx   = ChartBars.ToIndex;
-			int dataMax = Math.Min(
+			int dataMax = renderSnapshot != null ? renderSnapshot.MaxIndex : Math.Min(
 				Math.Min(Math.Min(barDeltaOpen.Count, barDeltaHigh.Count), Math.Min(barDeltaLow.Count, barDeltaClose.Count)),
 				Math.Min(Math.Min(barDeltaValue.Count, barHasData.Count), Math.Min(barDeltaMaxValue.Count, barDeltaMinValue.Count))) - 1;
 			int chartMax = Math.Min(ChartBars.Count - 1, Bars.Count - 1);
@@ -718,6 +1112,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			toIdx = Math.Min(toIdx, maxIdx);
 			if (fromIdx > toIdx)
 				return;
+			bool bundleBarsForCurrentRender = ShouldBundleSameSignBars(chartControl);
 
 			EnsureDxResources();
 			if (dxUpFillBrush == null)
@@ -744,21 +1139,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			// Delta candles
+			if (DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar && bundleBarsForCurrentRender)
+			{
+				int runIndex = FindBarDeltaRunStart(renderSnapshot, fromIdx);
+				while (runIndex <= toIdx && runIndex <= maxIdx)
+				{
+					BarDeltaRun run;
+					if (!TryBuildBarDeltaRun(renderSnapshot, runIndex, maxIdx, out run))
+					{
+						runIndex++;
+						continue;
+					}
+
+					if (run.EndIndex >= fromIdx)
+						DrawBarDeltaRunHistogram(chartControl, chartScale, run, fromIdx, toIdx);
+					runIndex = run.EndIndex + 1;
+				}
+			}
+			else
 			for (int barIdx = fromIdx; barIdx <= toIdx; barIdx++)
 			{
-				if (barIdx < 0 || barIdx > maxIdx || !barHasData[barIdx])
+				ReplayDeltaBar renderBar;
+				if (barIdx < 0 || barIdx > maxIdx || !TryGetRenderBar(renderSnapshot, barIdx, out renderBar))
 					continue;
 
 				if (DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar)
 				{
-					DrawBarDeltaHistogram(chartControl, chartScale, barIdx, fromIdx, toIdx);
+					DrawBarDeltaHistogram(chartControl, chartScale, barIdx, fromIdx, toIdx, renderBar);
 					continue;
 				}
 
-				double dO = barDeltaOpen[barIdx];
-				double dH = barDeltaHigh[barIdx];
-				double dL = barDeltaLow[barIdx];
-				double dC = barDeltaClose[barIdx];
+				double dO = renderBar.Open;
+				double dH = renderBar.High;
+				double dL = renderBar.Low;
+				double dC = renderBar.Close;
 
 				bool isUp = dC >= dO;
 
@@ -808,17 +1222,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ShowPriceLine)
 			{
 				int lastData = toIdx;
-				while (lastData >= fromIdx && (lastData > maxIdx || !barHasData[lastData]))
-					lastData--;
+				ReplayDeltaBar lastRenderBar;
+				while (lastData >= fromIdx && (lastData > maxIdx || !TryGetRenderBar(renderSnapshot, lastData, out lastRenderBar))) lastData--;
 
 				if (lastData >= fromIdx)
 				{
-					double lastClose = DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar
-						? GetRenderedBarDeltaValue(lastData)
-						: barDeltaClose[lastData];
+					TryGetRenderBar(renderSnapshot, lastData, out lastRenderBar);
 					double lastRawValue = DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar
-						? barDeltaValue[lastData]
-						: barDeltaClose[lastData] - barDeltaOpen[lastData];
+						? lastRenderBar.Value
+						: lastRenderBar.Close - lastRenderBar.Open;
+					if (DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar && bundleBarsForCurrentRender)
+					{
+						BarDeltaRun lastRun;
+						int lastRunStart = FindBarDeltaRunStart(renderSnapshot, lastData);
+						if (TryBuildBarDeltaRun(renderSnapshot, lastRunStart, lastData, out lastRun))
+							lastRawValue = lastRun.Value;
+					}
+					double lastClose = DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar
+						? GetRenderedBarDeltaValue(lastRawValue)
+						: lastRenderBar.Close;
 					bool   lineIsUp  = lastRawValue >= 0;
 					var    plBrush   = lineIsUp ? dxUpBorderBrush : dxDownBorderBrush;
 
@@ -865,12 +1287,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				TryRefreshFromSharedProvider(false, true, false);
 		}
 
-		private void DrawBarDeltaHistogram(ChartControl chartControl, ChartScale chartScale, int barIdx, int fromIdx, int toIdx)
+		private void DrawBarDeltaHistogram(ChartControl chartControl, ChartScale chartScale, int barIdx, int fromIdx, int toIdx, ReplayDeltaBar renderBar)
 		{
-			if (barIdx < 0 || barIdx >= barDeltaValue.Count || barIdx >= barDeltaMaxValue.Count || barIdx >= barDeltaMinValue.Count) return;
+			if (barIdx < 0) return;
 
-			double rawValue = barDeltaValue[barIdx];
-			double renderValue = GetRenderedBarDeltaValue(barIdx);
+			double rawValue = renderBar.Value;
+			double renderValue = GetRenderedBarDeltaValue(rawValue);
 
 			float yBase = chartScale.GetYByValue(0);
 			float yValue = chartScale.GetYByValue(renderValue);
@@ -897,10 +1319,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			var borderBrush = rawValue >= 0 ? dxUpBorderBrush : dxDownBorderBrush;
 			var rect = new RectangleF(barX - bodyWidth / 2f, top, bodyWidth, height);
 
-			if (ShowBarDeltaWicks && barIdx < barDeltaMaxValue.Count && barIdx < barDeltaMinValue.Count)
+			if (ShowBarDeltaWicks)
 			{
-				float yMax = chartScale.GetYByValue(barDeltaMaxValue[barIdx]);
-				float yMin = chartScale.GetYByValue(barDeltaMinValue[barIdx]);
+				float yMax = chartScale.GetYByValue(renderBar.MaxValue);
+				float yMin = chartScale.GetYByValue(renderBar.MinValue);
 				float bodyTop = rect.Y;
 				float bodyBottom = rect.Y + rect.Height;
 				if (yMax < bodyTop)
@@ -913,12 +1335,221 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RenderTarget.DrawRectangle(rect, borderBrush, 1f);
 		}
 
+		private int FindBarDeltaRunStart(ReplayDeltaSnapshot snapshot, int seedIndex)
+		{
+			int start = Math.Max(0, seedIndex);
+			ReplayDeltaBar current;
+			if (!TryGetRenderBar(snapshot, start, out current))
+				return start;
+
+			int sign = GetDeltaSign(current.Value);
+			if (sign == 0)
+				return start;
+
+			while (start > 0)
+			{
+				ReplayDeltaBar previous;
+				if (!TryGetRenderBar(snapshot, start - 1, out previous)
+					|| GetDeltaSign(previous.Value) != sign
+					|| !IsSameResetPeriod(start - 1, start))
+					break;
+				start--;
+			}
+
+			return start;
+		}
+
+		private bool TryBuildBarDeltaRun(ReplayDeltaSnapshot snapshot, int startIndex, int maxIndex, out BarDeltaRun run)
+		{
+			run = new BarDeltaRun { StartIndex = startIndex, EndIndex = startIndex, MaxValue = 0, MinValue = 0 };
+			ReplayDeltaBar firstBar;
+			if (startIndex < 0 || startIndex > maxIndex || !TryGetRenderBar(snapshot, startIndex, out firstBar))
+				return false;
+
+			int sign = GetDeltaSign(firstBar.Value);
+			double runningValue = 0;
+			for (int index = startIndex; index <= maxIndex; index++)
+			{
+				ReplayDeltaBar bar;
+				if (!TryGetRenderBar(snapshot, index, out bar))
+					break;
+				if (index > startIndex && (sign == 0 || GetDeltaSign(bar.Value) != sign || !IsSameResetPeriod(index - 1, index)))
+					break;
+
+				run.MaxValue = Math.Max(run.MaxValue, runningValue + bar.MaxValue);
+				run.MinValue = Math.Min(run.MinValue, runningValue + bar.MinValue);
+				runningValue += bar.Value;
+				run.MaxValue = Math.Max(run.MaxValue, runningValue);
+				run.MinValue = Math.Min(run.MinValue, runningValue);
+				run.EndIndex = index;
+				run.Count++;
+				if (sign == 0)
+					break;
+			}
+
+			run.Value = runningValue;
+			return run.Count > 0;
+		}
+
+		private void DrawBarDeltaRunHistogram(ChartControl chartControl, ChartScale chartScale, BarDeltaRun run, int fromIdx, int toIdx)
+		{
+			if (run.Count <= 0)
+				return;
+
+			double renderValue = GetRenderedBarDeltaValue(run.Value);
+			float yBase = chartScale.GetYByValue(0);
+			float yValue = chartScale.GetYByValue(renderValue);
+			float startX = chartControl.GetXByBarIndex(ChartBars, run.StartIndex);
+			float endX = chartControl.GetXByBarIndex(ChartBars, run.EndIndex);
+			float startHalfWidth = GetHistogramHalfWidth(chartControl, run.StartIndex, fromIdx, toIdx);
+			float endHalfWidth = GetHistogramHalfWidth(chartControl, run.EndIndex, fromIdx, toIdx);
+			float gapHalf = Math.Max(0f, BarDeltaGapPx) / 2f;
+			float left = startX - startHalfWidth + gapHalf;
+			float right = endX + endHalfWidth - gapHalf;
+			float width = Math.Max(1f, right - left);
+			float top = Math.Min(yBase, yValue);
+			float height = Math.Max(1f, Math.Abs(yBase - yValue));
+			float centerX = left + width / 2f;
+
+			var fillBrush = run.Value >= 0 ? dxUpFillBrush : dxDownFillBrush;
+			var borderBrush = run.Value >= 0 ? dxUpBorderBrush : dxDownBorderBrush;
+			var rect = new RectangleF(left, top, width, height);
+
+			if (ShowBarDeltaWicks)
+			{
+				float yMax = chartScale.GetYByValue(run.MaxValue);
+				float yMin = chartScale.GetYByValue(run.MinValue);
+				float bodyTop = rect.Y;
+				float bodyBottom = rect.Y + rect.Height;
+				if (yMax < bodyTop)
+					RenderTarget.DrawLine(new Vector2(centerX, yMax), new Vector2(centerX, bodyTop), borderBrush, 1f);
+				if (yMin > bodyBottom)
+					RenderTarget.DrawLine(new Vector2(centerX, bodyBottom), new Vector2(centerX, yMin), borderBrush, 1f);
+			}
+
+			RenderTarget.FillRectangle(rect, fillBrush);
+			RenderTarget.DrawRectangle(rect, borderBrush, 1f);
+		}
+
+		private float GetHistogramHalfWidth(ChartControl chartControl, int barIndex, int fromIdx, int toIdx)
+		{
+			float barX = chartControl.GetXByBarIndex(ChartBars, barIndex);
+			float spacing;
+			if (barIndex < Math.Min(toIdx, ChartBars.Count - 1))
+				spacing = chartControl.GetXByBarIndex(ChartBars, barIndex + 1) - barX;
+			else if (barIndex > Math.Max(0, fromIdx))
+				spacing = barX - chartControl.GetXByBarIndex(ChartBars, barIndex - 1);
+			else
+				spacing = (float)chartControl.BarWidth;
+
+			return Math.Max(1f, (float)(spacing * BarWidthPercent / 100.0 / 2.0));
+		}
+
+		private bool ShouldBundleSameSignBars(ChartControl chartControl)
+		{
+			if (!BundleSameSignBars)
+			{
+				sameSignBundleZoomActive = false;
+				return false;
+			}
+
+			if (!BundleOnlyWhenZoomedOut)
+			{
+				sameSignBundleZoomActive = true;
+				return true;
+			}
+
+			float spacing = GetAverageVisibleBarSpacing(chartControl);
+			if (spacing <= 0.0f)
+			{
+				sameSignBundleZoomActive = false;
+				return false;
+			}
+
+			float bundleAt = Math.Max(1.0f, BundleAtBarSpacingPx);
+			float showDetailsAt = bundleAt + 1.0f;
+			if (sameSignBundleZoomActive)
+			{
+				if (spacing >= showDetailsAt)
+					sameSignBundleZoomActive = false;
+			}
+			else if (spacing <= bundleAt)
+			{
+				sameSignBundleZoomActive = true;
+			}
+
+			return sameSignBundleZoomActive;
+		}
+
+		private float GetAverageVisibleBarSpacing(ChartControl chartControl)
+		{
+			if (chartControl == null || ChartBars == null)
+				return 0.0f;
+
+			try
+			{
+				int fromIndex = Math.Max(0, ChartBars.FromIndex);
+				int toIndex = Math.Min(ChartBars.ToIndex, ChartBars.Count - 1);
+				if (toIndex <= fromIndex)
+					return GetVisibleBarSpacing(chartControl, fromIndex);
+
+				float totalSpacing = 0.0f;
+				int sampleCount = 0;
+				int step = Math.Max(1, (toIndex - fromIndex) / 24);
+				for (int barIndex = fromIndex; barIndex + step <= toIndex; barIndex += step)
+				{
+					float x1 = chartControl.GetXByBarIndex(ChartBars, barIndex);
+					float x2 = chartControl.GetXByBarIndex(ChartBars, barIndex + step);
+					totalSpacing += Math.Abs(x2 - x1) / step;
+					sampleCount++;
+				}
+
+				return sampleCount > 0 ? totalSpacing / sampleCount : 0.0f;
+			}
+			catch { }
+
+			return 0.0f;
+		}
+
+		private float GetVisibleBarSpacing(ChartControl chartControl, int barIndex)
+		{
+			if (chartControl == null || ChartBars == null || barIndex < 0)
+				return 0.0f;
+
+			try
+			{
+				if (barIndex + 1 < ChartBars.Count)
+					return Math.Abs(chartControl.GetXByBarIndex(ChartBars, barIndex + 1) - chartControl.GetXByBarIndex(ChartBars, barIndex));
+				if (barIndex > 0)
+					return Math.Abs(chartControl.GetXByBarIndex(ChartBars, barIndex) - chartControl.GetXByBarIndex(ChartBars, barIndex - 1));
+			}
+			catch { }
+
+			return 0.0f;
+		}
+
+		private bool IsSameResetPeriod(int firstIndex, int secondIndex)
+		{
+			if (BarsArray == null || BarsArray.Length == 0 || BarsArray[0] == null
+				|| firstIndex < 0 || secondIndex < 0
+				|| firstIndex >= BarsArray[0].Count || secondIndex >= BarsArray[0].Count)
+				return false;
+
+			return GetResetKey(BarsArray[0].GetTime(firstIndex)) == GetResetKey(BarsArray[0].GetTime(secondIndex));
+		}
+
+		private int GetDeltaSign(double value)
+		{
+			return value > 0 ? 1 : value < 0 ? -1 : 0;
+		}
+
 		public override void OnCalculateMinMax()
 		{
 			if (ChartBars == null || barDeltaHigh == null || barDeltaLow == null || barDeltaValue == null || barDeltaMaxValue == null || barDeltaMinValue == null || barHasData == null)
 				return;
 
-			int dataMax = Math.Min(
+			ReplayDeltaSnapshot renderSnapshot = replayDeltaSnapshot;
+			int dataMax = renderSnapshot != null ? renderSnapshot.MaxIndex : Math.Min(
 				Math.Min(barHasData.Count, barDeltaValue.Count),
 				Math.Min(barDeltaHigh.Count, Math.Min(barDeltaLow.Count, Math.Min(barDeltaMaxValue.Count, barDeltaMinValue.Count)))) - 1;
 			if (dataMax < 0)
@@ -931,23 +1562,49 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			double min = double.MaxValue;
 			double max = double.MinValue;
+			bool bundleBarsForCurrentScale = ShouldBundleSameSignBars(ChartControl);
+			if (DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar && bundleBarsForCurrentScale)
+			{
+				int runIndex = FindBarDeltaRunStart(renderSnapshot, first);
+				while (runIndex <= last && runIndex <= dataMax)
+				{
+					BarDeltaRun run;
+					if (!TryBuildBarDeltaRun(renderSnapshot, runIndex, dataMax, out run))
+					{
+						runIndex++;
+						continue;
+					}
+
+					if (run.EndIndex >= first)
+					{
+						double value = GetRenderedBarDeltaValue(run.Value);
+						double high = ShowBarDeltaWicks ? Math.Max(value, run.MaxValue) : Math.Max(0, value);
+						double low = ShowBarDeltaWicks ? Math.Min(0, run.MinValue) : Math.Min(0, value);
+						if (high > max) max = high;
+						if (low < min) min = low;
+					}
+					runIndex = run.EndIndex + 1;
+				}
+			}
+			else
 			for (int index = first; index <= last; index++)
 			{
-				if (!barHasData[index])
+				ReplayDeltaBar renderBar;
+				if (!TryGetRenderBar(renderSnapshot, index, out renderBar))
 					continue;
 
 				if (DeltaDisplayMode == CumulativeDeltaDisplayMode.BarByBar)
 				{
-					double value = GetRenderedBarDeltaValue(index);
-					double high = ShowBarDeltaWicks ? Math.Max(value, barDeltaMaxValue[index]) : Math.Max(0, value);
-					double low = ShowBarDeltaWicks ? Math.Min(0, barDeltaMinValue[index]) : Math.Min(0, value);
+					double value = GetRenderedBarDeltaValue(renderBar.Value);
+					double high = ShowBarDeltaWicks ? Math.Max(value, renderBar.MaxValue) : Math.Max(0, value);
+					double low = ShowBarDeltaWicks ? Math.Min(0, renderBar.MinValue) : Math.Min(0, value);
 					if (high > max) max = high;
 					if (low < min) min = low;
 				}
 				else
 				{
-					if (barDeltaHigh[index] > max) max = barDeltaHigh[index];
-					if (barDeltaLow[index] < min) min = barDeltaLow[index];
+					if (renderBar.High > max) max = renderBar.High;
+					if (renderBar.Low < min) min = renderBar.Low;
 				}
 			}
 
@@ -971,7 +1628,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (barIdx < 0 || barIdx >= barDeltaValue.Count)
 				return 0;
 
-			double value = barDeltaValue[barIdx];
+			return GetRenderedBarDeltaValue(barDeltaValue[barIdx]);
+		}
+
+		private double GetRenderedBarDeltaValue(double value)
+		{
 			return BarHistogramStyle == BarDeltaHistogramStyle.SameFloor ? Math.Abs(value) : value;
 		}
 
@@ -1155,12 +1816,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 			Description = "Mirrored: positive bars above zero and negative bars below zero. SameFloor: both signs draw upward from zero, with color denoting sign.")]
 		public BarDeltaHistogramStyle BarHistogramStyle { get; set; }
 
-		[Display(Name = "Show Bar Delta Wicks", Order = 3, GroupName = "Delta Display",
+		[Display(Name = "Bundle Same-Sign Bars", Order = 3, GroupName = "Delta Display",
+			Description = "BarByBar only: combines each uninterrupted run of two or more positive or negative bars into one wider block whose height is the run's summed net delta. Zero-delta bars and reset boundaries end a run.")]
+		public bool BundleSameSignBars { get; set; }
+
+		[Display(Name = "Bundle Only When Zoomed Out", Order = 4, GroupName = "Delta Display",
+			Description = "When enabled, same-sign bundles appear only when average visible bar spacing is at or below the configured pixel threshold; zooming back in restores individual bar detail.")]
+		public bool BundleOnlyWhenZoomedOut { get; set; }
+
+		[Range(1, 50)]
+		[Display(Name = "Bundle At Bar Spacing (px)", Order = 5, GroupName = "Delta Display",
+			Description = "Average visible pixels per bar at or below which same-sign bundling activates. Individual bars return one pixel above this value to prevent flicker near the cutoff.")]
+		public int BundleAtBarSpacingPx { get; set; }
+
+		[Display(Name = "Show Bar Delta Wicks", Order = 6, GroupName = "Delta Display",
 			Description = "BarByBar only: draws each bar's intrabar max/min delta as a wick while the body ends at final net delta.")]
 		public bool ShowBarDeltaWicks { get; set; }
 
 		[Range(0.0, 10.0)]
-		[Display(Name = "Bar Delta Gap (px)", Order = 4, GroupName = "Delta Display",
+		[Display(Name = "Bar Delta Gap (px)", Order = 7, GroupName = "Delta Display",
 			Description = "BarByBar only: subtracts this many pixels from histogram body width to separate adjacent bars.")]
 		public float BarDeltaGapPx { get; set; }
 

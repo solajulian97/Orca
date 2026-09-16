@@ -49,6 +49,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private ChartScale lastChartScale;
 		private ChartPanel lastChartPanel;
 		private System.Windows.Controls.Canvas visualOverlayCanvas;
+		private UIElement chartTraderElement;
 
 		private class VisualOverlayItem
 		{
@@ -69,6 +70,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public bool IsTp;
 			public bool IsOrderLabel;
 			public bool PlaceAboveLine;
+		}
+
+		private class WorkingOrderGroup
+		{
+			public bool IsLimit;
+			public double Price;
+			public int Quantity;
+			public bool IsReducing;
+			public OrderAction Action;
 		}
 
 		[NinjaScriptProperty]
@@ -158,6 +168,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ChartControl.Dispatcher.InvokeAsync(() =>
 				{
 					EnsureVisualOverlayOnUi();
+					HookChartTraderVisibilityOnUi();
 					ChartControl.MouseLeftButtonDown += ChartControl_MouseLeftButtonDown;
 					ChartControl.MouseMove += ChartControl_MouseMove;
 					ChartControl.MouseLeftButtonUp += ChartControl_MouseLeftButtonUp;
@@ -173,6 +184,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					ChartControl.MouseLeftButtonUp -= ChartControl_MouseLeftButtonUp;
 					if (Mouse.Captured == ChartControl || Mouse.Captured == visualOverlayCanvas)
 						Mouse.Capture(null);
+					UnhookChartTraderVisibilityOnUi();
 					RemoveVisualOverlayOnUi();
 				});
 			}
@@ -194,8 +206,82 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return Account.All.FirstOrDefault(a => a.Positions.Any(p => p.Instrument == Instrument)) ?? Account.All.FirstOrDefault(a => a.Name == "Sim101");
 		}
 
+		private bool IsChartTraderVisible()
+		{
+			if (ChartControl == null) return false;
+			bool visible = false;
+			Action inspect = () =>
+			{
+				HookChartTraderVisibilityOnUi();
+				var element = chartTraderElement as FrameworkElement;
+				visible = element != null
+					&& element.Visibility == Visibility.Visible
+					&& element.IsVisible
+					&& element.ActualWidth > 0;
+			};
+			try
+			{
+				if (ChartControl.Dispatcher.CheckAccess()) inspect();
+				else ChartControl.Dispatcher.Invoke(inspect);
+			}
+			catch { return false; }
+			return visible;
+		}
+
+		private void HookChartTraderVisibilityOnUi()
+		{
+			if (ChartControl == null) return;
+			UIElement next = null;
+			try
+			{
+				Chart chart = Window.GetWindow(ChartControl) as Chart;
+				next = chart?.ChartTrader as UIElement;
+			}
+			catch { }
+			if (object.ReferenceEquals(next, chartTraderElement)) return;
+			UnhookChartTraderVisibilityOnUi();
+			chartTraderElement = next;
+			if (chartTraderElement != null)
+				chartTraderElement.IsVisibleChanged += ChartTraderElement_IsVisibleChanged;
+		}
+
+		private void UnhookChartTraderVisibilityOnUi()
+		{
+			if (chartTraderElement != null)
+				chartTraderElement.IsVisibleChanged -= ChartTraderElement_IsVisibleChanged;
+			chartTraderElement = null;
+		}
+
+		private void ChartTraderElement_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+		{
+			bool isVisible = IsChartTraderVisible();
+			if (!isVisible)
+			{
+				showTPButton = false;
+				showSLButton = false;
+				isDraggingTP = false;
+				isDraggingSL = false;
+				if (Mouse.Captured == ChartControl || Mouse.Captured == visualOverlayCanvas)
+					Mouse.Capture(null);
+				if (visualOverlayCanvas != null)
+				{
+					visualOverlayCanvas.Children.Clear();
+					visualOverlayCanvas.Visibility = Visibility.Collapsed;
+				}
+			}
+			else if (visualOverlayCanvas != null)
+				visualOverlayCanvas.Visibility = Visibility.Visible;
+			ChartControl?.InvalidateVisual();
+		}
+
 		private void ChartControl_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
 		{
+			if (!IsChartTraderVisible()) return;
+			if (OrcaReplayCore.IsChartLocked(ChartControl))
+			{
+				e.Handled = true;
+				return;
+			}
 			if (ChartControl != null && lastChartPanel != null && lastChartScale != null)
 			{
 				System.Windows.Point position = e.GetPosition(lastChartPanel);
@@ -238,6 +324,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void SubmitDraggedOrder(bool isTP, double price)
 		{
+			if (!IsChartTraderVisible()) return;
+			if (OrcaReplayCore.IsChartLocked(ChartControl)) return;
 			Account activeAccount = GetActiveAccount();
 			if (activeAccount == null || activeQuantity <= 0 || activeSide == MarketPosition.Flat) return;
 			OrderAction action = (activeSide == MarketPosition.Long) ? OrderAction.Sell : OrderAction.BuyToCover;
@@ -253,6 +341,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			base.OnRender(chartControl, chartScale);
+			if (!IsChartTraderVisible())
+			{
+				showTPButton = false;
+				showSLButton = false;
+				isDraggingTP = false;
+				isDraggingSL = false;
+				QueueOverlayUpdate(new List<VisualOverlayItem>());
+				return;
+			}
+			if (OrcaReplayCore.IsChartLocked(chartControl))
+			{
+				showTPButton = false;
+				showSLButton = false;
+				isDraggingTP = false;
+				isDraggingSL = false;
+				QueueOverlayUpdate(new List<VisualOverlayItem>());
+				return;
+			}
 			lastChartScale = chartScale;
 			lastChartPanel = ChartPanel;
 			if (Bars == null || Instrument == null) return;
@@ -264,11 +370,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			var overlayItems = new List<VisualOverlayItem>();
 
 			Position pos = activeAccount.Positions.FirstOrDefault(p => p.Instrument == Instrument);
-			if (pos == null || pos.MarketPosition == MarketPosition.Flat) { showTPButton = false; showSLButton = false; QueueOverlayUpdate(overlayItems); return; }
-
-			activeEntryPrice = pos.AveragePrice;
-			activeQuantity = Math.Abs(pos.Quantity);
-			activeSide = pos.MarketPosition;
+			bool hasActivePosition = pos != null && pos.MarketPosition != MarketPosition.Flat;
+			if (hasActivePosition)
+			{
+				activeEntryPrice = pos.AveragePrice;
+				activeQuantity = Math.Abs(pos.Quantity);
+				activeSide = pos.MarketPosition;
+			}
+			else
+			{
+				activeEntryPrice = 0;
+				activeQuantity = 0;
+				activeSide = MarketPosition.Flat;
+			}
 			bool hasStop = false, hasLimit = false;
 			activeOcoId = "";
 
@@ -276,15 +390,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (order.Instrument == Instrument && (order.OrderState == OrderState.Working || order.OrderState == OrderState.Accepted))
 				{
-					if (!IsReducingOrder(pos, order)) continue;
-					if (order.OrderType == OrderType.StopMarket || order.OrderType == OrderType.StopLimit) hasStop = true;
-					if (order.OrderType == OrderType.Limit) hasLimit = true;
-					if (!string.IsNullOrEmpty(order.Oco) && order.Oco.StartsWith("OrcaOCO_")) activeOcoId = order.Oco;
+					if (hasActivePosition && IsReducingOrder(pos, order))
+					{
+						if (order.OrderType == OrderType.StopMarket || order.OrderType == OrderType.StopLimit) hasStop = true;
+						if (order.OrderType == OrderType.Limit) hasLimit = true;
+						if (!string.IsNullOrEmpty(order.Oco) && order.Oco.StartsWith("OrcaOCO_")) activeOcoId = order.Oco;
+					}
 				}
 			}
 			if (string.IsNullOrEmpty(activeOcoId)) activeOcoId = "OrcaOCO_" + Guid.NewGuid().ToString("N");
-			showTPButton = !hasLimit;
-			showSLButton = !hasStop;
+			showTPButton = hasActivePosition && !hasLimit;
+			showSLButton = hasActivePosition && !hasStop;
 
 			double yEntry = chartScale.GetYByValue(activeEntryPrice);
 
@@ -318,37 +434,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			double tickSize = Instrument.MasterInstrument.TickSize;
 			double pointValue = Instrument.MasterInstrument.PointValue;
-			var groups = new Dictionary<string, Tuple<bool, double, int>>();
+			var groups = new Dictionary<string, WorkingOrderGroup>();
 
 			foreach (Order o in activeAccount.Orders)
 			{
 				if (o.Instrument != Instrument || (o.OrderState != OrderState.Working && o.OrderState != OrderState.Accepted)) continue;
-				if (!IsReducingOrder(pos, o)) continue;
 				int rem = o.Quantity - o.Filled;
 				if (rem > 0 && (o.OrderType == OrderType.Limit || o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit))
 				{
 					bool isL = o.OrderType == OrderType.Limit;
 					double p = isL ? o.LimitPrice : o.StopPrice;
-					string key = (isL ? "L_" : "S_") + p;
-					if (groups.ContainsKey(key)) groups[key] = new Tuple<bool, double, int>(isL, p, groups[key].Item3 + rem);
-					else groups[key] = new Tuple<bool, double, int>(isL, p, rem);
+					bool isReducing = hasActivePosition && IsReducingOrder(pos, o);
+					string key = (isL ? "L_" : "S_") + p + "_" + o.OrderAction + "_" + isReducing;
+					WorkingOrderGroup group;
+					if (groups.TryGetValue(key, out group)) group.Quantity += rem;
+					else groups[key] = new WorkingOrderGroup { IsLimit = isL, Price = p, Quantity = rem, IsReducing = isReducing, Action = o.OrderAction };
 				}
 			}
 
 			foreach (var g in groups)
 			{
-				bool isLim = g.Value.Item1; double pr = g.Value.Item2; int qty = g.Value.Item3;
+				if (!g.Value.IsReducing) continue;
+				bool isLim = g.Value.IsLimit; double pr = g.Value.Price; int qty = g.Value.Quantity;
 				float y = chartScale.GetYByValue(pr);
+				string type = isLim ? "LMT" : "STP";
 				double ticks = Math.Round(Math.Abs(pr - activeEntryPrice) / tickSize);
 				double points = ticks * tickSize;
 				double val = ticks * tickSize * pointValue * qty;
 				bool isProf = (activeSide == MarketPosition.Long && pr > activeEntryPrice) || (activeSide == MarketPosition.Short && pr < activeEntryPrice);
-				string action = activeSide == MarketPosition.Long ? "Sell" : "Buy";
-				string type = isLim ? "LMT" : "STP";
 				string txt = string.Format("{0} {1} | {2}", isProf ? "Profit" : "Risk", val.ToString("C0"), FormatPoints(points));
-				string nativeText = string.Format("{0} {1} {2}", qty, action, type);
+				string nativeText = string.Format("{0} {1} {2}", qty, activeSide == MarketPosition.Long ? "Sell" : "Buy", type);
 				bool labelAboveLine = pr < activeEntryPrice;
-				overlayItems.Add(new VisualOverlayItem { IsOrderLabel = true, Text = txt, NativeText = nativeText, Background = isProf ? visual.BuyColor : visual.SellColor, Foreground = visual.TextColor, NativeLeftX = rightX - labelOffset, RightX = labelRightX, MaxRightX = chartControl.CanvasRight - visual.LabelRightPadding, LineY = y, PlaceAboveLine = labelAboveLine, Opacity = visual.LabelBackgroundOpacity });
+				string background = isProf ? visual.BuyColor : visual.SellColor;
+				overlayItems.Add(new VisualOverlayItem { IsOrderLabel = true, Text = txt, NativeText = nativeText, Background = background, Foreground = visual.TextColor, NativeLeftX = rightX - labelOffset, RightX = labelRightX, MaxRightX = chartControl.CanvasRight - visual.LabelRightPadding, LineY = y, PlaceAboveLine = labelAboveLine, Opacity = visual.LabelBackgroundOpacity });
 			}
 
 			if (isDraggingTP || isDraggingSL)
@@ -426,6 +544,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				EnsureVisualOverlayOnUi();
 				if (visualOverlayCanvas == null) return;
+				if (!IsChartTraderVisible())
+				{
+					visualOverlayCanvas.Children.Clear();
+					visualOverlayCanvas.Visibility = Visibility.Collapsed;
+					return;
+				}
+				visualOverlayCanvas.Visibility = Visibility.Visible;
 				visualOverlayCanvas.Width = ChartControl.ActualWidth;
 				visualOverlayCanvas.Height = ChartControl.ActualHeight;
 				visualOverlayCanvas.Children.Clear();
@@ -510,6 +635,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void StartVisualProtectionDrag(bool isTp)
 		{
+			if (!IsChartTraderVisible()) return;
 			isDraggingTP = isTp;
 			isDraggingSL = !isTp;
 			currentDragPrice = activeEntryPrice;

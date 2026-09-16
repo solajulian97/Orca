@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -160,6 +161,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private bool isDisarmed;
 		private OrcaFollowerGuardStatus status;
 		private int latencyMs;
+		private double lastDispatchMs;
+		private double averageDispatchMs;
+		private int dispatchCount;
 		private double averageSlippageTicks;
 		private int fillCount;
 		private string guardMessage;
@@ -241,6 +245,35 @@ namespace NinjaTrader.NinjaScript.AddOns
 				latencyMs = value;
 				OnPropertyChanged("LatencyMs");
 			}
+		}
+
+		public double LastDispatchMs
+		{
+			get { return lastDispatchMs; }
+			private set {
+				if (Math.Abs(lastDispatchMs - value) < 0.0001)
+					return;
+				lastDispatchMs = value;
+				OnPropertyChanged("LastDispatchMs");
+				OnPropertyChanged("DispatchText");
+			}
+		}
+
+		public double AverageDispatchMs
+		{
+			get { return averageDispatchMs; }
+			private set {
+				if (Math.Abs(averageDispatchMs - value) < 0.0001)
+					return;
+				averageDispatchMs = value;
+				OnPropertyChanged("AverageDispatchMs");
+				OnPropertyChanged("DispatchText");
+			}
+		}
+
+		public string DispatchText
+		{
+			get { return LastDispatchMs.ToString("0.00") + " / " + AverageDispatchMs.ToString("0.00"); }
 		}
 
 		public double AverageSlippageTicks
@@ -343,6 +376,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 				SetStatus(OrcaFollowerGuardStatus.Active, "Synced");
 		}
 
+		public void AddDispatchMetric(double dispatchMs)
+		{
+			lock (sync) {
+				dispatchCount++;
+				LastDispatchMs = Math.Max(0, dispatchMs);
+				AverageDispatchMs = ((AverageDispatchMs * (dispatchCount - 1)) + LastDispatchMs) / dispatchCount;
+			}
+		}
+
 		private void SetStatus(OrcaFollowerGuardStatus newStatus, string message)
 		{
 			Status = newStatus;
@@ -380,6 +422,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public double FollowerPrice { get; set; }
 		public int LatencyMs { get; set; }
 		public double SlippageTicks { get; set; }
+		public double DispatchMilliseconds { get; set; }
 		public string Message { get; set; }
 	}
 
@@ -476,6 +519,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private readonly OrcaCopyNetwork network;
 		private Account leaderAccount;
 		private Dictionary<string, OrcaFollowerAccountState> followersByName = new Dictionary<string, OrcaFollowerAccountState>(StringComparer.OrdinalIgnoreCase);
+		private volatile OrcaFollowerAccountState[] followerSnapshot = new OrcaFollowerAccountState[0];
 		private OrcaCopySettings settings = new OrcaCopySettings();
 		private volatile bool isRunning;
 
@@ -624,6 +668,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				.Where(f => f != null && !string.IsNullOrWhiteSpace(f.AccountName))
 				.GroupBy(f => f.AccountName, StringComparer.OrdinalIgnoreCase)
 				.ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+			followerSnapshot = followersByName.Values.ToArray();
 		}
 
 		private void HookFollowerNoLock(OrcaFollowerAccountState follower)
@@ -651,12 +696,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (!isRunning || e == null || e.Order == null)
 				return;
 
+			long dispatchStartTimestamp = Stopwatch.GetTimestamp();
 			try {
 				Order order = e.Order;
 				string leaderKey = GetLeaderOrderKey(order, null);
 				bool protective = IsProtectiveOrder(order);
+				ReplicateOrder(order, e.OrderState, e.Error, leaderKey, protective, false, dispatchStartTimestamp);
 				BroadcastOrder(order, e, leaderKey, protective);
-				ReplicateOrder(order, e.OrderState, e.Error, leaderKey, protective, false);
 			} catch (Exception ex) {
 				OrcaCopyDiagnostics.Print("Leader order update failed: " + ex.Message, LogLevel.Error);
 			}
@@ -766,7 +812,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (string.Equals(message.MessageType, "ExecutionUpdate", StringComparison.OrdinalIgnoreCase))
 					ApplyRemoteLeaderExecution(message);
 				else if (string.Equals(message.MessageType, "OrderUpdate", StringComparison.OrdinalIgnoreCase))
-					ApplyRemoteLeaderOrder(message);
+					ApplyRemoteLeaderOrder(message, Stopwatch.GetTimestamp());
 			} catch (Exception ex) {
 				OrcaCopyDiagnostics.Print("Remote network message failed: " + ex.Message, LogLevel.Error);
 			}
@@ -778,7 +824,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				RaiseStatus(e.Status);
 		}
 
-		private void ApplyRemoteLeaderOrder(OrcaCopyNetworkMessage message)
+		private void ApplyRemoteLeaderOrder(OrcaCopyNetworkMessage message, long dispatchStartTimestamp)
 		{
 			Instrument instrument = ResolveInstrument(message.InstrumentFullName);
 			if (instrument == null)
@@ -786,7 +832,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			OrderState state = ParseEnum(message.OrderState, OrderState.Unknown);
 			ErrorCode error = ErrorCode.NoError;
-			ReplicateOrderMessage(message, instrument, state, error);
+			ReplicateOrderMessage(message, instrument, state, error, dispatchStartTimestamp);
 		}
 
 		private void ApplyRemoteLeaderExecution(OrcaCopyNetworkMessage message)
@@ -810,7 +856,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			WriteLog("RemoteLeaderFill", fill.LeaderAccountName, null, fill.Instrument, fill.Action.ToString(), null, fill.Quantity, fill.Price, 0, 0, 0, "Remote leader filled");
 		}
 
-		private void ReplicateOrder(Order leaderOrder, OrderState state, ErrorCode error, string leaderKey, bool protective, bool fromNetwork)
+		private void ReplicateOrder(Order leaderOrder, OrderState state, ErrorCode error, string leaderKey, bool protective, bool fromNetwork, long dispatchStartTimestamp)
 		{
 			if (leaderOrder == null || string.IsNullOrWhiteSpace(leaderKey))
 				return;
@@ -826,7 +872,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (!ShouldSubmitOrUpdate(state, leaderOrder.OrderType))
 				return;
 
-			foreach (OrcaFollowerAccountState follower in followersByName.Values.ToArray()) {
+			OrcaFollowerAccountState[] followers = followerSnapshot;
+			foreach (OrcaFollowerAccountState follower in followers) {
 				if (!CanCopyToFollower(follower, leaderOrder.Account, protective))
 					continue;
 				SubmitOrUpdateFollowerOrder(
@@ -842,11 +889,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 					leaderOrder.Oco,
 					leaderOrder.Name,
 					leaderOrder.Gtd,
-					protective);
+					protective,
+					dispatchStartTimestamp);
 			}
 		}
 
-		private void ReplicateOrderMessage(OrcaCopyNetworkMessage message, Instrument instrument, OrderState state, ErrorCode error)
+		private void ReplicateOrderMessage(OrcaCopyNetworkMessage message, Instrument instrument, OrderState state, ErrorCode error, long dispatchStartTimestamp)
 		{
 			if (message == null || string.IsNullOrWhiteSpace(message.LeaderOrderKey))
 				return;
@@ -862,7 +910,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			OrderAction action = ParseEnum(message.OrderAction, OrderAction.Buy);
 			OrderType orderType = ParseEnum(message.OrderType, OrderType.Market);
 			TimeInForce tif = ParseEnum(message.TimeInForce, TimeInForce.Day);
-			foreach (OrcaFollowerAccountState follower in followersByName.Values.ToArray()) {
+			OrcaFollowerAccountState[] followers = followerSnapshot;
+			foreach (OrcaFollowerAccountState follower in followers) {
 				if (!CanCopyToFollower(follower, null, message.IsProtective))
 					continue;
 				SubmitOrUpdateFollowerOrder(
@@ -878,7 +927,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 					message.Oco,
 					message.Name,
 					DateTime.MaxValue,
-					message.IsProtective);
+					message.IsProtective,
+					dispatchStartTimestamp);
 			}
 		}
 
@@ -895,7 +945,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			string leaderOco,
 			string leaderName,
 			DateTime gtd,
-			bool protective)
+			bool protective,
+			long dispatchStartTimestamp)
 		{
 			if (follower == null || follower.Account == null || instrument == null)
 				return;
@@ -903,7 +954,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			ConcurrentDictionary<string, OrcaCopiedOrderState> byFollower = copiedByLeaderKey.GetOrAdd(leaderKey, k => new ConcurrentDictionary<string, OrcaCopiedOrderState>(StringComparer.OrdinalIgnoreCase));
 			OrcaCopiedOrderState existing;
 			if (byFollower.TryGetValue(follower.AccountName, out existing) && existing.FollowerOrder != null) {
-				UpdateFollowerOrder(existing, leaderQuantity, limitPrice, stopPrice);
+				UpdateFollowerOrder(existing, follower, leaderQuantity, limitPrice, stopPrice, dispatchStartTimestamp);
 				return;
 			}
 
@@ -950,13 +1001,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 				byFollower[follower.AccountName] = copied;
 				RegisterFollowerOrderKeys(followerOrder, copied);
 				follower.Account.Submit(new[] { followerOrder });
-				WriteLog("SubmitFollowerOrder", settings.LeaderAccountName, follower.AccountName, instrument, action.ToString(), orderType.ToString(), followerQuantity, 0, 0, 0, 0, "Submitted copied order");
+				double dispatchMs = RecordDispatchMetric(follower, dispatchStartTimestamp);
+				WriteLog("SubmitFollowerOrder", settings.LeaderAccountName, follower.AccountName, instrument, action.ToString(), orderType.ToString(), followerQuantity, 0, 0, 0, 0, "Submitted copied order", dispatchMs);
 			} catch (Exception ex) {
 				TriggerFollowerGuard(follower, "Submit failed: " + ex.Message, instrument);
 			}
 		}
 
-		private void UpdateFollowerOrder(OrcaCopiedOrderState copied, int leaderQuantity, double limitPrice, double stopPrice)
+		private void UpdateFollowerOrder(OrcaCopiedOrderState copied, OrcaFollowerAccountState follower, int leaderQuantity, double limitPrice, double stopPrice, long dispatchStartTimestamp)
 		{
 			if (copied == null || copied.FollowerOrder == null || copied.FollowerOrder.Account == null)
 				return;
@@ -986,10 +1038,20 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			try {
 				copied.FollowerOrder.Account.Change(new[] { copied.FollowerOrder });
+				RecordDispatchMetric(follower, dispatchStartTimestamp);
 			} catch (Exception ex) {
-				OrcaFollowerAccountState follower = GetFollowerState(copied.FollowerOrder.Account);
-				TriggerFollowerGuard(follower, "Change failed: " + ex.Message, copied.FollowerOrder.Instrument);
+				OrcaFollowerAccountState failedFollower = GetFollowerState(copied.FollowerOrder.Account);
+				TriggerFollowerGuard(failedFollower, "Change failed: " + ex.Message, copied.FollowerOrder.Instrument);
 			}
+		}
+
+		private double RecordDispatchMetric(OrcaFollowerAccountState follower, long dispatchStartTimestamp)
+		{
+			double dispatchMs = dispatchStartTimestamp <= 0
+				? 0
+				: (Stopwatch.GetTimestamp() - dispatchStartTimestamp) * 1000.0 / Stopwatch.Frequency;
+			RunOnUi(() => follower.AddDispatchMetric(dispatchMs));
+			return dispatchMs;
 		}
 
 		private void CancelMappedFollowers(string leaderKey)
@@ -1322,7 +1384,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			return fallback;
 		}
 
-		private void WriteLog(string eventType, string leaderAccountName, string followerAccountName, Instrument instrument, string action, string orderType, int quantity, double leaderPrice, double followerPrice, int latency, double slippageTicks, string message)
+		private void WriteLog(string eventType, string leaderAccountName, string followerAccountName, Instrument instrument, string action, string orderType, int quantity, double leaderPrice, double followerPrice, int latency, double slippageTicks, string message, double dispatchMilliseconds = 0)
 		{
 			OrcaCopyTradeLogger.Write(new OrcaCopyLogRecord {
 				TimeUtc = DateTime.UtcNow,
@@ -1337,6 +1399,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				FollowerPrice = followerPrice,
 				LatencyMs = latency,
 				SlippageTicks = slippageTicks,
+				DispatchMilliseconds = dispatchMilliseconds,
 				Message = message
 			});
 		}

@@ -19,7 +19,7 @@ using WpfBrushes = System.Windows.Media.Brushes;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-	public partial class OrcaPrints : Indicator
+	public partial class OrcaPrints : Indicator, IOrcaReplayParticipant
 	{
 		private readonly Guid sharedProfileSourceId = Guid.NewGuid();
 		private readonly object sharedProfileSync = new object();
@@ -27,6 +27,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private List<PrintEvent> printEvents;
 		private Dictionary<string, DateTime> clusterCooldowns;
 		private Dictionary<double, PriceLevelAccumulator> priceLevelAccumulators;
+		private Dictionary<long, HighDeltaWindowAccumulator> highDeltaWindowAccumulators;
 		private List<Dictionary<double, long>> sharedProfileVolumeMaps;
 		private List<Dictionary<double, long>> sharedProfileUpVolumeMaps;
 		private List<Dictionary<double, long>> sharedProfileDownVolumeMaps;
@@ -41,6 +42,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int sharedProfileCoverageBarCount;
 		private DateTime lastSharedProfileRegistrationUtc = DateTime.MinValue;
 		private DateTime sharedProfileLastUpdatedUtc = DateTime.MinValue;
+		private readonly string diagnosticsInstanceId = Guid.NewGuid().ToString("N");
+		private bool diagnosticsRegistered;
+		private OrcaReplayBarHorizon replayBarHorizon;
+		private TimeZoneInfo orcaPrintChartTimeZone;
+		private TimeZoneInfo orcaPrintEasternTimeZone;
 
 		protected override void OnStateChange()
 		{
@@ -60,9 +66,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 				MinTradeSize = 5;
 				ResetOnNewSession = true;
 				PublishSharedProfileCache = true;
+				ExcludeMocPrints = false;
+				MocStartTimeEt = new TimeSpan(15, 50, 0);
+				MocEndTimeEt = new TimeSpan(16, 0, 0);
 
 				EnableSinglePrints = true;
 				SinglePrintMinSize = 100;
+				ShowSinglePrintSizeText = false;
+				SinglePrintTextFontSize = 9.0f;
+				SinglePrintTextFontFamily = "Figtree";
+				HideSinglePrintsMatchingClusters = true;
+				AggregateSinglePrintsWhenCompact = true;
+				CompactAggregatePriceRangeTicks = 4;
+				CompactAggregateMinPrints = 3;
 
 				EnableClusters = true;
 				ClusterTimeWindowSec = 3.0;
@@ -70,11 +86,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ClusterMaxPriceTicks = 4;
 				MinAggressorPercent = 70;
 				ClusterCooldownSec = 1.0;
+				AggregateClustersWhenCompact = true;
+				CompactClusterAggregatePriceRangeTicks = 4;
+				CompactClusterAggregateMinClusters = 3;
 
 				EnablePriceLevelAccumulation = false;
+				PriceLevelHighlightMode = NinjaTrader.NinjaScript.Indicators.PriceLevelHighlightMode.VolumeAndDominance;
 				PriceLevelMinVolume = 75;
 				PriceLevelRequireMinDominance = true;
 				PriceLevelMinDominancePercent = 60;
+				PriceLevelMinDelta = 200;
+				PriceLevelDeltaDirection = NinjaTrader.NinjaScript.Indicators.PriceLevelDeltaDirection.Both;
+				PriceLevelDeltaWindowTicks = 4;
 
 				ParentConfidenceMode = NinjaTrader.NinjaScript.Indicators.ParentConfidenceMode.Score;
 				MinParentConfidence = 60;
@@ -107,19 +130,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 				AutoCompactLayout = true;
 				CompactLayoutEnterSpacingPx = 36;
 				DetailLayoutEnterSpacingPx = 46;
+				HidePrintsWhenZoomedOut = false;
+				MinimumBarSpacingToShowPrintsPx = 4;
 			}
 			else if (State == State.DataLoaded)
 			{
+				InitializeOrcaPrintTimeZones();
 				InitializeOrcaPrintsEngine();
 				InitializeOrcaPrintsRendering();
+				replayBarHorizon = new OrcaReplayBarHorizon("OrcaPrints:" + diagnosticsInstanceId);
 				RegisterSharedProfileSource(true);
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+				ReportDiagnosticsState();
 			}
 			else if (State == State.Historical)
 			{
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
 				AttachOrcaPrintsMouseHandlers();
+				ReportDiagnosticsState();
+			}
+			else if (State == State.Transition || State == State.Realtime)
+			{
+				if (ChartControl != null) OrcaReplayCore.RegisterParticipant(ChartControl, this);
+				ReportDiagnosticsState();
 			}
 			else if (State == State.Terminated)
 			{
+				if (ChartControl != null) OrcaReplayCore.UnregisterParticipant(ChartControl, this);
+				if (replayBarHorizon != null) replayBarHorizon.Restore();
+				OrcaDiagnosticsCore.UnregisterInstance(diagnosticsInstanceId);
 				DetachOrcaPrintsMouseHandlers();
 				TerminateOrcaPrintsEngine();
 				DisposeDxBrushCache();
@@ -128,6 +167,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnBarUpdate()
 		{
+			long diagnosticsWorkStart = 0;
+			int diagnosticsBarsInProgress = BarsInProgress;
+			if (OrcaDiagnosticsCore.IsEnabled)
+			{
+				EnsureDiagnosticsRegistered();
+				long diagnosticsSequence = OrcaDiagnosticsCore.ReportBarUpdate(diagnosticsInstanceId, BarsInProgress, GetDiagnosticsEventTime());
+				diagnosticsWorkStart = OrcaDiagnosticsCore.BeginWorkSample(diagnosticsSequence);
+			}
+			try
+			{
+
 			if (CurrentBar < 0 || Bars == null)
 				return;
 
@@ -138,6 +188,49 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			RefreshSharedProfileRegistrationIfNeeded();
+			}
+			finally
+			{
+				if (diagnosticsWorkStart > 0)
+					OrcaDiagnosticsCore.ReportWorkSample(diagnosticsInstanceId, OrcaDiagnosticsWorkKind.BarUpdate, diagnosticsBarsInProgress, diagnosticsWorkStart);
+			}
+		}
+
+		private void EnsureDiagnosticsRegistered()
+		{
+			if (diagnosticsRegistered)
+				return;
+
+			OrcaDiagnosticsCore.RegisterInstance(diagnosticsInstanceId, "OrcaPrints", this);
+			OrcaDiagnosticsCore.ReportSourceDeclaration(diagnosticsInstanceId, "TickReplayLastEvents", "Unknown", PublishSharedProfileCache ? "SharedChartCache" : string.Empty);
+			OrcaDiagnosticsCore.ReportSeriesDeclaration(diagnosticsInstanceId, 0, "PrimaryChartSeries", "Chart", "Primary chart market-data events");
+			diagnosticsRegistered = true;
+		}
+
+		private void ReportDiagnosticsState()
+		{
+
+			EnsureDiagnosticsRegistered();
+			OrcaDiagnosticsCore.ReportState(diagnosticsInstanceId, State.ToString());
+		}
+
+		private DateTime GetDiagnosticsEventTime()
+		{
+			try
+			{
+				if (Times != null && CurrentBars != null && BarsInProgress >= 0 && BarsInProgress < Times.Length && BarsInProgress < CurrentBars.Length && CurrentBars[BarsInProgress] >= 0)
+					return Times[BarsInProgress][0];
+			}
+			catch { }
+
+			try
+			{
+				if (CurrentBar >= 0)
+					return Time[0];
+			}
+			catch { }
+
+			return DateTime.MinValue;
 		}
 
 		#region 01. General
@@ -154,6 +247,29 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Publish Shared Profile Cache", Order = 3, GroupName = "01. General",
 			Description = "Publishes live volume-at-price and classified delta maps for Fixed Range and other Orca tools on the same chart.")]
 		public bool PublishSharedProfileCache { get; set; }
+
+		string IOrcaReplayParticipant.ReplayParticipantId { get { return replayBarHorizon == null ? "OrcaPrints:" + diagnosticsInstanceId : replayBarHorizon.ParticipantId; } }
+		OrcaReplayCapabilities IOrcaReplayParticipant.ReplayCapabilities { get { return replayBarHorizon == null ? new OrcaReplayCapabilities(true, false, true, true, OrcaReplayChartStyleSupport.AllV1) : replayBarHorizon.Capabilities; } }
+		OrcaReplayCheckpoint IOrcaReplayParticipant.CaptureReplayCheckpoint(OrcaReplayContext context) { return replayBarHorizon.Capture(context); }
+		void IOrcaReplayParticipant.PrepareReplay(OrcaReplayContext context, OrcaReplayCheckpoint checkpoint) { replayBarHorizon.Prepare(context, checkpoint); }
+		void IOrcaReplayParticipant.ApplyReplayEvent(OrcaReplayContext context, OrcaReplayTradeEvent tradeEvent) { }
+		void IOrcaReplayParticipant.ApplyReplayBar(OrcaReplayContext context, int primaryBarIndex) { replayBarHorizon.ApplyBar(primaryBarIndex); }
+		void IOrcaReplayParticipant.PublishReplaySnapshot(OrcaReplayContext context) { }
+		void IOrcaReplayParticipant.RestoreLiveState() { if (replayBarHorizon != null) replayBarHorizon.Restore(); }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Exclude MOC Prints", Order = 4, GroupName = "01. General", Description = "Excludes all Orca print detection inside the configured Eastern market-on-close window while preserving candle-profile volume.")]
+		public bool ExcludeMocPrints { get; set; }
+
+		[NinjaScriptProperty]
+		[PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")]
+		[Display(Name = "MOC Start Time ET", Order = 5, GroupName = "01. General")]
+		public TimeSpan MocStartTimeEt { get; set; }
+
+		[NinjaScriptProperty]
+		[PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")]
+		[Display(Name = "MOC End Time ET", Order = 6, GroupName = "01. General")]
+		public TimeSpan MocEndTimeEt { get; set; }
 		#endregion
 
 		#region 02. Single Prints
@@ -165,6 +281,38 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(1, int.MaxValue)]
 		[Display(Name = "Single Print Min Size", Order = 2, GroupName = "02. Single Prints")]
 		public int SinglePrintMinSize { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Size Text", Order = 3, GroupName = "02. Single Prints", Description = "Shows the contract size inside single-print circles when the selected text fits without clipping.")]
+		public bool ShowSinglePrintSizeText { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(6.0, 30.0)]
+		[Display(Name = "Text Size", Order = 4, GroupName = "02. Single Prints")]
+		public float SinglePrintTextFontSize { get; set; }
+
+		[NinjaScriptProperty]
+		[TypeConverter(typeof(CandleProfileTextFontFamilyConverter))]
+		[Display(Name = "Text Font", Order = 5, GroupName = "02. Single Prints")]
+		public string SinglePrintTextFontFamily { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Hide Singles Matching Clusters", Order = 6, GroupName = "02. Single Prints", Description = "Hides a single print when an accepted cluster has the same timestamp and price row.")]
+		public bool HideSinglePrintsMatchingClusters { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Aggregate Singles When Compact", Order = 7, GroupName = "02. Single Prints", Description = "Combines nearby same-side single prints into display-only bubbles while Auto Compact Layout is active.")]
+		public bool AggregateSinglePrintsWhenCompact { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 100)]
+		[Display(Name = "Aggregate Price Range Ticks", Order = 8, GroupName = "02. Single Prints")]
+		public int CompactAggregatePriceRangeTicks { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(2, 1000)]
+		[Display(Name = "Aggregate Min Prints", Order = 9, GroupName = "02. Single Prints")]
+		public int CompactAggregateMinPrints { get; set; }
 		#endregion
 
 		#region 03. Clusters
@@ -196,6 +344,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(0.0, 60.0)]
 		[Display(Name = "Cluster Cooldown Sec", Order = 6, GroupName = "03. Clusters")]
 		public double ClusterCooldownSec { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Aggregate Clusters When Compact", Order = 7, GroupName = "03. Clusters", Description = "Combines nearby same-side detected clusters into display-only super clusters while Auto Compact Layout is active.")]
+		public bool AggregateClustersWhenCompact { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 100)]
+		[Display(Name = "Aggregate Price Range Ticks", Order = 8, GroupName = "03. Clusters")]
+		public int CompactClusterAggregatePriceRangeTicks { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(2, 1000)]
+		[Display(Name = "Aggregate Min Clusters", Order = 9, GroupName = "03. Clusters")]
+		public int CompactClusterAggregateMinClusters { get; set; }
 		#endregion
 
 		#region 03B. Price Levels
@@ -204,18 +366,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool EnablePriceLevelAccumulation { get; set; }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Highlight Mode", Order = 2, GroupName = "03B. Price Levels", Description = "Uses the existing volume/dominance trigger, signed high delta, or either trigger independently.")]
+		public PriceLevelHighlightMode PriceLevelHighlightMode { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(1, 1000000000)]
-		[Display(Name = "Price Level Min Volume", Order = 2, GroupName = "03B. Price Levels")]
+		[Display(Name = "Price Level Min Volume", Order = 3, GroupName = "03B. Price Levels")]
 		public long PriceLevelMinVolume { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Require Min Dominance", Order = 3, GroupName = "03B. Price Levels")]
+		[Display(Name = "Require Min Dominance", Order = 4, GroupName = "03B. Price Levels")]
 		public bool PriceLevelRequireMinDominance { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(50, 100)]
-		[Display(Name = "Min Dominance Percent", Order = 4, GroupName = "03B. Price Levels")]
+		[Display(Name = "Min Dominance Percent", Order = 5, GroupName = "03B. Price Levels")]
 		public int PriceLevelMinDominancePercent { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 1000000000)]
+		[Display(Name = "Minimum Absolute Delta", Order = 6, GroupName = "03B. Price Levels")]
+		public long PriceLevelMinDelta { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Delta Direction", Order = 7, GroupName = "03B. Price Levels")]
+		public PriceLevelDeltaDirection PriceLevelDeltaDirection { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 20)]
+		[Display(Name = "Delta Window Ticks", Order = 8, GroupName = "03B. Price Levels", Description = "Calculates net signed delta across this many consecutive price rows inside the current candle.")]
+		public int PriceLevelDeltaWindowTicks { get; set; }
 		#endregion
 
 		#region 04. Parent Confidence
@@ -393,6 +573,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(1, 500)]
 		[Display(Name = "Detail Above Bar Spacing", Order = 24, GroupName = "05. Rendering")]
 		public int DetailLayoutEnterSpacingPx { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Hide Prints When Zoomed Out", Order = 25, GroupName = "05. Rendering", Description = "Hides every Orca print when average visible bar spacing falls below the configured pixel threshold.")]
+		public bool HidePrintsWhenZoomedOut { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 100)]
+		[Display(Name = "Minimum Bar Spacing To Show Prints", Order = 26, GroupName = "05. Rendering", Description = "Minimum average pixels per bar required to show Orca prints. Higher values hide prints sooner while zooming out.")]
+		public int MinimumBarSpacingToShowPrintsPx { get; set; }
 		#endregion
 	}
 }
