@@ -33,8 +33,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults) {
-				Description = "Orca account-specific discipline grading and rule accountability panel";
-				Name = "Orca Discipline Guard";
+				Description = "Orca Rulebook session tracking and rule accountability panel";
+				Name = "Orca Rulebook";
 			} else if (State == State.Terminated) {
 				DisposeRuntime();
 			}
@@ -51,18 +51,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 				?? controlCenter.FindFirst("toolsMenuItem") as NTMenuItem
 				?? controlCenter.FindFirst("ControlCenterMenuItemNew") as NTMenuItem;
 			if (hostMenu == null) {
-				OrcaDisciplineDiagnostics.Write("Control Center menu host was not found; Orca Discipline Guard menu was not injected.");
+				OrcaDisciplineDiagnostics.Write("Control Center menu host was not found; Orca Rulebook menu was not injected.");
 				return;
 			}
-			OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu host found: " + (hostMenu.Name ?? string.Empty) + " / " + (hostMenu.Header == null ? string.Empty : hostMenu.Header.ToString()));
+			OrcaDisciplineDiagnostics.Write("Orca Rulebook menu host found: " + (hostMenu.Name ?? string.Empty) + " / " + (hostMenu.Header == null ? string.Empty : hostMenu.Header.ToString()));
 
 			guardMenuItem = new NTMenuItem {
-				Header = "Orca Discipline Guard",
+				Header = "Orca Rulebook",
 				Style = Application.Current == null ? null : Application.Current.TryFindResource("MainMenuItem") as Style
 			};
 			guardMenuItem.Click += OnMenuItemClick;
 			hostMenu.Items.Add(guardMenuItem);
-			OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu injected.");
+			OrcaDisciplineDiagnostics.Write("Orca Rulebook menu injected.");
 		}
 
 		protected override void OnWindowDestroyed(Window window)
@@ -80,14 +80,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private void OnMenuItemClick(object sender, RoutedEventArgs e)
 		{
 			try {
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu item clicked.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook menu item clicked.");
 				Dispatcher requestDispatcher = guardMenuItem == null ? Dispatcher.CurrentDispatcher : guardMenuItem.Dispatcher;
 				OrcaDisciplineGuardEngine engine = GetOrCreateRuntime(requestDispatcher);
 				engine.InvokeOnDispatcher(() => OrcaDisciplineGuardWindow.ShowOrActivate(engine));
 			} catch (Exception ex) {
-				string message = "Orca Discipline Guard click handler failed: " + ex.Message;
+				string message = "Orca Rulebook click handler failed: " + ex.Message;
 				OrcaDisciplineDiagnostics.Write(message + Environment.NewLine + ex);
-				MessageBox.Show(message, "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Error);
+				MessageBox.Show(message, "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
 
@@ -103,7 +103,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				engine = runtimeEngine;
 			}
 			if (created)
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard background runtime started.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook background runtime started.");
 			return engine;
 		}
 
@@ -116,7 +116,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			}
 			if (engine != null) {
 				engine.Dispose();
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard background runtime stopped.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook background runtime stopped.");
 			}
 		}
 	}
@@ -137,10 +137,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (engine == null)
 				throw new ArgumentNullException("engine");
 			if (!engine.CheckDispatcherAccess())
-				throw new InvalidOperationException("Orca Discipline Guard must be created on its runtime dispatcher.");
+				throw new InvalidOperationException("Orca Rulebook must be created on its runtime dispatcher.");
 
-			Caption = "Orca Discipline Guard";
-			Title = "Orca Discipline Guard";
+			Caption = "Orca Rulebook";
+			Title = "Orca Rulebook";
 			Width = 1180;
 			Height = 760;
 			MinWidth = 960;
@@ -183,12 +183,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (!instance.IsVisible)
 					instance.Show();
 				instance.Activate();
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window opened.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook window opened.");
 			} catch (Exception ex) {
 				instance = null;
-				string message = "Orca Discipline Guard could not open: " + ex.Message;
+				string message = "Orca Rulebook could not open: " + ex.Message;
 				OrcaDisciplineDiagnostics.Write(message + Environment.NewLine + ex);
-				MessageBox.Show(message, "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Error);
+				MessageBox.Show(message, "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
 
@@ -202,7 +202,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			StackPanel titleStack = new StackPanel { Orientation = Orientation.Vertical };
 			titleStack.Children.Add(new TextBlock {
-				Text = "Orca Discipline Guard",
+				Text = "Orca Rulebook",
 				FontSize = 20,
 				FontWeight = FontWeights.SemiBold,
 				Foreground = Brush("#FFF5F8FB")
@@ -746,7 +746,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			viewModel.Dispose();
 			instance = null;
-			OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window closed; background runtime remains active.");
+			OrcaDisciplineDiagnostics.Write("Orca Rulebook window closed; background runtime remains active.");
 		}
 
 		private static Brush Brush(string color)
@@ -868,7 +868,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (choice == null)
 				return;
 			if (string.IsNullOrWhiteSpace(nameBox.Text)) {
-				MessageBox.Show(this, "Give the rule a name first.", "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Warning);
+				MessageBox.Show(this, "Give the rule a name first.", "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Warning);
 				return;
 			}
 
@@ -901,7 +901,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				string part = rawPart == null ? string.Empty : rawPart.Trim();
 				int equalsIndex = part.IndexOf('=');
 				if (equalsIndex <= 0 || equalsIndex >= part.Length - 1) {
-					MessageBox.Show(this, "Use Key=Value pairs for parameters, separated by semicolons.", "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Warning);
+					MessageBox.Show(this, "Use Key=Value pairs for parameters, separated by semicolons.", "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Warning);
 					return null;
 				}
 				string key = part.Substring(0, equalsIndex).Trim();
@@ -1242,7 +1242,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				RaiseDashboard();
 				RaiseRuleCommandStates();
 			} catch (Exception ex) {
-				AlertText = "Orca Discipline Guard could not start: " + ex.Message;
+				AlertText = "Orca Rulebook could not start: " + ex.Message;
 			}
 		}
 
@@ -1303,7 +1303,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (engine.Session == null)
 					return;
 				string path = OrcaDisciplineStore.SaveSessionReport(engine.Session.CreateReport());
-				AlertText = "Session JSON saved: " + path;
+				AlertText = "Session JSON saved: " + path + SaveRulebookLedgerNote(engine.Session);
 			} catch (Exception ex) {
 				AlertText = "Session export failed: " + ex.Message;
 			}
@@ -1364,7 +1364,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (!CanDeleteSelectedRule())
 					return;
 				string ruleName = SelectedRule.Name;
-				MessageBoxResult result = MessageBox.Show("Delete rule '" + ruleName + "' from the current template draft?", "Orca Discipline Guard", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+				MessageBoxResult result = MessageBox.Show("Delete rule '" + ruleName + "' from the current template draft?", "Orca Rulebook", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 				if (result != MessageBoxResult.Yes)
 					return;
 				if (engine.Session.RemoveRule(SelectedRule)) {
@@ -1498,6 +1498,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Raise("SessionSummary");
 		}
 
+		private static string SaveRulebookLedgerNote(OrcaDisciplineSession session)
+		{
+			try {
+				if (session == null || session.Ledger == null)
+					return string.Empty;
+				string ledgerPath = OrcaDisciplineStore.SaveRulebookLedger(session.Ledger);
+				return " Rulebook ledger: " + ledgerPath;
+			} catch (Exception ex) {
+				return " Rulebook ledger was not saved: " + ex.Message;
+			}
+		}
+
 		private string ResolveInitialTemplate(string savedTemplateName)
 		{
 			if (!string.IsNullOrWhiteSpace(savedTemplateName) && TemplateNames.Contains(savedTemplateName))
@@ -1518,7 +1530,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				return;
 			try {
 				string path = OrcaDisciplineStore.SaveSessionReport(engine.Session.CreateReport());
-				AlertText = "Archived active session before " + reason + ": " + path;
+				AlertText = "Archived active session before " + reason + ": " + path + SaveRulebookLedgerNote(engine.Session);
 			} catch (Exception ex) {
 				AlertText = "Could not archive active session before " + reason + ": " + ex.Message;
 			}
@@ -1600,7 +1612,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (action == null || disposed)
 				return;
 			if (!dispatcher.CheckAccess())
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window request marshaled to the runtime dispatcher.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook window request marshaled to the runtime dispatcher.");
 			RunOnUi(action);
 		}
 
@@ -1800,6 +1812,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 	public sealed class OrcaDisciplineSession : OrcaDisciplineNotifyBase
 	{
 		private readonly OrcaRoundTripTracker tracker = new OrcaRoundTripTracker();
+		private readonly OrcaRulebookLedger ledger;
 		private readonly Dictionary<string, int> currentPositionsByInstrument = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 		private readonly HashSet<string> observedInstrumentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		private readonly OrcaDisciplineRuleTemplate template;
@@ -1822,6 +1835,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			this.template = template == null ? OrcaDisciplineRuleTemplate.CreatePropFirmDefault() : template.Clone();
 			TemplateName = this.template.Name;
 			this.instrumentFilter = string.IsNullOrWhiteSpace(instrumentFilter) ? OrcaDisciplineConstants.AllInstruments : instrumentFilter;
+			ledger = OrcaRulebookLedger.Open(AccountName, this.instrumentFilter);
 			Rules = new ObservableCollection<OrcaDisciplineRule>();
 			Violations = new ObservableCollection<OrcaDisciplineViolation>();
 			Status = OrcaDisciplineSessionStatus.NotStarted;
@@ -1833,6 +1847,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public string AccountName { get; private set; }
 		public string TemplateName { get; private set; }
+		public OrcaRulebookLedger Ledger { get { return ledger; } }
 		public ObservableCollection<OrcaDisciplineRule> Rules { get; private set; }
 		public ObservableCollection<OrcaDisciplineViolation> Violations { get; private set; }
 
@@ -1849,6 +1864,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 					value = OrcaDisciplineConstants.AllInstruments;
 				if (!Set(ref instrumentFilter, value, "InstrumentFilter"))
 					return;
+				if (ledger != null)
+					ledger.SetInstrumentScope(instrumentFilter);
 				currentPositionsByInstrument.Clear();
 				RefreshRulesCurrentValues();
 			}
@@ -1967,6 +1984,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			WinningTrades = 0;
 			LosingTrades = 0;
 			tracker.Reset();
+			if (ledger != null)
+				ledger.Begin(StartTime);
 			Violations.Clear();
 			currentPositionsByInstrument.Clear();
 			SyncOpenPositions(account, false);
@@ -1980,12 +1999,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (Status == OrcaDisciplineSessionStatus.Active)
 				Status = OrcaDisciplineSessionStatus.Paused;
+			if (ledger != null)
+				ledger.Pause();
 		}
 
 		public void Resume()
 		{
 			if (Status == OrcaDisciplineSessionStatus.Paused)
 				Status = OrcaDisciplineSessionStatus.Active;
+			if (ledger != null)
+				ledger.Resume();
 		}
 
 		public void End()
@@ -1994,6 +2017,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				return;
 			EndTime = DateTime.Now;
 			Status = OrcaDisciplineSessionStatus.Ended;
+			if (ledger != null)
+				ledger.End(EndTime);
 			RecalculateScore();
 			RaiseAll();
 		}
@@ -2013,19 +2038,29 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (execution.Instrument == null || !MatchesInstrumentFilter(execution.Instrument))
 				return;
 			ObserveInstrument(execution.Instrument);
-			OrcaTradeUpdate update = tracker.ProcessExecution(execution, e.Time);
-			if (update == null)
-				return;
-			if (update.NewTradeStarted != null)
-				ApplyNewTrade(update.NewTradeStarted);
-			if (update.IncreasedTrade != null)
-				ApplyTradeIncreased(update.IncreasedTrade);
-			foreach (OrcaRoundTripTrade trade in update.CompletedTrades)
-				ApplyCompletedTrade(trade);
-			SyncPositionFromTracker(update.InstrumentName, update.CurrentSignedPosition);
-			RefreshRulesCurrentValues();
-			RecalculateScore();
-			RaiseAll();
+			if (ledger != null)
+				ledger.BeginConsequenceWindow();
+			try {
+				OrcaRulebookIngestResult ingested = RecordLedgerExecution(e);
+				if (ingested == OrcaRulebookIngestResult.Duplicate || ingested == OrcaRulebookIngestResult.Conflict)
+					return;
+				OrcaTradeUpdate update = tracker.ProcessExecution(execution, e.Time);
+				if (update == null)
+					return;
+				if (update.NewTradeStarted != null)
+					ApplyNewTrade(update.NewTradeStarted);
+				if (update.IncreasedTrade != null)
+					ApplyTradeIncreased(update.IncreasedTrade);
+				foreach (OrcaRoundTripTrade trade in update.CompletedTrades)
+					ApplyCompletedTrade(trade);
+				SyncPositionFromTracker(update.InstrumentName, update.CurrentSignedPosition);
+				RefreshRulesCurrentValues();
+				RecalculateScore();
+				RaiseAll();
+			} finally {
+				if (ledger != null)
+					ledger.EndConsequenceWindow();
+			}
 		}
 
 		public void OnPositionUpdate(PositionEventArgs e)
@@ -2083,6 +2118,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				ValueObserved = observed ?? string.Empty,
 				LimitValue = limit ?? string.Empty
 			};
+			if (ledger != null)
+				violation.TradeId = ledger.LinkViolation(rule.Id, rule.Name, rule.Severity.ToString(), message, instrument ?? string.Empty, violation.Timestamp);
 			Violations.Insert(0, violation);
 			rule.RegisterViolation(violation);
 			foreach (OrcaDisciplineRule candidate in Rules) {
@@ -2151,8 +2188,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public string BuildSummary()
 		{
 			StringBuilder sb = new StringBuilder();
-			sb.AppendLine("Orca Discipline Guard Session");
+			sb.AppendLine("Orca Rulebook Session");
 			sb.AppendLine("Account: " + AccountName);
+			if (ledger != null)
+				sb.AppendLine("Ledger: " + ledger.EvidenceStatus + ". " + ledger.EvidenceReason);
 			sb.AppendLine("Template: " + TemplateName);
 			sb.AppendLine("Instrument Filter: " + InstrumentFilter);
 			sb.AppendLine("Status: " + StatusText);
@@ -2209,16 +2248,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 				return;
 			if (string.Equals(rule.ManualAction, OrcaManualActionValues.Followed, StringComparison.OrdinalIgnoreCase)) {
 				rule.RegisterFollow();
+				RecordManualOpportunity(rule, "Followed");
 				rule.RefreshCurrentValue(this);
 				return;
 			}
 			if (string.Equals(rule.ManualAction, OrcaManualActionValues.Broken, StringComparison.OrdinalIgnoreCase) && !rule.HasManualBrokenViolation) {
 				rule.HasManualBrokenViolation = true;
 				AddViolation(rule, "Manual rule marked broken" + (string.IsNullOrWhiteSpace(rule.Notes) ? string.Empty : ": " + rule.Notes), string.Empty, "Broken", "Followed");
+				RecordManualOpportunity(rule, "Broken");
 				rule.RefreshCurrentValue(this);
 			}
 			if (string.Equals(rule.ManualAction, OrcaManualActionValues.NotApplicable, StringComparison.OrdinalIgnoreCase)) {
 				rule.Status = OrcaDisciplineRuleStatus.Disabled;
+				RecordManualOpportunity(rule, "NotApplicable");
 				rule.RefreshCurrentValue(this);
 			}
 		}
@@ -2248,6 +2290,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			}
 			foreach (OrcaDisciplineRule rule in Rules)
 				rule.OnTradeCompleted(this, trade);
+			RecordCompletedCycleOpportunities(trade);
 		}
 
 		private void SyncOpenPositions(Account account, bool notifyRules)
@@ -2267,8 +2310,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 						signed = 0;
 					if (signed != 0)
 						currentPositionsByInstrument[InstrumentName(position.Instrument)] = signed;
-					if (Status == OrcaDisciplineSessionStatus.Active)
+					if (Status == OrcaDisciplineSessionStatus.Active) {
 						tracker.SeedOpenPosition(position);
+						if (ledger != null)
+							ledger.SeedOpenPosition(InstrumentName(position.Instrument), signed, position.AveragePrice, DateTime.Now);
+					}
 				}
 			} catch { }
 			if (notifyRules) {
@@ -2331,6 +2377,84 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (string.IsNullOrWhiteSpace(InstrumentFilter) || string.Equals(InstrumentFilter, OrcaDisciplineConstants.AllInstruments, StringComparison.OrdinalIgnoreCase))
 				return true;
 			return string.Equals(InstrumentName(instrument), InstrumentFilter, StringComparison.OrdinalIgnoreCase);
+		}
+
+		private OrcaRulebookIngestResult RecordLedgerExecution(ExecutionEventArgs e)
+		{
+			if (ledger == null || e == null || e.Execution == null)
+				return OrcaRulebookIngestResult.Ignored;
+			try {
+				Execution execution = e.Execution;
+				string instrument = InstrumentName(execution.Instrument);
+				int signed = SignedExecutionQuantity(execution);
+				bool historical = e.IsSod || execution.Order == null;
+				if (!historical && signed == 0) {
+					ledger.MarkGap(instrument, "Execution quantity was not a buy or sell");
+					return OrcaRulebookIngestResult.Ignored;
+				}
+				int? positionAfter = null;
+				if (!historical) {
+					try { positionAfter = execution.Position; } catch { positionAfter = null; }
+				}
+				return ledger.Ingest(new OrcaRulebookFill {
+					Account = AccountName,
+					Instrument = instrument,
+					ExecutionId = execution.ExecutionId,
+					SignedQuantity = signed,
+					Price = execution.Price,
+					PointValue = ExecutionPointValue(execution),
+					Time = e.Time,
+					PositionAfter = positionAfter,
+					Historical = historical
+				});
+			} catch (Exception ex) {
+				ledger.MarkGap(string.Empty, "Execution could not be read");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook ledger skipped an execution: " + ex.Message);
+				return OrcaRulebookIngestResult.Ignored;
+			}
+		}
+
+		private static int SignedExecutionQuantity(Execution execution)
+		{
+			if (execution == null || execution.Order == null || execution.Quantity <= 0)
+				return 0;
+			switch (execution.Order.OrderAction) {
+				case OrderAction.Buy:
+				case OrderAction.BuyToCover:
+					return Math.Abs(execution.Quantity);
+				case OrderAction.Sell:
+				case OrderAction.SellShort:
+					return -Math.Abs(execution.Quantity);
+				default:
+					return 0;
+			}
+		}
+
+		private static double ExecutionPointValue(Execution execution)
+		{
+			try {
+				if (execution != null && execution.Instrument != null && execution.Instrument.MasterInstrument != null)
+					return execution.Instrument.MasterInstrument.PointValue;
+			} catch { }
+			return 0;
+		}
+
+		private void RecordManualOpportunity(OrcaDisciplineRule rule, string result)
+		{
+			if (ledger == null || rule == null)
+				return;
+			ledger.RecordOpportunity(rule.Id, rule.Name, "Manual", result, string.Empty, "Manual checklist is not a trade-opportunity denominator.", false);
+		}
+
+		private void RecordCompletedCycleOpportunities(OrcaRoundTripTrade trade)
+		{
+			if (ledger == null || trade == null)
+				return;
+			foreach (OrcaDisciplineRule rule in Rules) {
+				if (rule == null || !rule.Enabled || rule.Mode == OrcaDisciplineRuleMode.Manual)
+					continue;
+				ledger.RecordOpportunity(rule.Id, rule.Name, "CompletedCycle", "PendingDefinition", trade.InstrumentName, "Denominator is not approved; this is not a grade.", true);
+			}
 		}
 
 		private void ObserveInstrument(Instrument instrument)
@@ -3594,6 +3718,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 			lock (Sync) {
 				EnsureRoot();
 				File.WriteAllText(SettingsPath, Serializer.Serialize(settings ?? new OrcaDisciplineSettings()));
+			}
+		}
+
+		public static string SaveRulebookLedger(OrcaRulebookLedger ledger)
+		{
+			lock (Sync) {
+				EnsureSessions();
+				return OrcaRulebookLedger.WriteAtomic(ledger, SessionsDirectory);
 			}
 		}
 
