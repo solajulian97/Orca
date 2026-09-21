@@ -146,13 +146,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 			MinWidth = 960;
 			MinHeight = 620;
 			WindowStartupLocation = WindowStartupLocation.CenterScreen;
-			Background = Brush("#FF0F141B");
+			Background = Brush("#FF1C1C1C");
 			Foreground = Brush("#FFEAF0F6");
 
 			viewModel = new OrcaDisciplineGuardViewModel(Dispatcher, engine);
 			DataContext = viewModel;
 
-			Grid root = new Grid { Background = Brush("#FF0F141B") };
+			Grid root = new Grid { Background = Brush("#FF1C1C1C") };
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
@@ -256,7 +256,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			Grid views = new Grid {
 				Margin = new Thickness(14, 0, 14, 14),
-				Background = Brush("#FF0F141B")
+				Background = Brush("#FF1C1C1C")
 			};
 			views.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 			views.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -326,7 +326,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private FrameworkElement BuildSessionTab()
 		{
-			Grid tab = new Grid { Background = Brush("#FF0F141B") };
+			Grid tab = new Grid { Background = Brush("#FF1C1C1C") };
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -678,7 +678,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private FrameworkElement BuildSummaryTab()
 		{
-			Grid tab = new Grid { Background = Brush("#FF0F141B") };
+			Grid tab = new Grid { Background = Brush("#FF1C1C1C") };
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
@@ -772,7 +772,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			MinWidth = 520;
 			MinHeight = 420;
 			ResizeMode = ResizeMode.NoResize;
-			Background = new SolidColorBrush(Color.FromRgb(15, 20, 27));
+			Background = new SolidColorBrush(Color.FromRgb(28, 28, 28));
 			Foreground = new SolidColorBrush(Color.FromRgb(234, 240, 246));
 
 			typeCombo = new ComboBox { MinHeight = 26, Margin = new Thickness(0, 3, 0, 10) };
