@@ -778,8 +778,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 			DataGrid grid = BuildBaseGrid();
 			grid.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Rules"));
 			grid.SetBinding(Selector.SelectedItemProperty, new Binding("SelectedRule") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+			grid.BeginningEdit += OnRulesGridBeginningEdit;
 			grid.Columns.Add(new DataGridCheckBoxColumn { Header = "Enabled", Binding = new Binding("Enabled") { Mode = BindingMode.TwoWay }, Width = new DataGridLength(70) });
-			grid.Columns.Add(TextColumn("Rule Name", "Name", 190));
+			grid.Columns.Add(BuildRuleNameColumn());
 			grid.Columns.Add(TextColumn("Mode", "Mode", 90));
 			grid.Columns.Add(TextColumn("Status", "Status", 100));
 			grid.Columns.Add(EditableTextColumn("Parameter / Limit", "ParameterText", 170));
@@ -858,11 +859,41 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 		}
 
+		private DataGridTextColumn BuildRuleNameColumn()
+		{
+			Style cellStyle = new Style(typeof(DataGridCell), BuildCellStyle());
+			DataTrigger locked = new DataTrigger();
+			locked.Binding = new Binding("CanRename");
+			locked.Value = false;
+			locked.Setters.Add(new Setter(DataGridCell.IsReadOnlyProperty, true));
+			cellStyle.Triggers.Add(locked);
+			return new DataGridTextColumn {
+				Header = "Rule Name",
+				Binding = new Binding("Name"),
+				Width = new DataGridLength(190),
+				ElementStyle = BuildCellTextStyle(),
+				EditingElementStyle = BuildTextBoxStyle(),
+				CellStyle = cellStyle
+			};
+		}
+
+		private void OnRulesGridBeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+		{
+			if (e.Column == null || e.Row == null)
+				return;
+			if (!string.Equals(e.Column.Header as string, "Rule Name", StringComparison.Ordinal))
+				return;
+			OrcaDisciplineRule rule = e.Row.Item as OrcaDisciplineRule;
+			if (rule == null || !rule.CanRename)
+				e.Cancel = true;
+		}
+
 		private DataGridTextColumn TextColumn(string header, string path, double width)
 		{
 			return new DataGridTextColumn {
 				Header = header,
 				Binding = new Binding(path),
+				IsReadOnly = true,
 				Width = new DataGridLength(width),
 				ElementStyle = BuildCellTextStyle()
 			};
@@ -2767,6 +2798,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 	public abstract class OrcaDisciplineRule : OrcaDisciplineNotifyBase
 	{
+		private string name;
 		private bool enabled;
 		private OrcaDisciplineRuleStatus status;
 		private int violationCount;
@@ -2783,7 +2815,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				config = new OrcaDisciplineRuleConfig();
 			Id = config.Id;
 			Type = config.Type;
-			Name = config.Name;
+			name = config.Name ?? string.Empty;
 			Description = config.Description;
 			Enabled = config.Enabled;
 			Mode = config.Mode;
@@ -2796,8 +2828,28 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public string Id { get; private set; }
 		public string Type { get; private set; }
-		public string Name { get; private set; }
 		public string Description { get; private set; }
+
+		public string Name
+		{
+			get { return name; }
+			set {
+				if (!IsManual) {
+					Raise("Name");
+					return;
+				}
+				string next = value == null ? string.Empty : value.Trim();
+				if (next.Length == 0) {
+					Raise("Name");
+					return;
+				}
+				string previous = name;
+				if (!Set(ref name, next, "Name"))
+					return;
+				if (string.Equals(Description, previous, StringComparison.Ordinal))
+					Description = next;
+			}
+		}
 		public OrcaDisciplineRuleMode Mode { get; private set; }
 		public OrcaDisciplineSeverity Severity { get; private set; }
 		public Dictionary<string, string> Parameters { get; private set; }
@@ -2875,6 +2927,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public bool IsManual
 		{
 			get { return Mode == OrcaDisciplineRuleMode.Manual || Mode == OrcaDisciplineRuleMode.Hybrid; }
+		}
+
+		public bool CanRename
+		{
+			get { return IsManual; }
 		}
 
 		public virtual string LimitText
