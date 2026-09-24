@@ -726,10 +726,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private FrameworkElement BuildDashboard()
 		{
-			UniformGrid grid = new UniformGrid {
-				Columns = 8,
-				Margin = new Thickness(0, 0, 0, 8)
-			};
+			UniformGrid grid = new UniformGrid { Columns = 8 };
 			grid.Children.Add(MetricCard("Grade", "Grade", 18));
 			grid.Children.Add(MetricCard("Score", "ScoreText", 16));
 			grid.Children.Add(MetricCard("Session P&L", "SessionPnlText", 16));
@@ -738,7 +735,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 			grid.Children.Add(MetricCard("Cooldown", "CooldownText", 16));
 			grid.Children.Add(MetricCard("Position", "CurrentPositionSizeText", 16));
 			grid.Children.Add(MetricCard("Loss Streak", "ConsecutiveLossesText", 16));
-			return grid;
+			TextBlock breakdown = new TextBlock {
+				Margin = new Thickness(0, 4, 0, 0),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				FontSize = 12,
+				Foreground = Brush(OrcaRulebookChrome.Label),
+				TextWrapping = TextWrapping.Wrap
+			};
+			breakdown.SetBinding(TextBlock.TextProperty, new Binding("ScoreBreakdown"));
+			StackPanel panel = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+			panel.Children.Add(grid);
+			panel.Children.Add(breakdown);
+			return panel;
 		}
 
 		private FrameworkElement MetricCard(string label, string valuePath, double valueSize)
@@ -784,6 +792,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			grid.Columns.Add(TextColumn("Mode", "Mode", 90));
 			grid.Columns.Add(TextColumn("Status", "Status", 100));
 			grid.Columns.Add(EditableTextColumn("Parameter / Limit", "ParameterText", 170));
+			grid.Columns.Add(EditableTextColumn("Weight", "WeightText", 70));
 			grid.Columns.Add(TextColumn("Current Value", "CurrentValueText", 140));
 			grid.Columns.Add(TextColumn("Violations", "ViolationCount", 80));
 			grid.Columns.Add(TextColumn("Last Violation", "LastViolationMessage", 230));
@@ -1490,6 +1499,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public string Grade { get { return engine.Session == null ? "-" : engine.Session.Grade; } }
 		public string ScoreText { get { return engine.Session == null ? "0" : engine.Session.Score.ToString("0", CultureInfo.InvariantCulture); } }
+		public string ScoreBreakdown { get { return engine.Session == null ? string.Empty : engine.Session.ScoreBreakdown; } }
 		public string SessionPnlText { get { return engine.Session == null ? "$0" : engine.Session.SessionRealizedPnl.ToString("C0", CultureInfo.CurrentCulture); } }
 		public string TradeCountText { get { return engine.Session == null ? "0" : engine.Session.CompletedTradeCount.ToString(CultureInfo.InvariantCulture); } }
 		public string ViolationCountText { get { return engine.Session == null ? "0" : engine.Session.TotalViolations.ToString(CultureInfo.InvariantCulture); } }
@@ -1792,6 +1802,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Raise("MonitoringEventCountText");
 			Raise("Grade");
 			Raise("ScoreText");
+			Raise("ScoreBreakdown");
 			Raise("SessionPnlText");
 			Raise("TradeCountText");
 			Raise("ViolationCountText");
@@ -2503,6 +2514,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (EndTime != DateTime.MinValue)
 				sb.AppendLine("End: " + EndTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
 			sb.AppendLine("Grade: " + Grade + " (" + Score.ToString("0", CultureInfo.InvariantCulture) + ")");
+			sb.AppendLine(ScoreBreakdown);
 			sb.AppendLine("Session P&L: " + SessionRealizedPnl.ToString("C2", CultureInfo.CurrentCulture));
 			sb.AppendLine("Completed Trades: " + CompletedTradeCount.ToString(CultureInfo.InvariantCulture));
 			sb.AppendLine("Wins / Losses: " + WinningTrades.ToString(CultureInfo.InvariantCulture) + " / " + LosingTrades.ToString(CultureInfo.InvariantCulture));
@@ -2650,11 +2662,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 				rule.RefreshCurrentValue(this);
 		}
 
+		public string ScoreBreakdown
+		{
+			get { return OrcaDisciplineScoring.Breakdown(Rules); }
+		}
+
 		private void RecalculateScore()
 		{
-			int penalty = Violations.Sum(v => OrcaDisciplineScoring.Penalty(v.Severity));
-			Score = 100 - penalty;
+			Score = OrcaDisciplineScoring.WeightedScore(Rules);
 			Grade = OrcaDisciplineScoring.Grade(Score);
+			Raise("ScoreBreakdown");
 			Raise("TotalViolations");
 			Raise("CriticalViolations");
 			Raise("TotalRulesFollowed");
@@ -2792,6 +2809,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 	public abstract class OrcaDisciplineRule : OrcaDisciplineNotifyBase
 	{
 		private string name;
+		private int weight;
 		private bool enabled;
 		private OrcaDisciplineRuleStatus status;
 		private int violationCount;
@@ -2813,6 +2831,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Enabled = config.Enabled;
 			Mode = config.Mode;
 			Severity = config.Severity;
+			weight = config.Weight >= 1 ? config.Weight : OrcaDisciplineScoring.StarterWeight(Id, Type, name, Mode);
 			Parameters = config.Parameters == null ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : new Dictionary<string, string>(config.Parameters, StringComparer.OrdinalIgnoreCase);
 			Status = Enabled ? OrcaDisciplineRuleStatus.NotStarted : OrcaDisciplineRuleStatus.Disabled;
 			ManualAction = string.Empty;
@@ -2843,6 +2862,36 @@ namespace NinjaTrader.NinjaScript.AddOns
 					Description = next;
 			}
 		}
+		public int Weight
+		{
+			get { return weight; }
+			set {
+				int next = value < 1 ? 1 : value;
+				if (!Set(ref weight, next, "Weight"))
+					return;
+				Raise("WeightText");
+			}
+		}
+
+		public string WeightText
+		{
+			get { return weight.ToString(CultureInfo.InvariantCulture); }
+			set {
+				int parsed;
+				string text = value == null ? string.Empty : value.Trim();
+				if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) || parsed < 1) {
+					Raise("WeightText");
+					return;
+				}
+				Weight = parsed;
+			}
+		}
+
+		public bool IsBroken
+		{
+			get { return Enabled && (Status == OrcaDisciplineRuleStatus.Violated || ViolationCount > 0); }
+		}
+
 		public OrcaDisciplineRuleMode Mode { get; private set; }
 		public OrcaDisciplineSeverity Severity { get; private set; }
 		public Dictionary<string, string> Parameters { get; private set; }
@@ -2998,6 +3047,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Enabled = Enabled,
 				Mode = Mode,
 				Severity = Severity,
+				Weight = Weight,
 				Parameters = Parameters == null ? new Dictionary<string, string>() : new Dictionary<string, string>(Parameters, StringComparer.OrdinalIgnoreCase)
 			};
 		}
@@ -3927,6 +3977,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Enabled = true,
 				Mode = mode,
 				Severity = severity,
+				Weight = OrcaDisciplineScoring.StarterWeight(id, type, name, mode),
 				Parameters = parameters
 			};
 		}
@@ -3968,6 +4019,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public bool Enabled { get; set; }
 		public OrcaDisciplineRuleMode Mode { get; set; }
 		public OrcaDisciplineSeverity Severity { get; set; }
+		public int Weight { get; set; }
 		public Dictionary<string, string> Parameters { get; set; }
 
 		public OrcaDisciplineRuleConfig Clone()
@@ -3980,6 +4032,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Enabled = Enabled,
 				Mode = Mode,
 				Severity = Severity,
+				Weight = Weight,
 				Parameters = Parameters == null ? new Dictionary<string, string>() : new Dictionary<string, string>(Parameters, StringComparer.OrdinalIgnoreCase)
 			};
 		}
@@ -4093,6 +4146,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (loaded == null)
 				return false;
 			bool changed = StripLegacyAutomatedNames(loaded);
+			if (AssignMissingWeights(loaded))
+				changed = true;
 			foreach (OrcaDisciplineRuleTemplate defaultTemplate in OrcaDisciplineRuleTemplate.CreateDefaults()) {
 				OrcaDisciplineRuleTemplate existing = loaded.FirstOrDefault(t => string.Equals(t.Name, defaultTemplate.Name, StringComparison.OrdinalIgnoreCase));
 				if (existing == null) {
@@ -4145,6 +4200,24 @@ namespace NinjaTrader.NinjaScript.AddOns
 					if (string.Equals(rule.Description, rule.Name, StringComparison.Ordinal))
 						rule.Description = next;
 					rule.Name = next;
+					changed = true;
+				}
+			}
+			return changed;
+		}
+
+		private static bool AssignMissingWeights(List<OrcaDisciplineRuleTemplate> loaded)
+		{
+			if (loaded == null)
+				return false;
+			bool changed = false;
+			foreach (OrcaDisciplineRuleTemplate template in loaded) {
+				if (template == null || template.Rules == null)
+					continue;
+				foreach (OrcaDisciplineRuleConfig rule in template.Rules) {
+					if (rule == null || rule.Weight >= 1)
+						continue;
+					rule.Weight = OrcaDisciplineScoring.StarterWeight(rule.Id, rule.Type, rule.Name, rule.Mode);
 					changed = true;
 				}
 			}
@@ -4309,6 +4382,107 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 	public static class OrcaDisciplineScoring
 	{
+		public static int StarterWeight(string id, string type, string name, OrcaDisciplineRuleMode mode)
+		{
+			string idKey = id == null ? string.Empty : id.Trim();
+			string typeKey = type == null ? string.Empty : type.Trim();
+			string nameKey = name == null ? string.Empty : name.Trim();
+			if (IsId(idKey, "max-session-loss") || IsName(nameKey, "Max session loss") || IsType(typeKey, "MaxSessionLoss"))
+				return 12;
+			if (IsId(idKey, "max-trade-loss") || IsName(nameKey, "Max loss per trade") || IsType(typeKey, "MaxLossPerTrade"))
+				return 12;
+			if (IsId(idKey, "no-add-loser") || IsName(nameKey, "No adding to losing trades") || IsType(typeKey, "NoAddToLosingTrade"))
+				return 12;
+			if (IsId(idKey, "max-position") || IsName(nameKey, "Max position size") || IsType(typeKey, "MaxPositionSize"))
+				return 8;
+			if (IsId(idKey, "max-loss-streak") || IsName(nameKey, "Max consecutive losses") || IsType(typeKey, "MaxConsecutiveLosses"))
+				return 8;
+			if (nameKey.IndexOf("revenge", StringComparison.OrdinalIgnoreCase) >= 0)
+				return 8;
+			if (nameKey.IndexOf("major rule", StringComparison.OrdinalIgnoreCase) >= 0)
+				return 8;
+			if (IsId(idKey, "window") || IsName(nameKey, "Allowed trading window") || IsType(typeKey, "AllowedTradingWindow"))
+				return 5;
+			if (IsId(idKey, "max-trades") || IsName(nameKey, "Max trades per session") || IsType(typeKey, "MaxTradesPerSession"))
+				return 5;
+			if (IsId(idKey, "max-violations") || IsName(nameKey, "Max rule violations") || IsType(typeKey, "MaxRuleViolations"))
+				return 5;
+			if (IsId(idKey, "cooldown") || IsName(nameKey, "Minimum time between new trades") || IsType(typeKey, "TradeCooldown"))
+				return 4;
+			if (IsId(idKey, "loss-reversal") || IsName(nameKey, "No immediate reversal after loss") || IsType(typeKey, "NoImmediateLossReversal"))
+				return 4;
+			if (mode == OrcaDisciplineRuleMode.Manual || IsType(typeKey, "ManualChecklist"))
+				return 3;
+			return 5;
+		}
+
+		public static int WeightedScore(IEnumerable<OrcaDisciplineRule> rules)
+		{
+			int enabledWeight = 0;
+			int keptWeight = 0;
+			if (rules != null) {
+				foreach (OrcaDisciplineRule rule in rules) {
+					if (rule == null || !rule.Enabled || rule.Weight < 1)
+						continue;
+					enabledWeight += rule.Weight;
+					if (!rule.IsBroken)
+						keptWeight += rule.Weight;
+				}
+			}
+			return ShareOfHundred(keptWeight, enabledWeight);
+		}
+
+		public static string Breakdown(IEnumerable<OrcaDisciplineRule> rules)
+		{
+			int enabledWeight = 0;
+			List<OrcaDisciplineRule> broken = new List<OrcaDisciplineRule>();
+			if (rules != null) {
+				foreach (OrcaDisciplineRule rule in rules) {
+					if (rule == null || !rule.Enabled || rule.Weight < 1)
+						continue;
+					enabledWeight += rule.Weight;
+					if (rule.IsBroken)
+						broken.Add(rule);
+				}
+			}
+			if (enabledWeight <= 0)
+				return "Why this score: no rules are enabled.";
+			if (broken.Count == 0)
+				return "Why this score: every enabled rule held.";
+			StringBuilder text = new StringBuilder("Why this score:");
+			foreach (OrcaDisciplineRule rule in broken) {
+				int cost = ShareOfHundred(rule.Weight, enabledWeight);
+				text.Append(" ");
+				text.Append(string.IsNullOrWhiteSpace(rule.Name) ? rule.Id : rule.Name);
+				text.Append(" cost ");
+				text.Append(cost.ToString(CultureInfo.InvariantCulture));
+				text.Append(".");
+			}
+			return text.ToString();
+		}
+
+		public static int ShareOfHundred(int weight, int enabledWeight)
+		{
+			if (enabledWeight <= 0)
+				return 100;
+			return (int)Math.Round(100.0 * weight / enabledWeight, MidpointRounding.AwayFromZero);
+		}
+
+		private static bool IsId(string id, string expected)
+		{
+			return string.Equals(id, expected, StringComparison.OrdinalIgnoreCase);
+		}
+
+		private static bool IsName(string name, string expected)
+		{
+			return string.Equals(name, expected, StringComparison.OrdinalIgnoreCase);
+		}
+
+		private static bool IsType(string type, string expected)
+		{
+			return string.Equals(type, expected, StringComparison.OrdinalIgnoreCase);
+		}
+
 		public static int Penalty(OrcaDisciplineSeverity severity)
 		{
 			switch (severity) {
