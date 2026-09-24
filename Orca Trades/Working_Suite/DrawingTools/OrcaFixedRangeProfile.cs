@@ -1,9 +1,11 @@
 #region Using declarations
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
 using System.Xml.Serialization;
@@ -100,6 +102,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private const double CursorSensitivity = 15.0;
 		private const float BoxPaddingPx = 3f;
 		private const float OutsideProfileGapPx = 6f;
+		private const float StatisticsOutsideGapPx = 6f;
 		private const float TrackGapPx = 3f;
 
 		private enum ResizeMode
@@ -138,6 +141,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private long statisticsTotalVolume;
 		private long statisticsTotalDelta;
 		private long statisticsFinishDelta;
+		private bool statisticsHasRealDelta;
+		private bool statisticsFinishKnown;
 		private double statisticsDeltaPercent;
 		private double statisticsPointRange;
 		private TimeSpan statisticsDuration;
@@ -171,6 +176,18 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private OrcaFixedRangeAggregationMode cachedDeltaAggregationMode = (OrcaFixedRangeAggregationMode)(-1);
 		private OrcaFixedRangeProfileDataMode cachedProfileDataMode = (OrcaFixedRangeProfileDataMode)(-1);
 		private OrcaFixedRangeProfileDataSourcePreference cachedDataSourcePreference = (OrcaFixedRangeProfileDataSourcePreference)(-1);
+		private bool volumetricAccessResolved;
+		private Type volumetricResolvedType;
+		private bool volumetricAccessAvailable;
+		private PropertyInfo volumetricVolumesProperty;
+		private FieldInfo volumetricVolumesField;
+		private MethodInfo volumetricAskMethod;
+		private MethodInfo volumetricBidMethod;
+		private MethodInfo volumetricTotalAtPriceMethod;
+		private PropertyInfo volumetricBuyingProperty;
+		private PropertyInfo volumetricSellingProperty;
+		private PropertyInfo volumetricBarVolumeProperty;
+		private readonly object[] volumetricInvokeArgs = new object[1];
 		private bool cachedAllowEstimatedChartFallback;
 
 		private IntPtr dxResourceRenderTarget = IntPtr.Zero;
@@ -507,7 +524,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (referenceTrack.IsVisible && profileResult != null && profileResult.HasProfile)
 				DrawReferenceLines(chartScale, chartPanel, referenceTrack);
 
-			DrawStatisticsBox(boxRect);
+			DrawStatisticsBox(chartPanel, boxRect);
 			if (!ShowProfileStatistics)
 				DrawTotalVolumeLabel(boxRect, volumeTrack, deltaTrack);
 			DrawDataSourceLabel(boxRect, volumeTrack, deltaTrack);
@@ -807,7 +824,13 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 				if (!useTrueProfileData)
 				{
-					if (AllowEstimatedChartFallback)
+					if (EnsureVolumetricAccess(bars))
+					{
+						effectiveDataKey = dataKey + "|volumetric-bars";
+						trueDataRevision = -1;
+						dataSourceLabel = "Source: volumetric bars";
+					}
+					else if (AllowEstimatedChartFallback)
 					{
 						effectiveDataKey = dataKey + "|estimated-bars";
 						trueDataRevision = -1;
@@ -843,21 +866,57 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (!NeedsProfileRebuild(startTime, endTime, lowPrice, highPrice, firstBar, lastBar, bars.Count, lastRangeBarTime, lastRangeBarVolume, effectiveDataKey, trueDataRevision, tickSize, resolvedTicksPerRow, resolvedDeltaTicksPerRow))
 				return;
 
-			bool volumeOk;
-			bool deltaOk;
+			bool volumeOk = false;
+			bool deltaOk = false;
+			bool trueDelta = useTrueProfileData && SnapshotHasClassifiedDelta(trueDataSnapshot, lowPrice, highPrice);
+			OrcaProfileDataSnapshot volumetricSnapshot = null;
 			if (useTrueProfileData && trueDataSnapshot != null)
 			{
 				volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(trueDataSnapshot.VolumeByBar, trueDataSnapshot.UpVolumeByBar, trueDataSnapshot.DownVolumeByBar, 0, trueDataSnapshot.ToIndex, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
-				deltaOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(trueDataSnapshot.VolumeByBar, trueDataSnapshot.UpVolumeByBar, trueDataSnapshot.DownVolumeByBar, 0, trueDataSnapshot.ToIndex, lowPrice, highPrice, DeltaRowCount, resolvedDeltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, tickSize, deltaResult);
-			}
-			else
-			{
-				volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromBars(bars, firstBar, lastBar, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
-				deltaOk = OrcaVolumeProfileCore.BuildFixedRangeFromBars(bars, firstBar, lastBar, lowPrice, highPrice, DeltaRowCount, resolvedDeltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, tickSize, deltaResult);
+				if (trueDelta)
+					deltaOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(trueDataSnapshot.VolumeByBar, trueDataSnapshot.UpVolumeByBar, trueDataSnapshot.DownVolumeByBar, 0, trueDataSnapshot.ToIndex, lowPrice, highPrice, DeltaRowCount, resolvedDeltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, tickSize, deltaResult);
 			}
 
+			// Bar direction is not delta. Read ask/bid volume from the bars when that series stores it.
+			if (!trueDelta || !volumeOk)
+			{
+				if (trueDataSnapshot != null && trueDataSnapshot.SourceName == "VolumetricBars")
+					volumetricSnapshot = trueDataSnapshot;
+				else
+					volumetricSnapshot = TryCreateVolumetricSnapshot(bars, firstBar, lastBar, lowPrice, highPrice, tickSize);
+			}
+
+			bool volumetricDelta = SnapshotHasClassifiedDelta(volumetricSnapshot, lowPrice, highPrice);
+			if (volumetricSnapshot != null && volumetricSnapshot.HasAnyVolume)
+			{
+				if (!volumeOk)
+				{
+					volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(volumetricSnapshot.VolumeByBar, volumetricSnapshot.UpVolumeByBar, volumetricSnapshot.DownVolumeByBar, 0, volumetricSnapshot.ToIndex, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
+					if (volumeOk && (IsEstimatedSourceLabel(dataSourceLabel) || dataSourceLabel == "Source: volumetric bars"))
+						dataSourceLabel = volumetricDelta ? "Source: volumetric bid/ask" : "Source: volumetric bars";
+				}
+
+				if (!trueDelta && volumetricDelta)
+					deltaOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(volumetricSnapshot.VolumeByBar, volumetricSnapshot.UpVolumeByBar, volumetricSnapshot.DownVolumeByBar, 0, volumetricSnapshot.ToIndex, lowPrice, highPrice, DeltaRowCount, resolvedDeltaTicksPerRow, useDeltaTicksPerRow, ValueAreaPercent, tickSize, deltaResult);
+			}
+
+			bool allowGeometricVolume = ProfileDataMode == OrcaFixedRangeProfileDataMode.EstimatedFromBars || AllowEstimatedChartFallback;
+			if (!volumeOk && allowGeometricVolume)
+			{
+				if (dataSourceLabel == "Source: volumetric bars" || dataSourceLabel == "Source: volumetric bid/ask")
+					dataSourceLabel = "Source: chart estimate";
+				volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromBars(bars, firstBar, lastBar, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
+				// BuildFixedRangeFromBars stores the whole bar on the up or down side. That is not bid/ask delta.
+				if (volumeOk)
+					ClearDirectionalVolume(profileResult);
+			}
+
+			if (!deltaOk)
+				deltaResult.Clear();
+
+			bool hasRealDelta = deltaOk && (trueDelta || volumetricDelta);
 			totalVolumeLabel = volumeOk ? "Vol " + FormatVolume(profileResult.TotalVolume) : string.Empty;
-			UpdateStatistics(startTime, endTime, lowPrice, highPrice, volumeOk, useTrueProfileData, trueDataSnapshot, bars, firstBar, lastBar, instrumentKey);
+			UpdateStatistics(startTime, endTime, lowPrice, highPrice, volumeOk, hasRealDelta, trueDataSnapshot, volumetricSnapshot, instrumentKey);
 			if (!volumeOk && !deltaOk)
 				noDataLabel = "No volume in range";
 
@@ -969,6 +1028,406 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				return "Source: local candle VAP";
 
 			return "Source: local chart VAP";
+		}
+
+		private static void ClearDirectionalVolume(OrcaVolumeProfileResult result)
+		{
+			if (result == null || result.Rows == null)
+				return;
+
+			int limit = Math.Min(result.RowCount, result.Rows.Length);
+			for (int index = 0; index < limit; index++)
+			{
+				result.Rows[index].UpVolume = 0;
+				result.Rows[index].DownVolume = 0;
+			}
+		}
+
+		private static bool IsEstimatedSourceLabel(string label)
+		{
+			return !string.IsNullOrEmpty(label) && label.StartsWith("Source: chart estimate", StringComparison.Ordinal);
+		}
+
+		private static bool SnapshotHasClassifiedDelta(OrcaProfileDataSnapshot snapshot, double lowPrice, double highPrice)
+		{
+			if (snapshot == null)
+				return false;
+			return MapListHasVolumeInRange(snapshot.UpVolumeByBar, lowPrice, highPrice)
+				|| MapListHasVolumeInRange(snapshot.DownVolumeByBar, lowPrice, highPrice);
+		}
+
+		private static bool MapListHasVolumeInRange(IList<Dictionary<double, long>> maps, double lowPrice, double highPrice)
+		{
+			if (maps == null)
+				return false;
+
+			for (int index = 0; index < maps.Count; index++)
+			{
+				Dictionary<double, long> map = maps[index];
+				if (map == null || map.Count == 0)
+					continue;
+
+				foreach (KeyValuePair<double, long> kvp in map)
+				{
+					if (kvp.Value > 0 && kvp.Key >= lowPrice - PriceEpsilon && kvp.Key <= highPrice + PriceEpsilon)
+						return true;
+				}
+			}
+
+			return false;
+		}
+
+		private OrcaProfileDataSnapshot TryCreateVolumetricSnapshot(Bars bars, int firstBar, int lastBar, double lowPrice, double highPrice, double tickSize)
+		{
+			if (bars == null || firstBar < 0 || lastBar < firstBar || lastBar >= bars.Count)
+				return null;
+			if (tickSize <= 0 || double.IsNaN(tickSize) || double.IsInfinity(tickSize))
+				return null;
+			if (!EnsureVolumetricAccess(bars))
+				return null;
+
+			try
+			{
+				int count = lastBar - firstBar + 1;
+				OrcaProfileDataSnapshot snapshot = new OrcaProfileDataSnapshot
+				{
+					FromIndex = 0,
+					ToIndex = count - 1,
+					Revision = 0,
+					SourceName = "VolumetricBars",
+					VolumeByBar = new List<Dictionary<double, long>>(count),
+					UpVolumeByBar = new List<Dictionary<double, long>>(count),
+					DownVolumeByBar = new List<Dictionary<double, long>>(count)
+				};
+
+				for (int barIndex = firstBar; barIndex <= lastBar; barIndex++)
+				{
+					Dictionary<double, long> volumeMap = new Dictionary<double, long>();
+					Dictionary<double, long> upMap = new Dictionary<double, long>();
+					Dictionary<double, long> downMap = new Dictionary<double, long>();
+					object volumetricBar = GetVolumetricBar(bars, barIndex);
+					if (volumetricBar != null)
+					{
+						double high = bars.GetHigh(barIndex);
+						double low = bars.GetLow(barIndex);
+						if (high < low)
+						{
+							double tmp = high;
+							high = low;
+							low = tmp;
+						}
+
+						if (!double.IsNaN(high) && !double.IsNaN(low) && high >= lowPrice - PriceEpsilon && low <= highPrice + PriceEpsilon)
+							AppendVolumetricBar(volumetricBar, low, high, lowPrice, highPrice, tickSize, volumeMap, upMap, downMap);
+					}
+
+					if (volumeMap.Count > 0)
+						snapshot.HasAnyVolume = true;
+					snapshot.VolumeByBar.Add(volumeMap);
+					snapshot.UpVolumeByBar.Add(upMap);
+					snapshot.DownVolumeByBar.Add(downMap);
+				}
+
+				return snapshot.HasAnyVolume ? snapshot : null;
+			}
+			catch
+			{
+				return null;
+			}
+		}
+
+		private void AppendVolumetricBar(object volumetricBar, double barLow, double barHigh, double rangeLow, double rangeHigh, double tickSize, Dictionary<double, long> volumeMap, Dictionary<double, long> upMap, Dictionary<double, long> downMap)
+		{
+			long scannedVolume = 0;
+			if (volumetricAskMethod != null && volumetricBidMethod != null)
+			{
+				long firstTick = (long)Math.Round(barLow / tickSize);
+				long lastTick = (long)Math.Round(barHigh / tickSize);
+				if (lastTick < firstTick)
+				{
+					long tmp = firstTick;
+					firstTick = lastTick;
+					lastTick = tmp;
+				}
+
+				long rangeLowTick = (long)Math.Ceiling((rangeLow / tickSize) - 1E-8);
+				long rangeHighTick = (long)Math.Floor((rangeHigh / tickSize) + 1E-8);
+				int guard = 0;
+				for (long tick = firstTick; tick <= lastTick && guard < 20000; tick++, guard++)
+				{
+					double price = tick * tickSize;
+					long ask = InvokeVolumetricVolume(volumetricAskMethod, volumetricBar, price);
+					long bid = InvokeVolumetricVolume(volumetricBidMethod, volumetricBar, price);
+					long total = volumetricTotalAtPriceMethod != null ? InvokeVolumetricVolume(volumetricTotalAtPriceMethod, volumetricBar, price) : ask + bid;
+					if (total <= 0)
+						total = ask + bid;
+					if (total <= 0 && ask <= 0 && bid <= 0)
+						continue;
+
+					scannedVolume += total > 0 ? total : ask + bid;
+					if (tick < rangeLowTick || tick > rangeHighTick)
+						continue;
+
+					if (total > 0)
+						AddVolumetricMap(volumeMap, price, total);
+					if (ask > 0)
+						AddVolumetricMap(upMap, price, ask);
+					if (bid > 0)
+						AddVolumetricMap(downMap, price, bid);
+				}
+			}
+
+			if (scannedVolume > 0 || volumeMap.Count > 0)
+				return;
+
+			long buying = ReadVolumetricProperty(volumetricBuyingProperty, volumetricBar);
+			long selling = ReadVolumetricProperty(volumetricSellingProperty, volumetricBar);
+			long barVolume = ReadVolumetricProperty(volumetricBarVolumeProperty, volumetricBar);
+			if (barVolume <= 0)
+				barVolume = buying + selling;
+			if (barVolume <= 0 && buying <= 0 && selling <= 0)
+				return;
+
+			double overlapLow = Math.Max(barLow, rangeLow);
+			double overlapHigh = Math.Min(barHigh, rangeHigh);
+			double fullRange = Math.Max(tickSize, barHigh - barLow);
+			double overlap = Math.Max(0.0, overlapHigh - overlapLow);
+			if (overlap <= PriceEpsilon)
+				return;
+
+			double fraction = Math.Min(1.0, overlap / fullRange);
+			long askInRange = (long)Math.Round(buying * fraction);
+			long bidInRange = (long)Math.Round(selling * fraction);
+			long totalInRange = (long)Math.Round(barVolume * fraction);
+			if (totalInRange < askInRange + bidInRange)
+				totalInRange = askInRange + bidInRange;
+			if (totalInRange <= 0 && askInRange <= 0 && bidInRange <= 0)
+				return;
+
+			DistributeVolumetricRange(volumeMap, upMap, downMap, overlapLow, overlapHigh, tickSize, totalInRange, askInRange, bidInRange);
+		}
+
+		private static void DistributeVolumetricRange(Dictionary<double, long> volumeMap, Dictionary<double, long> upMap, Dictionary<double, long> downMap, double overlapLow, double overlapHigh, double tickSize, long total, long ask, long bid)
+		{
+			long firstTick = (long)Math.Ceiling((overlapLow / tickSize) - 1E-8);
+			long lastTick = (long)Math.Floor((overlapHigh / tickSize) + 1E-8);
+			if (lastTick < firstTick)
+			{
+				long mid = (long)Math.Round(((overlapLow + overlapHigh) * 0.5) / tickSize);
+				firstTick = mid;
+				lastTick = mid;
+			}
+
+			long buckets = lastTick - firstTick + 1;
+			if (buckets < 1)
+				buckets = 1;
+			if (buckets > 20000)
+			{
+				lastTick = firstTick + 19999;
+				buckets = 20000;
+			}
+
+			bool splitBidAsk = ask > 0 || bid > 0;
+			long totalLeft = total;
+			long askLeft = ask;
+			long bidLeft = bid;
+			for (long tick = firstTick; tick <= lastTick; tick++)
+			{
+				long remainingBuckets = lastTick - tick + 1;
+				long askShare = remainingBuckets <= 1 ? askLeft : askLeft / remainingBuckets;
+				long bidShare = remainingBuckets <= 1 ? bidLeft : bidLeft / remainingBuckets;
+				long totalShare = splitBidAsk
+					? askShare + bidShare
+					: (remainingBuckets <= 1 ? totalLeft : totalLeft / remainingBuckets);
+				totalLeft -= splitBidAsk ? totalShare : totalShare;
+				askLeft -= askShare;
+				bidLeft -= bidShare;
+				double price = tick * tickSize;
+				if (totalShare > 0)
+					AddVolumetricMap(volumeMap, price, totalShare);
+				if (askShare > 0)
+					AddVolumetricMap(upMap, price, askShare);
+				if (bidShare > 0)
+					AddVolumetricMap(downMap, price, bidShare);
+			}
+		}
+
+		private bool EnsureVolumetricAccess(Bars bars)
+		{
+			if (bars == null || bars.BarsType == null)
+				return false;
+
+			Type barsType = bars.BarsType.GetType();
+			if (volumetricAccessResolved && volumetricResolvedType == barsType)
+				return volumetricAccessAvailable;
+
+			volumetricAccessResolved = true;
+			volumetricResolvedType = barsType;
+			volumetricAccessAvailable = false;
+			volumetricVolumesProperty = null;
+			volumetricVolumesField = null;
+			volumetricAskMethod = null;
+			volumetricBidMethod = null;
+			volumetricTotalAtPriceMethod = null;
+			volumetricBuyingProperty = null;
+			volumetricSellingProperty = null;
+			volumetricBarVolumeProperty = null;
+			if (barsType.Name.IndexOf("Volumetric", StringComparison.Ordinal) < 0)
+				return false;
+
+			try
+			{
+				const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public;
+				volumetricVolumesProperty = barsType.GetProperty("Volumes", flags);
+				volumetricVolumesField = barsType.GetField("Volumes", flags);
+				if (volumetricVolumesProperty == null && volumetricVolumesField == null)
+					return false;
+
+				Type volumeCollectionType = volumetricVolumesProperty != null ? volumetricVolumesProperty.PropertyType : volumetricVolumesField.FieldType;
+				Type elementType = volumeCollectionType;
+				if (elementType == null)
+					return false;
+				if (elementType.IsArray)
+					elementType = elementType.GetElementType();
+				else if (elementType.IsGenericType)
+				{
+					Type[] arguments = elementType.GetGenericArguments();
+					if (arguments != null && arguments.Length > 0)
+						elementType = arguments[0];
+				}
+
+				if (elementType == null)
+					return false;
+
+				Type[] priceArgs = new Type[] { typeof(double) };
+				volumetricAskMethod = elementType.GetMethod("GetAskVolumeForPrice", flags, null, priceArgs, null);
+				volumetricBidMethod = elementType.GetMethod("GetBidVolumeForPrice", flags, null, priceArgs, null);
+				volumetricTotalAtPriceMethod = elementType.GetMethod("GetTotalVolumeForPrice", flags, null, priceArgs, null);
+				volumetricBuyingProperty = elementType.GetProperty("TotalBuyingVolume", flags);
+				volumetricSellingProperty = elementType.GetProperty("TotalSellingVolume", flags);
+				volumetricBarVolumeProperty = elementType.GetProperty("TotalVolume", flags);
+				volumetricAccessAvailable = volumetricAskMethod != null || volumetricBuyingProperty != null;
+				return volumetricAccessAvailable;
+			}
+			catch
+			{
+				volumetricAccessAvailable = false;
+				return false;
+			}
+		}
+
+		private object GetVolumetricBar(Bars bars, int barIndex)
+		{
+			if (!EnsureVolumetricAccess(bars) || bars == null || bars.BarsType == null || barIndex < 0)
+				return null;
+
+			object volumes = null;
+			try
+			{
+				if (volumetricVolumesProperty != null)
+					volumes = volumetricVolumesProperty.GetValue(bars.BarsType, null);
+				else if (volumetricVolumesField != null)
+					volumes = volumetricVolumesField.GetValue(bars.BarsType);
+			}
+			catch
+			{
+				return null;
+			}
+
+			if (volumes == null)
+				return null;
+
+			Array array = volumes as Array;
+			if (array != null)
+				return barIndex < array.Length ? array.GetValue(barIndex) : null;
+
+			IList list = volumes as IList;
+			if (list != null)
+				return barIndex < list.Count ? list[barIndex] : null;
+
+			return null;
+		}
+
+		private long InvokeVolumetricVolume(MethodInfo method, object volumetricBar, double price)
+		{
+			if (method == null || volumetricBar == null)
+				return 0;
+
+			try
+			{
+				volumetricInvokeArgs[0] = price;
+				return CoerceVolume(method.Invoke(volumetricBar, volumetricInvokeArgs));
+			}
+			catch
+			{
+				return 0;
+			}
+		}
+
+		private static long ReadVolumetricProperty(PropertyInfo property, object volumetricBar)
+		{
+			if (property == null || volumetricBar == null)
+				return 0;
+
+			try
+			{
+				return CoerceVolume(property.GetValue(volumetricBar, null));
+			}
+			catch
+			{
+				return 0;
+			}
+		}
+
+		private static long CoerceVolume(object value)
+		{
+			if (value == null)
+				return 0;
+			if (value is long)
+				return (long)value < 0 ? 0 : (long)value;
+			if (value is int)
+				return (int)value < 0 ? 0 : (int)value;
+			if (value is double)
+			{
+				double number = (double)value;
+				if (double.IsNaN(number) || double.IsInfinity(number) || number <= 0)
+					return 0;
+				return (long)Math.Round(number);
+			}
+			if (value is float)
+			{
+				float number = (float)value;
+				if (float.IsNaN(number) || float.IsInfinity(number) || number <= 0)
+					return 0;
+				return (long)Math.Round(number);
+			}
+			if (value is decimal)
+			{
+				decimal number = (decimal)value;
+				return number <= 0 ? 0 : (long)Math.Round(number);
+			}
+
+			try
+			{
+				long number = Convert.ToInt64(value, CultureInfo.InvariantCulture);
+				return number < 0 ? 0 : number;
+			}
+			catch
+			{
+				return 0;
+			}
+		}
+
+		private static void AddVolumetricMap(Dictionary<double, long> map, double price, long volume)
+		{
+			if (map == null || volume <= 0 || double.IsNaN(price) || double.IsInfinity(price))
+				return;
+
+			long existing;
+			if (map.TryGetValue(price, out existing))
+				map[price] = existing + volume;
+			else
+				map[price] = volume;
 		}
 
 		private bool NeedsProfileRebuild(DateTime startTime, DateTime endTime, double lowPrice, double highPrice, int firstBar, int lastBar, int barsCount, DateTime lastRangeBarTime, double lastRangeBarVolume, string dataKey, int trueDataRevision, double tickSize, int resolvedTicksPerRow, int resolvedDeltaTicksPerRow)
@@ -1429,6 +1888,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (insideValueArea && ShowVAColor)
 				return SelectGradientBrush(result, row, vaGradientBrushes, vaFillBrushDx);
 
+			if (row.UpVolume <= PriceEpsilon && row.DownVolume <= PriceEpsilon)
+				return deltaNeutralBrushDx ?? upBrushDx;
+
 			bool upDominant = row.UpVolume >= row.DownVolume;
 			return SelectGradientBrush(result, row, upDominant ? upGradientBrushes : downGradientBrushes, upDominant ? upBrushDx : downBrushDx);
 		}
@@ -1542,7 +2004,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			RenderTarget.DrawText(totalVolumeLabel, textFormatDx, new DxRectangleF(left, boxRect.Top + 4f, width, 18f), textBrushDx);
 		}
 
-		private void DrawStatisticsBox(DxRectangleF boxRect)
+		private void DrawStatisticsBox(ChartPanel chartPanel, DxRectangleF boxRect)
 		{
 			if (!ShowProfileStatistics || statisticsTextFormatDx == null || statisticsTextBrushDx == null)
 				return;
@@ -1565,27 +2027,33 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			float boxWidth = textWidth + (paddingX * 2f);
 			float boxHeight = textHeight + (paddingY * 2f);
-			float left;
-			float top;
-			const float inset = 4f;
-			switch (StatisticsPosition)
+			bool placeAbove = StatisticsPosition == OrcaFixedRangeStatisticsPosition.TopLeft
+				|| StatisticsPosition == OrcaFixedRangeStatisticsPosition.TopRight;
+			bool alignRight = StatisticsPosition == OrcaFixedRangeStatisticsPosition.TopRight
+				|| StatisticsPosition == OrcaFixedRangeStatisticsPosition.BottomRight;
+			float left = alignRight ? boxRect.Right - boxWidth : boxRect.Left;
+			float top = placeAbove
+				? boxRect.Top - boxHeight - StatisticsOutsideGapPx
+				: boxRect.Bottom + StatisticsOutsideGapPx;
+			if (chartPanel != null)
 			{
-				case OrcaFixedRangeStatisticsPosition.TopRight:
-					left = boxRect.Right - boxWidth - inset;
-					top = boxRect.Top + inset;
-					break;
-				case OrcaFixedRangeStatisticsPosition.BottomLeft:
-					left = boxRect.Left + inset;
-					top = boxRect.Bottom - boxHeight - inset;
-					break;
-				case OrcaFixedRangeStatisticsPosition.BottomRight:
-					left = boxRect.Right - boxWidth - inset;
-					top = boxRect.Bottom - boxHeight - inset;
-					break;
-				default:
-					left = boxRect.Left + inset;
-					top = boxRect.Top + inset;
-					break;
+				float panelLeft = chartPanel.X;
+				float panelRight = chartPanel.X + chartPanel.W;
+				float panelTop = chartPanel.Y;
+				float panelBottom = chartPanel.Y + chartPanel.H;
+				if (left < panelLeft)
+					left = panelLeft;
+				if (left + boxWidth > panelRight)
+					left = Math.Max(panelLeft, panelRight - boxWidth);
+
+				float clampedTop = top;
+				if (clampedTop < panelTop)
+					clampedTop = panelTop;
+				if (clampedTop + boxHeight > panelBottom)
+					clampedTop = panelBottom - boxHeight;
+				bool overlapsRange = clampedTop < boxRect.Bottom && (clampedTop + boxHeight) > boxRect.Top;
+				if (!overlapsRange)
+					top = clampedTop;
 			}
 
 			DxRectangleF rect = new DxRectangleF(left, top, boxWidth, boxHeight);
@@ -1614,25 +2082,26 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			statisticsTotalVolume = 0;
 			statisticsTotalDelta = 0;
 			statisticsFinishDelta = 0;
+			statisticsHasRealDelta = false;
+			statisticsFinishKnown = false;
 			statisticsDeltaPercent = 0;
 			statisticsPointRange = 0;
 			statisticsDuration = TimeSpan.Zero;
 			totalVolumeLabel = string.Empty;
 		}
 
-		private void UpdateStatistics(DateTime startTime, DateTime endTime, double lowPrice, double highPrice, bool volumeOk, bool useTrueProfileData, OrcaProfileDataSnapshot snapshot, Bars bars, int firstBar, int lastBar, string instrumentKey)
+		private void UpdateStatistics(DateTime startTime, DateTime endTime, double lowPrice, double highPrice, bool volumeOk, bool hasRealDelta, OrcaProfileDataSnapshot snapshot, OrcaProfileDataSnapshot volumetricSnapshot, string instrumentKey)
 		{
 			statisticsPointRange = Math.Max(0.0, highPrice - lowPrice);
 			statisticsDuration = endTime >= startTime ? endTime - startTime : TimeSpan.Zero;
 
 			statisticsTotalVolume = volumeOk && profileResult != null ? (long)Math.Round(profileResult.TotalVolume) : 0;
-			statisticsTotalDelta = SumProfileDelta(profileResult);
-			// Prefer the delta profile total when present; both should match on true data, but this keeps D aligned with the visible delta histogram.
-			if (deltaResult != null && deltaResult.HasProfile)
-				statisticsTotalDelta = SumProfileDelta(deltaResult);
-
-			statisticsFinishDelta = ComputeFinishDelta(useTrueProfileData, snapshot, bars, firstBar, lastBar, lowPrice, highPrice, startTime, endTime, instrumentKey);
-			statisticsDeltaPercent = statisticsTotalVolume > 0 ? statisticsTotalDelta / (double)statisticsTotalVolume * 100.0 : 0.0;
+			statisticsHasRealDelta = hasRealDelta;
+			statisticsTotalDelta = hasRealDelta ? SumProfileDelta(deltaResult) : 0;
+			long finishDelta;
+			statisticsFinishKnown = hasRealDelta && TryComputeFinishDelta(snapshot, volumetricSnapshot, lowPrice, highPrice, startTime, endTime, instrumentKey, out finishDelta);
+			statisticsFinishDelta = statisticsFinishKnown ? finishDelta : 0;
+			statisticsDeltaPercent = hasRealDelta && statisticsTotalVolume > 0 ? statisticsTotalDelta / (double)statisticsTotalVolume * 100.0 : 0.0;
 			statisticsLabel = BuildStatisticsLabel();
 		}
 
@@ -1648,20 +2117,23 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			return (long)Math.Round(total);
 		}
 
-		private long ComputeFinishDelta(bool useTrueProfileData, OrcaProfileDataSnapshot snapshot, Bars bars, int firstBar, int lastBar, double lowPrice, double highPrice, DateTime startTime, DateTime endTime, string instrumentKey)
+		private bool TryComputeFinishDelta(OrcaProfileDataSnapshot snapshot, OrcaProfileDataSnapshot volumetricSnapshot, double lowPrice, double highPrice, DateTime startTime, DateTime endTime, string instrumentKey, out long finishDelta)
 		{
-			long finishDelta;
-			if (TryComputeFinishDeltaFromPriceMaps(snapshot, lowPrice, highPrice, out finishDelta))
-				return finishDelta;
+			finishDelta = 0;
+			if (SnapshotHasClassifiedDelta(snapshot, lowPrice, highPrice)
+				&& TryComputeFinishDeltaFromPriceMaps(snapshot, lowPrice, highPrice, out finishDelta))
+				return true;
+
+			if (SnapshotHasClassifiedDelta(volumetricSnapshot, lowPrice, highPrice)
+				&& TryComputeFinishDeltaFromPriceMaps(volumetricSnapshot, lowPrice, highPrice, out finishDelta))
+				return true;
 
 			if (TryComputeFinishDeltaFromOrderFlowBuckets(instrumentKey, startTime, endTime, lowPrice, highPrice, out finishDelta))
-				return finishDelta;
+				return true;
 
-			if (!useTrueProfileData && TryComputeFinishDeltaFromEstimatedBars(bars, firstBar, lastBar, lowPrice, highPrice, out finishDelta))
-				return finishDelta;
-
-			// Without a chronological path, finish delta is unknown; do not invent it from the flat total.
-			return 0;
+			// Without a chronological bid/ask path, finish delta is unknown. Do not invent it from bar volume.
+			finishDelta = 0;
+			return false;
 		}
 
 		private static bool TryComputeFinishDeltaFromPriceMaps(OrcaProfileDataSnapshot snapshot, double lowPrice, double highPrice, out long finishDelta)
@@ -1765,48 +2237,6 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			return true;
 		}
 
-		private static bool TryComputeFinishDeltaFromEstimatedBars(Bars bars, int firstBar, int lastBar, double lowPrice, double highPrice, out long finishDelta)
-		{
-			finishDelta = 0;
-			if (bars == null || firstBar < 0 || lastBar < firstBar || lastBar >= bars.Count)
-				return false;
-
-			long running = 0;
-			long maxCumulative = 0;
-			long minCumulative = 0;
-			bool sawAny = false;
-			for (int index = firstBar; index <= lastBar; index++)
-			{
-				double open = bars.GetOpen(index);
-				double close = bars.GetClose(index);
-				double high = bars.GetHigh(index);
-				double low = bars.GetLow(index);
-				if (high < lowPrice - PriceEpsilon || low > highPrice + PriceEpsilon)
-					continue;
-
-				long volume = (long)Math.Round((double)bars.GetVolume(index));
-				long barDelta = close >= open ? volume : -volume;
-				running += barDelta;
-				if (!sawAny)
-				{
-					maxCumulative = running;
-					minCumulative = running;
-					sawAny = true;
-				}
-				else
-				{
-					if (running > maxCumulative) maxCumulative = running;
-					if (running < minCumulative) minCumulative = running;
-				}
-			}
-
-			if (!sawAny)
-				return false;
-
-			finishDelta = CalculateFinishDelta(running, maxCumulative, minCumulative);
-			return true;
-		}
-
 		private static Dictionary<double, long> GetMap(IList<Dictionary<double, long>> maps, int index)
 		{
 			if (maps == null || index < 0 || index >= maps.Count)
@@ -1844,11 +2274,11 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private string BuildStatisticsLabel()
 		{
 			string text = string.Empty;
-			if (ShowTotalDelta)
+			if (ShowTotalDelta && statisticsHasRealDelta)
 				text = AppendStatisticsToken(text, "D " + FormatSignedValue(statisticsTotalDelta));
-			if (ShowFinishDelta)
+			if (ShowFinishDelta && statisticsFinishKnown)
 				text = AppendStatisticsToken(text, "FD " + FormatSignedValue(statisticsFinishDelta));
-			if (ShowDeltaPercent)
+			if (ShowDeltaPercent && statisticsHasRealDelta)
 				text = AppendStatisticsToken(text, statisticsDeltaPercent.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture) + "%");
 			if (ShowTotalVolume)
 				text = AppendStatisticsToken(text, "V " + FormatCompactVolume(statisticsTotalVolume));
@@ -2253,7 +2683,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 		[NinjaScriptProperty]
 		[Display(Name = "Fallback To Chart Estimate", Order = 3, GroupName = "1. Data",
-			Description = "When true tick/provider data is unavailable, draw an estimated profile from the chart bars and label it as estimated.")]
+			Description = "When true tick/provider data is unavailable, draw an estimated volume profile from chart bar volume and label it as estimated. Delta is included only when the bars or a local cache provide bid/ask volume.")]
 		public bool AllowEstimatedChartFallback { get; set; }
 
 		[NinjaScriptProperty]
