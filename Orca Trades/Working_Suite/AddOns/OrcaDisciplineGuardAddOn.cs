@@ -33,8 +33,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults) {
-				Description = "Orca account-specific discipline grading and rule accountability panel";
-				Name = "Orca Discipline Guard";
+				Description = "Orca Rulebook session tracking and rule accountability panel";
+				Name = "Orca Rulebook";
 			} else if (State == State.Terminated) {
 				DisposeRuntime();
 			}
@@ -51,18 +51,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 				?? controlCenter.FindFirst("toolsMenuItem") as NTMenuItem
 				?? controlCenter.FindFirst("ControlCenterMenuItemNew") as NTMenuItem;
 			if (hostMenu == null) {
-				OrcaDisciplineDiagnostics.Write("Control Center menu host was not found; Orca Discipline Guard menu was not injected.");
+				OrcaDisciplineDiagnostics.Write("Control Center menu host was not found; Orca Rulebook menu was not injected.");
 				return;
 			}
-			OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu host found: " + (hostMenu.Name ?? string.Empty) + " / " + (hostMenu.Header == null ? string.Empty : hostMenu.Header.ToString()));
+			OrcaDisciplineDiagnostics.Write("Orca Rulebook menu host found: " + (hostMenu.Name ?? string.Empty) + " / " + (hostMenu.Header == null ? string.Empty : hostMenu.Header.ToString()));
 
 			guardMenuItem = new NTMenuItem {
-				Header = "Orca Discipline Guard",
+				Header = "Orca Rulebook",
 				Style = Application.Current == null ? null : Application.Current.TryFindResource("MainMenuItem") as Style
 			};
 			guardMenuItem.Click += OnMenuItemClick;
 			hostMenu.Items.Add(guardMenuItem);
-			OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu injected.");
+			OrcaDisciplineDiagnostics.Write("Orca Rulebook menu injected.");
 		}
 
 		protected override void OnWindowDestroyed(Window window)
@@ -80,14 +80,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private void OnMenuItemClick(object sender, RoutedEventArgs e)
 		{
 			try {
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard menu item clicked.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook menu item clicked.");
 				Dispatcher requestDispatcher = guardMenuItem == null ? Dispatcher.CurrentDispatcher : guardMenuItem.Dispatcher;
 				OrcaDisciplineGuardEngine engine = GetOrCreateRuntime(requestDispatcher);
 				engine.InvokeOnDispatcher(() => OrcaDisciplineGuardWindow.ShowOrActivate(engine));
 			} catch (Exception ex) {
-				string message = "Orca Discipline Guard click handler failed: " + ex.Message;
+				string message = "Orca Rulebook click handler failed: " + ex.Message;
 				OrcaDisciplineDiagnostics.Write(message + Environment.NewLine + ex);
-				MessageBox.Show(message, "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Error);
+				MessageBox.Show(message, "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
 
@@ -103,7 +103,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				engine = runtimeEngine;
 			}
 			if (created)
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard background runtime started.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook background runtime started.");
 			return engine;
 		}
 
@@ -116,8 +116,237 @@ namespace NinjaTrader.NinjaScript.AddOns
 			}
 			if (engine != null) {
 				engine.Dispose();
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard background runtime stopped.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook background runtime stopped.");
 			}
+		}
+	}
+
+	internal enum OrcaRulebookButtonKind
+	{
+		Primary,
+		Secondary,
+		Destructive
+	}
+
+	internal static class OrcaRulebookChrome
+	{
+		public const string Window = "#FF1C1C1C";
+		public const string Panel = "#FF242424";
+		public const string Hover = "#FF2C2C2C";
+		public const string Hairline = "#FF363636";
+		public const string Text = "#FFF0F0F0";
+		public const string Label = "#FFB8B8B8";
+		public const string Muted = "#FF858585";
+		public const string Accent = "#FF90BFF9";
+		public const string PrimaryFill = "#FFF2F2F2";
+		public const string PrimaryHover = "#FFFFFFFF";
+		public const string PrimaryLabel = "#FF1C1C1C";
+		public const string AlertFill = "#FF5A1721";
+		public const string AlertBorder = "#FFE23A52";
+		public const string AlertText = "#FFFFD7DE";
+		public const string Positive = "#FF3DDC97";
+
+		public static readonly FontFamily UiFont = new FontFamily("Segoe UI");
+		public static readonly FontFamily NumberFont = new FontFamily("Consolas");
+
+		public static Brush Brush(string color)
+		{
+			Brush brush = (Brush)new BrushConverter().ConvertFrom(color);
+			if (brush.CanFreeze)
+				brush.Freeze();
+			return brush;
+		}
+
+		public static void Clip(Border border, double radius)
+		{
+			if (border == null)
+				return;
+			border.SizeChanged += (sender, args) => {
+				Border box = (Border)sender;
+				box.Clip = new RectangleGeometry(new Rect(0, 0, Math.Max(0, box.ActualWidth), Math.Max(0, box.ActualHeight)), radius, radius);
+			};
+		}
+
+		public static Button CreateButton(string label, OrcaRulebookButtonKind kind)
+		{
+			string fill = PrimaryFill;
+			string hover = PrimaryHover;
+			string foreground = PrimaryLabel;
+			string border = PrimaryFill;
+			Thickness thickness = new Thickness(1);
+			if (kind == OrcaRulebookButtonKind.Secondary) {
+				fill = "#00FFFFFF";
+				hover = Hover;
+				foreground = Text;
+				border = Hairline;
+			} else if (kind == OrcaRulebookButtonKind.Destructive) {
+				fill = "#00FFFFFF";
+				hover = Hover;
+				foreground = AlertText;
+				border = AlertBorder;
+			}
+			Button button = new Button {
+				Content = label,
+				Height = 28,
+				MinWidth = 72,
+				Padding = new Thickness(12, 0, 12, 0),
+				Margin = new Thickness(0, 0, 8, 0),
+				FontFamily = UiFont,
+				FontSize = 12,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = Brush(foreground),
+				Background = Brush(fill),
+				BorderBrush = Brush(border),
+				BorderThickness = thickness,
+				FocusVisualStyle = null,
+				Style = ButtonStyle(hover, kind == OrcaRulebookButtonKind.Primary)
+			};
+			return button;
+		}
+
+		public static ToggleButton CreateSegment(string label, bool selected)
+		{
+			ToggleButton button = new ToggleButton {
+				Content = label,
+				Height = 28,
+				MinWidth = 76,
+				Padding = new Thickness(12, 0, 12, 0),
+				Margin = new Thickness(2, 0, 2, 0),
+				FontFamily = UiFont,
+				FontSize = 12,
+				FontWeight = FontWeights.SemiBold,
+				FocusVisualStyle = null,
+				Style = SegmentStyle()
+			};
+			ApplySegment(button, selected);
+			return button;
+		}
+
+		public static void ApplySegment(ToggleButton button, bool selected)
+		{
+			if (button == null)
+				return;
+			button.IsChecked = selected;
+			button.Foreground = Brush(selected ? Text : Label);
+			button.Background = Brush(selected ? Hover : "#00FFFFFF");
+			button.BorderBrush = Brush(selected ? Accent : "#00FFFFFF");
+			button.BorderThickness = new Thickness(0, 0, 0, selected ? 2 : 0);
+		}
+
+		public static void StyleInput(Control control)
+		{
+			if (control == null)
+				return;
+			if (control.MinHeight < 28)
+				control.MinHeight = 28;
+			control.FontFamily = UiFont;
+			control.FontSize = 12;
+			control.Foreground = Brush(Text);
+			control.Background = Brush(Panel);
+			control.BorderBrush = Brush(Hairline);
+			control.BorderThickness = new Thickness(1);
+			control.Padding = new Thickness(8, 4, 8, 4);
+			TextBox textBox = control as TextBox;
+			if (textBox != null) {
+				textBox.Template = TextBoxTemplate(8);
+				textBox.CaretBrush = Brush(Text);
+			}
+		}
+
+		public static Border WrapField(Control control)
+		{
+			StyleInput(control);
+			control.BorderThickness = new Thickness(0);
+			control.Background = Brushes.Transparent;
+			Border shell = new Border {
+				CornerRadius = new CornerRadius(8),
+				Background = Brush(Panel),
+				BorderBrush = Brush(Hairline),
+				BorderThickness = new Thickness(1),
+				Child = control
+			};
+			Clip(shell, 8);
+			control.GotKeyboardFocus += delegate { shell.BorderBrush = Brush(Accent); };
+			control.LostKeyboardFocus += delegate { shell.BorderBrush = Brush(Hairline); };
+			return shell;
+		}
+
+		public static ControlTemplate TextBoxTemplate(double radius)
+		{
+			FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
+			border.SetValue(Border.CornerRadiusProperty, new CornerRadius(radius));
+			border.SetValue(Border.SnapsToDevicePixelsProperty, true);
+			border.SetBinding(Border.BackgroundProperty, Templated("Background"));
+			border.SetBinding(Border.BorderBrushProperty, Templated("BorderBrush"));
+			border.SetBinding(Border.BorderThicknessProperty, Templated("BorderThickness"));
+			border.SetBinding(Border.PaddingProperty, Templated("Padding"));
+			FrameworkElementFactory host = new FrameworkElementFactory(typeof(ScrollViewer), "PART_ContentHost");
+			host.SetValue(UIElement.FocusableProperty, false);
+			border.AppendChild(host);
+			return new ControlTemplate(typeof(TextBox)) { VisualTree = border };
+		}
+
+		private static Style ButtonStyle(string hoverFill, bool matchBorderOnHover)
+		{
+			Style style = new Style(typeof(Button));
+			style.Setters.Add(new Setter(FrameworkElement.OverridesDefaultStyleProperty, true));
+			style.Setters.Add(new Setter(Control.TemplateProperty, RoundTemplate(typeof(Button), 12)));
+			style.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+			MultiTrigger hover = new MultiTrigger();
+			hover.Conditions.Add(new System.Windows.Condition(UIElement.IsMouseOverProperty, true));
+			hover.Conditions.Add(new System.Windows.Condition(UIElement.IsEnabledProperty, true));
+			hover.Setters.Add(new Setter(Control.BackgroundProperty, Brush(hoverFill)));
+			if (matchBorderOnHover)
+				hover.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(hoverFill)));
+			style.Triggers.Add(hover);
+			MultiTrigger focus = new MultiTrigger();
+			focus.Conditions.Add(new System.Windows.Condition(UIElement.IsKeyboardFocusedProperty, true));
+			focus.Conditions.Add(new System.Windows.Condition(UIElement.IsEnabledProperty, true));
+			focus.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(Accent)));
+			style.Triggers.Add(focus);
+			Trigger disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+			disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.4));
+			style.Triggers.Add(disabled);
+			return style;
+		}
+
+		private static Style SegmentStyle()
+		{
+			Style style = new Style(typeof(ToggleButton));
+			style.Setters.Add(new Setter(FrameworkElement.OverridesDefaultStyleProperty, true));
+			style.Setters.Add(new Setter(Control.TemplateProperty, RoundTemplate(typeof(ToggleButton), 8)));
+			style.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+			MultiTrigger hover = new MultiTrigger();
+			hover.Conditions.Add(new System.Windows.Condition(UIElement.IsMouseOverProperty, true));
+			hover.Conditions.Add(new System.Windows.Condition(UIElement.IsEnabledProperty, true));
+			hover.Setters.Add(new Setter(Control.BackgroundProperty, Brush(Hover)));
+			style.Triggers.Add(hover);
+			Trigger disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+			disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.4));
+			style.Triggers.Add(disabled);
+			return style;
+		}
+
+		private static Binding Templated(string path)
+		{
+			return new Binding(path) { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) };
+		}
+
+		private static ControlTemplate RoundTemplate(Type controlType, double radius)
+		{
+			FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
+			border.SetValue(Border.CornerRadiusProperty, new CornerRadius(radius));
+			border.SetValue(Border.SnapsToDevicePixelsProperty, true);
+			border.SetBinding(Border.BackgroundProperty, Templated("Background"));
+			border.SetBinding(Border.BorderBrushProperty, Templated("BorderBrush"));
+			border.SetBinding(Border.BorderThicknessProperty, Templated("BorderThickness"));
+			border.SetBinding(Border.PaddingProperty, Templated("Padding"));
+			FrameworkElementFactory presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+			presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+			presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+			presenter.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+			border.AppendChild(presenter);
+			return new ControlTemplate(controlType) { VisualTree = border };
 		}
 	}
 
@@ -137,22 +366,23 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (engine == null)
 				throw new ArgumentNullException("engine");
 			if (!engine.CheckDispatcherAccess())
-				throw new InvalidOperationException("Orca Discipline Guard must be created on its runtime dispatcher.");
+				throw new InvalidOperationException("Orca Rulebook must be created on its runtime dispatcher.");
 
-			Caption = "Orca Discipline Guard";
-			Title = "Orca Discipline Guard";
+			Caption = "Orca Rulebook";
+			Title = "Orca Rulebook";
 			Width = 1180;
 			Height = 760;
 			MinWidth = 960;
 			MinHeight = 620;
 			WindowStartupLocation = WindowStartupLocation.CenterScreen;
-			Background = Brush("#FF0F141B");
-			Foreground = Brush("#FFEAF0F6");
+			Background = Brush(OrcaRulebookChrome.Window);
+			Foreground = Brush(OrcaRulebookChrome.Text);
+			FontFamily = OrcaRulebookChrome.UiFont;
 
 			viewModel = new OrcaDisciplineGuardViewModel(Dispatcher, engine);
 			DataContext = viewModel;
 
-			Grid root = new Grid { Background = Brush("#FF0F141B") };
+			Grid root = new Grid { Background = Brush(OrcaRulebookChrome.Window) };
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
@@ -183,18 +413,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (!instance.IsVisible)
 					instance.Show();
 				instance.Activate();
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window opened.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook window opened.");
 			} catch (Exception ex) {
 				instance = null;
-				string message = "Orca Discipline Guard could not open: " + ex.Message;
+				string message = "Orca Rulebook could not open: " + ex.Message;
 				OrcaDisciplineDiagnostics.Write(message + Environment.NewLine + ex);
-				MessageBox.Show(message, "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Error);
+				MessageBox.Show(message, "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
 
 		private FrameworkElement BuildHeader()
 		{
-			Grid header = new Grid { Margin = new Thickness(14, 14, 14, 10) };
+			Grid header = new Grid { Margin = new Thickness(12, 12, 12, 8) };
 			header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 			header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 			header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -202,16 +432,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			StackPanel titleStack = new StackPanel { Orientation = Orientation.Vertical };
 			titleStack.Children.Add(new TextBlock {
-				Text = "Orca Discipline Guard",
-				FontSize = 20,
+				Text = "Orca Rulebook",
+				FontFamily = OrcaRulebookChrome.UiFont,
+				FontSize = 18,
 				FontWeight = FontWeights.SemiBold,
-				Foreground = Brush("#FFF5F8FB")
+				Foreground = Brush(OrcaRulebookChrome.Text)
 			});
 			titleStack.Children.Add(new TextBlock {
 				Text = "Account-specific rule tracking, session discipline grade, and violation journal",
+				FontFamily = OrcaRulebookChrome.UiFont,
 				FontSize = 12,
-				Foreground = Brush("#FF8EA0B5"),
-				Margin = new Thickness(1, 3, 0, 0)
+				Foreground = Brush(OrcaRulebookChrome.Muted),
+				Margin = new Thickness(0, 4, 0, 0)
 			});
 			Grid.SetColumn(titleStack, 0);
 			header.Children.Add(titleStack);
@@ -220,7 +452,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				MinWidth = 220,
 				TextAlignment = TextAlignment.Right,
 				VerticalAlignment = VerticalAlignment.Center,
-				Foreground = Brush("#FFC3CEDA"),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				Foreground = Brush(OrcaRulebookChrome.Text),
 				FontSize = 13,
 				FontWeight = FontWeights.SemiBold
 			};
@@ -229,16 +462,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 			header.Children.Add(status);
 
 			Border alert = new Border {
-				Margin = new Thickness(0, 12, 0, 0),
-				Padding = new Thickness(10, 7, 10, 7),
-				CornerRadius = new CornerRadius(5),
-				Background = Brush("#FF5A1721"),
-				BorderBrush = Brush("#FFE23A52"),
+				Margin = new Thickness(0, 8, 0, 0),
+				Padding = new Thickness(12, 8, 12, 8),
+				CornerRadius = new CornerRadius(10),
+				Background = Brush(OrcaRulebookChrome.AlertFill),
+				BorderBrush = Brush(OrcaRulebookChrome.AlertBorder),
 				BorderThickness = new Thickness(1)
 			};
 			alert.SetBinding(UIElement.VisibilityProperty, new Binding("AlertText") { Converter = new OrcaDisciplineStringVisibilityConverter() });
 			TextBlock alertText = new TextBlock {
-				Foreground = Brush("#FFFFD7DE"),
+				Foreground = Brush(OrcaRulebookChrome.AlertText),
 				FontSize = 12,
 				FontWeight = FontWeights.SemiBold,
 				TextWrapping = TextWrapping.Wrap
@@ -255,8 +488,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private FrameworkElement BuildTabs()
 		{
 			Grid views = new Grid {
-				Margin = new Thickness(14, 0, 14, 14),
-				Background = Brush("#FF0F141B")
+				Margin = new Thickness(12, 0, 12, 12),
+				Background = Brush(OrcaRulebookChrome.Window)
 			};
 			views.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 			views.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -269,12 +502,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			Border selectorShell = new Border {
 				Margin = new Thickness(0, 8, 0, 0),
-				Padding = new Thickness(3),
+				Padding = new Thickness(2),
 				HorizontalAlignment = HorizontalAlignment.Left,
-				Background = Brush("#FF121A23"),
-				BorderBrush = Brush("#FF334255"),
+				Background = Brush(OrcaRulebookChrome.Panel),
+				BorderBrush = Brush(OrcaRulebookChrome.Hairline),
 				BorderThickness = new Thickness(1),
-				CornerRadius = new CornerRadius(4)
+				CornerRadius = new CornerRadius(10)
 			};
 			StackPanel selector = new StackPanel { Orientation = Orientation.Horizontal };
 			sessionViewButton = ViewButton("Session", true);
@@ -291,18 +524,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private ToggleButton ViewButton(string label, bool selected)
 		{
-			return new ToggleButton {
-				Content = label,
-				IsChecked = selected,
-				MinWidth = 76,
-				Height = 27,
-				Margin = new Thickness(0),
-				Padding = new Thickness(10, 3, 10, 3),
-				Foreground = Brush(selected ? "#FFFFFFFF" : "#FFB8C4D1"),
-				Background = Brush(selected ? "#FF274B73" : "#FF121A23"),
-				BorderBrush = Brush(selected ? "#FF4B78A6" : "#FF121A23"),
-				BorderThickness = new Thickness(1)
-			};
+			return OrcaRulebookChrome.CreateSegment(label, selected);
 		}
 
 		private void SelectView(bool showSession)
@@ -318,15 +540,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (button == null)
 				return;
-			button.IsChecked = selected;
-			button.Foreground = Brush(selected ? "#FFFFFFFF" : "#FFB8C4D1");
-			button.Background = Brush(selected ? "#FF274B73" : "#FF121A23");
-			button.BorderBrush = Brush(selected ? "#FF4B78A6" : "#FF121A23");
+			OrcaRulebookChrome.ApplySegment(button, selected);
 		}
 
 		private FrameworkElement BuildSessionTab()
 		{
-			Grid tab = new Grid { Background = Brush("#FF0F141B") };
+			Grid tab = new Grid { Background = Brush(OrcaRulebookChrome.Window) };
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -346,23 +565,25 @@ namespace NinjaTrader.NinjaScript.AddOns
 			tab.Children.Add(dashboard);
 
 			Border rulesShell = new Border {
-				Margin = new Thickness(0, 0, 0, 12),
+				Margin = new Thickness(0, 0, 0, 8),
 				BorderThickness = new Thickness(1),
-				BorderBrush = Brush("#FF2A3747"),
-				Background = Brush("#FF121A23"),
-				CornerRadius = new CornerRadius(6),
+				BorderBrush = Brush(OrcaRulebookChrome.Hairline),
+				Background = Brush(OrcaRulebookChrome.Panel),
+				CornerRadius = new CornerRadius(10),
 				Child = BuildRulesGrid()
 			};
+			OrcaRulebookChrome.Clip(rulesShell, 10);
 			Grid.SetRow(rulesShell, 3);
 			tab.Children.Add(rulesShell);
 
 			Border violationsShell = new Border {
 				BorderThickness = new Thickness(1),
-				BorderBrush = Brush("#FF2A3747"),
-				Background = Brush("#FF121A23"),
-				CornerRadius = new CornerRadius(6),
+				BorderBrush = Brush(OrcaRulebookChrome.Hairline),
+				Background = Brush(OrcaRulebookChrome.Panel),
+				CornerRadius = new CornerRadius(10),
 				Child = BuildViolationsGrid()
 			};
+			OrcaRulebookChrome.Clip(violationsShell, 10);
 			Grid.SetRow(violationsShell, 4);
 			tab.Children.Add(violationsShell);
 			return tab;
@@ -370,7 +591,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private FrameworkElement BuildControls()
 		{
-			Grid controls = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+			Grid controls = new Grid { Margin = new Thickness(0, 0, 0, 8) };
 			controls.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			controls.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			for (int i = 0; i < 3; i++)
@@ -382,12 +603,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			FrameworkElement instrument = BuildLabeledCombo("Instrument", "InstrumentOptions", "SelectedInstrumentFilter", 190);
 			Grid.SetColumn(instrument, 1);
-			instrument.Margin = new Thickness(10, 0, 0, 0);
+			instrument.Margin = new Thickness(8, 0, 0, 0);
 			controls.Children.Add(instrument);
 
 			FrameworkElement template = BuildLabeledCombo("Template", "TemplateNames", "SelectedTemplateName", 220);
 			Grid.SetColumn(template, 2);
-			template.Margin = new Thickness(10, 0, 10, 0);
+			template.Margin = new Thickness(8, 0, 8, 0);
 			controls.Children.Add(template);
 
 			Grid actions = new Grid { Margin = new Thickness(0, 8, 0, 0) };
@@ -395,19 +616,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 			actions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
 			WrapPanel sessionActions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
-			AddToolbarButton(sessionActions, "Refresh", "RefreshAccountsCommand", "#FF2B3340");
-			AddToolbarButton(sessionActions, "Start Session", "StartCommand", "#FF146C43");
-			AddToolbarButton(sessionActions, "Pause / Resume", "PauseCommand", "#FF274B73");
-			AddToolbarButton(sessionActions, "End Session", "EndCommand", "#FF5A1721");
-			AddToolbarButton(sessionActions, "Reset", "ResetCommand", "#FF3B4655");
+			AddToolbarButton(sessionActions, "Refresh", "RefreshAccountsCommand", OrcaRulebookButtonKind.Secondary);
+			AddToolbarButton(sessionActions, "Start Session", "StartCommand", OrcaRulebookButtonKind.Primary);
+			AddToolbarButton(sessionActions, "Pause / Resume", "PauseCommand", OrcaRulebookButtonKind.Secondary);
+			AddToolbarButton(sessionActions, "End Session", "EndCommand", OrcaRulebookButtonKind.Secondary);
+			AddToolbarButton(sessionActions, "Reset", "ResetCommand", OrcaRulebookButtonKind.Secondary);
 			Grid.SetColumn(sessionActions, 0);
 			actions.Children.Add(sessionActions);
 
 			WrapPanel ruleActions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
-			AddToolbarButton(ruleActions, "Add Rule", "AddRuleCommand", "#FF274B73");
-			AddToolbarButton(ruleActions, "Delete Rule", "DeleteRuleCommand", "#FF5A1721");
-			AddToolbarButton(ruleActions, "Save Template", "SaveTemplateCommand", "#FF2B3340");
-			AddToolbarButton(ruleActions, "Clone Template", "CloneTemplateCommand", "#FF274B73");
+			AddToolbarButton(ruleActions, "Add Rule", "AddRuleCommand", OrcaRulebookButtonKind.Secondary);
+			AddToolbarButton(ruleActions, "Delete Rule", "DeleteRuleCommand", OrcaRulebookButtonKind.Destructive);
+			AddToolbarButton(ruleActions, "Save Template", "SaveTemplateCommand", OrcaRulebookButtonKind.Primary);
+			AddToolbarButton(ruleActions, "Clone Template", "CloneTemplateCommand", OrcaRulebookButtonKind.Secondary);
 			Grid.SetColumn(ruleActions, 1);
 			actions.Children.Add(ruleActions);
 
@@ -423,33 +644,30 @@ namespace NinjaTrader.NinjaScript.AddOns
 			StackPanel stack = new StackPanel { Orientation = Orientation.Vertical };
 			stack.Children.Add(new TextBlock {
 				Text = label,
-				Foreground = Brush("#FF8EA0B5"),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				Foreground = Brush(OrcaRulebookChrome.Muted),
 				FontSize = 11,
-				Margin = new Thickness(0, 0, 0, 3)
+				Margin = new Thickness(0, 0, 0, 4)
 			});
 			ComboBox combo = new ComboBox {
 				MinWidth = minWidth,
 				Height = 28,
-				Foreground = Brush("#FFEAF0F6"),
-				Background = Brush("#FF18212C"),
-				BorderBrush = Brush("#FF334255"),
-				BorderThickness = new Thickness(1),
 				IsEditable = false
 			};
 			combo.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(itemsPath));
 			combo.SetBinding(Selector.SelectedItemProperty, new Binding(selectedPath) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
-			stack.Children.Add(combo);
+			stack.Children.Add(OrcaRulebookChrome.WrapField(combo));
 			return stack;
 		}
 
 		private FrameworkElement BuildMonitoringBand()
 		{
 			Border band = new Border {
-				Margin = new Thickness(0, 0, 0, 12),
-				Padding = new Thickness(10, 8, 10, 8),
-				CornerRadius = new CornerRadius(5),
-				Background = Brush("#FF111A20"),
-				BorderBrush = Brush("#FF2A3747"),
+				Margin = new Thickness(0, 0, 0, 8),
+				Padding = new Thickness(12),
+				CornerRadius = new CornerRadius(10),
+				Background = Brush(OrcaRulebookChrome.Panel),
+				BorderBrush = Brush(OrcaRulebookChrome.Hairline),
 				BorderThickness = new Thickness(1)
 			};
 			Grid grid = new Grid();
@@ -459,20 +677,23 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			Border stateBadge = new Border {
 				MinWidth = 76,
-				Padding = new Thickness(9, 4, 9, 4),
-				CornerRadius = new CornerRadius(4),
-				Background = Brush("#FF0D1318"),
+				Height = 28,
+				Padding = new Thickness(12, 0, 12, 0),
+				CornerRadius = new CornerRadius(8),
+				Background = Brush(OrcaRulebookChrome.Window),
 				BorderThickness = new Thickness(1)
 			};
-			Binding stateBrushBinding = new Binding("MonitoringStateText") { Converter = new OrcaDisciplineMonitoringBrushConverter() };
+			Binding stateBrushBinding = new Binding("MonitoringStateText") { Converter = new OrcaDisciplineMonitoringBrushConverter(), ConverterParameter = "border" };
 			stateBadge.SetBinding(Border.BorderBrushProperty, stateBrushBinding);
 			TextBlock stateText = new TextBlock {
 				TextAlignment = TextAlignment.Center,
+				VerticalAlignment = VerticalAlignment.Center,
+				FontFamily = OrcaRulebookChrome.UiFont,
 				FontSize = 11,
-				FontWeight = FontWeights.Bold
+				FontWeight = FontWeights.SemiBold
 			};
 			stateText.SetBinding(TextBlock.TextProperty, new Binding("MonitoringStateText"));
-			stateText.SetBinding(TextBlock.ForegroundProperty, new Binding("MonitoringStateText") { Converter = new OrcaDisciplineMonitoringBrushConverter() });
+			stateText.SetBinding(TextBlock.ForegroundProperty, new Binding("MonitoringStateText") { Converter = new OrcaDisciplineMonitoringBrushConverter(), ConverterParameter = "text" });
 			stateBadge.Child = stateText;
 			Grid.SetColumn(stateBadge, 0);
 			grid.Children.Add(stateBadge);
@@ -480,7 +701,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			TextBlock detail = new TextBlock {
 				Margin = new Thickness(12, 0, 12, 0),
 				VerticalAlignment = VerticalAlignment.Center,
-				Foreground = Brush("#FFC3CEDA"),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				Foreground = Brush(OrcaRulebookChrome.Label),
 				FontSize = 12,
 				TextTrimming = TextTrimming.CharacterEllipsis
 			};
@@ -490,9 +712,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			TextBlock eventCount = new TextBlock {
 				VerticalAlignment = VerticalAlignment.Center,
-				Foreground = Brush("#FF8EA0B5"),
-				FontFamily = new FontFamily("Consolas"),
-				FontSize = 11
+				Foreground = Brush(OrcaRulebookChrome.Muted),
+				FontFamily = OrcaRulebookChrome.NumberFont,
+				FontSize = 12
 			};
 			eventCount.SetBinding(TextBlock.TextProperty, new Binding("MonitoringEventCountText"));
 			Grid.SetColumn(eventCount, 2);
@@ -504,45 +726,72 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private FrameworkElement BuildDashboard()
 		{
-			UniformGrid grid = new UniformGrid {
-				Columns = 8,
-				Margin = new Thickness(0, 0, 0, 12)
+			UniformGrid grid = new UniformGrid { Columns = 8 };
+			grid.Children.Add(MetricCard("Grade", "Grade", 18));
+			grid.Children.Add(MetricCard("Score", "ScoreText", 16, "EnabledWeightText"));
+			grid.Children.Add(MetricCard("Session P&L", "SessionPnlText", 16));
+			grid.Children.Add(MetricCard("Trades", "TradeCountText", 16));
+			grid.Children.Add(MetricCard("Violations", "ViolationCountText", 16));
+			grid.Children.Add(MetricCard("Cooldown", "CooldownText", 16));
+			grid.Children.Add(MetricCard("Position", "CurrentPositionSizeText", 16));
+			grid.Children.Add(MetricCard("Loss Streak", "ConsecutiveLossesText", 16));
+			TextBlock breakdown = new TextBlock {
+				Margin = new Thickness(0, 4, 0, 0),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				FontSize = 12,
+				Foreground = Brush(OrcaRulebookChrome.Label),
+				TextWrapping = TextWrapping.Wrap
 			};
-			grid.Children.Add(MetricCard("Grade", "Grade", 26));
-			grid.Children.Add(MetricCard("Score", "ScoreText", 22));
-			grid.Children.Add(MetricCard("Session P&L", "SessionPnlText", 20));
-			grid.Children.Add(MetricCard("Trades", "TradeCountText", 20));
-			grid.Children.Add(MetricCard("Violations", "ViolationCountText", 20));
-			grid.Children.Add(MetricCard("Cooldown", "CooldownText", 20));
-			grid.Children.Add(MetricCard("Position", "CurrentPositionSizeText", 20));
-			grid.Children.Add(MetricCard("Loss Streak", "ConsecutiveLossesText", 20));
-			return grid;
+			breakdown.SetBinding(TextBlock.TextProperty, new Binding("ScoreBreakdown"));
+			StackPanel panel = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+			panel.Children.Add(grid);
+			panel.Children.Add(breakdown);
+			return panel;
 		}
 
 		private FrameworkElement MetricCard(string label, string valuePath, double valueSize)
 		{
+			return MetricCard(label, valuePath, valueSize, null);
+		}
+
+		private FrameworkElement MetricCard(string label, string valuePath, double valueSize, string captionPath)
+		{
 			Border card = new Border {
 				Margin = new Thickness(0, 0, 8, 0),
-				Padding = new Thickness(10, 8, 10, 8),
-				CornerRadius = new CornerRadius(6),
-				BorderBrush = Brush("#FF2A3747"),
+				Padding = new Thickness(12, 8, 12, 8),
+				CornerRadius = new CornerRadius(10),
+				BorderBrush = Brush(OrcaRulebookChrome.Hairline),
 				BorderThickness = new Thickness(1),
-				Background = Brush("#FF121A23")
+				Background = Brush(OrcaRulebookChrome.Panel)
 			};
 			StackPanel stack = new StackPanel { Orientation = Orientation.Vertical };
 			stack.Children.Add(new TextBlock {
 				Text = label,
-				Foreground = Brush("#FF8EA0B5"),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				Foreground = Brush(OrcaRulebookChrome.Muted),
 				FontSize = 11
 			});
 			TextBlock value = new TextBlock {
-				Foreground = Brush("#FFF5F8FB"),
+				Foreground = Brush(OrcaRulebookChrome.Text),
+				FontFamily = OrcaRulebookChrome.NumberFont,
 				FontSize = valueSize,
 				FontWeight = FontWeights.SemiBold,
 				TextTrimming = TextTrimming.CharacterEllipsis
 			};
 			value.SetBinding(TextBlock.TextProperty, new Binding(valuePath));
+			if (valuePath == "Grade")
+				value.SetBinding(TextBlock.ForegroundProperty, new Binding(valuePath) { Converter = new OrcaRulebookGradeBrushConverter() });
 			stack.Children.Add(value);
+			if (!string.IsNullOrEmpty(captionPath)) {
+				TextBlock caption = new TextBlock {
+					Margin = new Thickness(0, 2, 0, 0),
+					FontFamily = OrcaRulebookChrome.UiFont,
+					Foreground = Brush(OrcaRulebookChrome.Muted),
+					FontSize = 11
+				};
+				caption.SetBinding(TextBlock.TextProperty, new Binding(captionPath));
+				stack.Children.Add(caption);
+			}
 			card.Child = stack;
 			return card;
 		}
@@ -552,11 +801,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 			DataGrid grid = BuildBaseGrid();
 			grid.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Rules"));
 			grid.SetBinding(Selector.SelectedItemProperty, new Binding("SelectedRule") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+			grid.BeginningEdit += OnRulesGridBeginningEdit;
 			grid.Columns.Add(new DataGridCheckBoxColumn { Header = "Enabled", Binding = new Binding("Enabled") { Mode = BindingMode.TwoWay }, Width = new DataGridLength(70) });
-			grid.Columns.Add(TextColumn("Rule Name", "Name", 190));
+			grid.Columns.Add(BuildRuleNameColumn());
 			grid.Columns.Add(TextColumn("Mode", "Mode", 90));
 			grid.Columns.Add(TextColumn("Status", "Status", 100));
 			grid.Columns.Add(EditableTextColumn("Parameter / Limit", "ParameterText", 170));
+			grid.Columns.Add(EditableTextColumn("Weight", "WeightText", 70));
 			grid.Columns.Add(TextColumn("Current Value", "CurrentValueText", 140));
 			grid.Columns.Add(TextColumn("Violations", "ViolationCount", 80));
 			grid.Columns.Add(TextColumn("Last Violation", "LastViolationMessage", 230));
@@ -594,14 +845,20 @@ namespace NinjaTrader.NinjaScript.AddOns
 				GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
 				HeadersVisibility = DataGridHeadersVisibility.Column,
 				RowHeaderWidth = 0,
-				Background = Brush("#FF121A23"),
-				Foreground = Brush("#FFEAF0F6"),
-				BorderBrush = Brush("#FF2A3747"),
-				HorizontalGridLinesBrush = Brush("#FF202A36"),
-				VerticalGridLinesBrush = Brush("#FF202A36"),
-				AlternatingRowBackground = Brush("#FF101820"),
-				RowBackground = Brush("#FF121A23"),
-				ColumnHeaderStyle = BuildHeaderStyle()
+				RowHeight = 28,
+				BorderThickness = new Thickness(0),
+				Background = Brush(OrcaRulebookChrome.Panel),
+				Foreground = Brush(OrcaRulebookChrome.Text),
+				BorderBrush = Brush(OrcaRulebookChrome.Hairline),
+				HorizontalGridLinesBrush = Brush(OrcaRulebookChrome.Hairline),
+				VerticalGridLinesBrush = Brush(OrcaRulebookChrome.Hairline),
+				AlternatingRowBackground = Brush(OrcaRulebookChrome.Window),
+				RowBackground = Brush(OrcaRulebookChrome.Panel),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				FontSize = 12,
+				ColumnHeaderStyle = BuildHeaderStyle(),
+				RowStyle = BuildRowStyle(),
+				CellStyle = BuildCellStyle()
 			};
 			return grid;
 		}
@@ -610,9 +867,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			FrameworkElementFactory combo = new FrameworkElementFactory(typeof(ComboBox));
 			combo.SetValue(FrameworkElement.MinWidthProperty, 112.0);
-			combo.SetValue(FrameworkElement.HeightProperty, 25.0);
-			combo.SetValue(Control.ForegroundProperty, Brush("#FFEAF0F6"));
-			combo.SetValue(Control.BackgroundProperty, Brush("#FF18212C"));
+			combo.SetValue(FrameworkElement.HeightProperty, 24.0);
+			combo.SetValue(Control.FontFamilyProperty, OrcaRulebookChrome.UiFont);
+			combo.SetValue(Control.FontSizeProperty, 12.0);
+			combo.SetValue(Control.ForegroundProperty, Brush(OrcaRulebookChrome.Text));
+			combo.SetValue(Control.BackgroundProperty, Brush(OrcaRulebookChrome.Window));
+			combo.SetValue(Control.BorderBrushProperty, Brush(OrcaRulebookChrome.Hairline));
 			combo.SetValue(ComboBox.ItemsSourceProperty, OrcaManualActionValues.Items);
 			combo.SetBinding(Selector.SelectedItemProperty, new Binding("ManualAction") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
 			combo.SetBinding(UIElement.IsEnabledProperty, new Binding("IsManual"));
@@ -623,11 +883,34 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 		}
 
+		private DataGridTextColumn BuildRuleNameColumn()
+		{
+			return new DataGridTextColumn {
+				Header = "Rule Name",
+				Binding = new Binding("Name"),
+				Width = new DataGridLength(190),
+				ElementStyle = BuildCellTextStyle(),
+				EditingElementStyle = BuildTextBoxStyle()
+			};
+		}
+
+		private void OnRulesGridBeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+		{
+			if (e.Column == null || e.Row == null)
+				return;
+			if (!string.Equals(e.Column.Header as string, "Rule Name", StringComparison.Ordinal))
+				return;
+			OrcaDisciplineRule rule = e.Row.Item as OrcaDisciplineRule;
+			if (rule == null || !rule.CanRename)
+				e.Cancel = true;
+		}
+
 		private DataGridTextColumn TextColumn(string header, string path, double width)
 		{
 			return new DataGridTextColumn {
 				Header = header,
 				Binding = new Binding(path),
+				IsReadOnly = true,
 				Width = new DataGridLength(width),
 				ElementStyle = BuildCellTextStyle()
 			};
@@ -644,25 +927,61 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 		}
 
+		private Style BuildRowStyle()
+		{
+			Style style = new Style(typeof(DataGridRow));
+			MultiTrigger hover = new MultiTrigger();
+			hover.Conditions.Add(new System.Windows.Condition(UIElement.IsMouseOverProperty, true));
+			hover.Conditions.Add(new System.Windows.Condition(DataGridRow.IsSelectedProperty, false));
+			hover.Setters.Add(new Setter(Control.BackgroundProperty, Brush(OrcaRulebookChrome.Hover)));
+			style.Triggers.Add(hover);
+			Trigger selected = new Trigger { Property = DataGridRow.IsSelectedProperty, Value = true };
+			selected.Setters.Add(new Setter(Control.BackgroundProperty, Brush(OrcaRulebookChrome.Hover)));
+			selected.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(OrcaRulebookChrome.Accent)));
+			selected.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(2, 0, 0, 0)));
+			selected.Setters.Add(new Setter(Control.ForegroundProperty, Brush(OrcaRulebookChrome.Text)));
+			style.Triggers.Add(selected);
+			return style;
+		}
+
+		private Style BuildCellStyle()
+		{
+			Style style = new Style(typeof(DataGridCell));
+			style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+			style.Setters.Add(new Setter(Control.FocusVisualStyleProperty, null));
+			style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(OrcaRulebookChrome.Text)));
+			style.Setters.Add(new Setter(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center));
+			Trigger selected = new Trigger { Property = DataGridCell.IsSelectedProperty, Value = true };
+			selected.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+			selected.Setters.Add(new Setter(Control.ForegroundProperty, Brush(OrcaRulebookChrome.Text)));
+			selected.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+			style.Triggers.Add(selected);
+			return style;
+		}
+
 		private Style BuildHeaderStyle()
 		{
 			Style style = new Style(typeof(DataGridColumnHeader));
-			style.Setters.Add(new Setter(Control.BackgroundProperty, Brush("#FF18212C")));
-			style.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#FFB8C6D8")));
+			style.Setters.Add(new Setter(Control.BackgroundProperty, Brush(OrcaRulebookChrome.Panel)));
+			style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(OrcaRulebookChrome.Muted)));
+			style.Setters.Add(new Setter(Control.FontFamilyProperty, OrcaRulebookChrome.UiFont));
 			style.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
-			style.Setters.Add(new Setter(Control.FontSizeProperty, 12.0));
-			style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 6, 8, 6)));
-			style.Setters.Add(new Setter(Control.BorderBrushProperty, Brush("#FF2A3747")));
-			style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0, 0, 1, 1)));
+			style.Setters.Add(new Setter(Control.FontSizeProperty, 11.0));
+			style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 4, 10, 4)));
+			style.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(OrcaRulebookChrome.Hairline)));
+			style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0, 0, 0, 1)));
+			style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Left));
 			return style;
 		}
 
 		private Style BuildCellTextStyle()
 		{
 			Style style = new Style(typeof(TextBlock));
-			style.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brush("#FFEAF0F6")));
+			style.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brush(OrcaRulebookChrome.Text)));
+			style.Setters.Add(new Setter(TextBlock.FontFamilyProperty, OrcaRulebookChrome.UiFont));
 			style.Setters.Add(new Setter(TextBlock.FontSizeProperty, 12.0));
-			style.Setters.Add(new Setter(TextBlock.PaddingProperty, new Thickness(8, 4, 8, 4)));
+			style.Setters.Add(new Setter(TextBlock.PaddingProperty, new Thickness(10, 0, 10, 0)));
+			style.Setters.Add(new Setter(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center));
 			style.Setters.Add(new Setter(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis));
 			return style;
 		}
@@ -670,26 +989,31 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private Style BuildTextBoxStyle()
 		{
 			Style style = new Style(typeof(TextBox));
-			style.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#FFEAF0F6")));
-			style.Setters.Add(new Setter(Control.BackgroundProperty, Brush("#FF18212C")));
-			style.Setters.Add(new Setter(Control.BorderBrushProperty, Brush("#FF334255")));
+			style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(OrcaRulebookChrome.Text)));
+			style.Setters.Add(new Setter(Control.BackgroundProperty, Brush(OrcaRulebookChrome.Window)));
+			style.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(OrcaRulebookChrome.Hairline)));
+			style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+			style.Setters.Add(new Setter(Control.FontFamilyProperty, OrcaRulebookChrome.UiFont));
+			style.Setters.Add(new Setter(Control.FontSizeProperty, 12.0));
+			style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 2, 8, 2)));
+			style.Setters.Add(new Setter(Control.TemplateProperty, OrcaRulebookChrome.TextBoxTemplate(8)));
 			return style;
 		}
 
 		private FrameworkElement BuildSummaryTab()
 		{
-			Grid tab = new Grid { Background = Brush("#FF0F141B") };
+			Grid tab = new Grid { Background = Brush(OrcaRulebookChrome.Window) };
 			tab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			tab.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
 			StackPanel commands = new StackPanel {
 				Orientation = Orientation.Horizontal,
 				HorizontalAlignment = HorizontalAlignment.Right,
-				Margin = new Thickness(0, 0, 0, 12)
+				Margin = new Thickness(0, 0, 0, 8)
 			};
-			commands.Children.Add(ControlButton("Copy Summary", "CopySummaryCommand", "#FF274B73"));
-			commands.Children.Add(ControlButton("Export Session JSON", "ExportSessionCommand", "#FF146C43"));
-			commands.Children.Add(ControlButton("Export Violations CSV", "ExportViolationsCommand", "#FF3B4655"));
+			commands.Children.Add(CommandButton("Copy Summary", "CopySummaryCommand", OrcaRulebookButtonKind.Secondary));
+			commands.Children.Add(CommandButton("Export Session JSON", "ExportSessionCommand", OrcaRulebookButtonKind.Secondary));
+			commands.Children.Add(CommandButton("Export Violations CSV", "ExportViolationsCommand", OrcaRulebookButtonKind.Secondary));
 			Grid.SetRow(commands, 0);
 			tab.Children.Add(commands);
 
@@ -699,13 +1023,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 				TextWrapping = TextWrapping.Wrap,
 				VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
 				HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-				Foreground = Brush("#FFEAF0F6"),
-				Background = Brush("#FF121A23"),
-				BorderBrush = Brush("#FF2A3747"),
+				Foreground = Brush(OrcaRulebookChrome.Text),
+				Background = Brush(OrcaRulebookChrome.Panel),
+				BorderBrush = Brush(OrcaRulebookChrome.Hairline),
 				BorderThickness = new Thickness(1),
 				Padding = new Thickness(12),
-				FontFamily = new FontFamily("Consolas"),
-				FontSize = 13
+				FontFamily = OrcaRulebookChrome.NumberFont,
+				FontSize = 12,
+				Template = OrcaRulebookChrome.TextBoxTemplate(10)
 			};
 			summary.SetBinding(TextBox.TextProperty, new Binding("SessionSummary") { Mode = BindingMode.OneWay });
 			Grid.SetRow(summary, 1);
@@ -713,26 +1038,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 			return tab;
 		}
 
-		private void AddToolbarButton(Panel panel, string label, string commandPath, string color)
+		private void AddToolbarButton(Panel panel, string label, string commandPath, OrcaRulebookButtonKind kind)
 		{
-			Button button = ControlButton(label, commandPath, color);
-			button.Margin = new Thickness(6, 0, 0, 0);
-			panel.Children.Add(button);
+			panel.Children.Add(CommandButton(label, commandPath, kind));
 		}
 
-		private Button ControlButton(string label, string commandPath, string color)
+		private Button CommandButton(string label, string commandPath, OrcaRulebookButtonKind kind)
 		{
-			Button button = new Button {
-				Content = label,
-				MinWidth = 92,
-				Height = 29,
-				Margin = new Thickness(6, 18, 0, 0),
-				Padding = new Thickness(10, 4, 10, 4),
-				Foreground = Brush("#FFEAF0F6"),
-				Background = Brush(color),
-				BorderBrush = Brush("#FF5D6978"),
-				BorderThickness = new Thickness(1)
-			};
+			Button button = OrcaRulebookChrome.CreateButton(label, kind);
 			button.SetBinding(Button.CommandProperty, new Binding(commandPath));
 			return button;
 		}
@@ -746,12 +1059,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			viewModel.Dispose();
 			instance = null;
-			OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window closed; background runtime remains active.");
+			OrcaDisciplineDiagnostics.Write("Orca Rulebook window closed; background runtime remains active.");
 		}
 
 		private static Brush Brush(string color)
 		{
-			return (Brush)new BrushConverter().ConvertFrom(color);
+			return OrcaRulebookChrome.Brush(color);
 		}
 	}
 
@@ -772,15 +1085,23 @@ namespace NinjaTrader.NinjaScript.AddOns
 			MinWidth = 520;
 			MinHeight = 420;
 			ResizeMode = ResizeMode.NoResize;
-			Background = new SolidColorBrush(Color.FromRgb(15, 20, 27));
-			Foreground = new SolidColorBrush(Color.FromRgb(234, 240, 246));
+			Background = OrcaRulebookChrome.Brush(OrcaRulebookChrome.Window);
+			Foreground = OrcaRulebookChrome.Brush(OrcaRulebookChrome.Text);
+			FontFamily = OrcaRulebookChrome.UiFont;
 
-			typeCombo = new ComboBox { MinHeight = 26, Margin = new Thickness(0, 3, 0, 10) };
-			nameBox = new TextBox { MinHeight = 26, Margin = new Thickness(0, 3, 0, 10) };
-			descriptionBox = new TextBox { MinHeight = 64, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 10) };
-			parametersBox = new TextBox { MinHeight = 26, Margin = new Thickness(0, 3, 0, 10) };
-			severityCombo = new ComboBox { MinHeight = 26, Margin = new Thickness(0, 3, 0, 10) };
-			enabledBox = new CheckBox { Content = "Enabled", IsChecked = true, Margin = new Thickness(0, 3, 0, 10), Foreground = Foreground };
+			typeCombo = new ComboBox();
+			nameBox = new TextBox();
+			descriptionBox = new TextBox { MinHeight = 64, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
+			parametersBox = new TextBox();
+			severityCombo = new ComboBox();
+			enabledBox = new CheckBox {
+				Content = "Enabled",
+				IsChecked = true,
+				Margin = new Thickness(0, 4, 0, 8),
+				Foreground = OrcaRulebookChrome.Brush(OrcaRulebookChrome.Text),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				FontSize = 12
+			};
 
 			foreach (OrcaDisciplineRuleTypeChoice choice in OrcaDisciplineRuleTypeChoice.CreateDefaults())
 				typeCombo.Items.Add(choice);
@@ -788,7 +1109,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				severityCombo.Items.Add(severity);
 			typeCombo.SelectionChanged += OnTypeSelectionChanged;
 
-			Grid root = new Grid { Margin = new Thickness(16) };
+			Grid root = new Grid { Margin = new Thickness(12) };
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -810,8 +1131,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 				HorizontalAlignment = HorizontalAlignment.Right,
 				VerticalAlignment = VerticalAlignment.Bottom
 			};
-			Button cancel = new Button { Content = "Cancel", MinWidth = 86, Height = 28, Margin = new Thickness(6, 0, 0, 0), IsCancel = true };
-			Button add = new Button { Content = "Add Rule", MinWidth = 92, Height = 28, Margin = new Thickness(6, 0, 0, 0), IsDefault = true };
+			Button cancel = OrcaRulebookChrome.CreateButton("Cancel", OrcaRulebookButtonKind.Secondary);
+			cancel.IsCancel = true;
+			Button add = OrcaRulebookChrome.CreateButton("Add Rule", OrcaRulebookButtonKind.Primary);
+			add.Margin = new Thickness(0);
+			add.IsDefault = true;
 			add.Click += OnAddClicked;
 			buttons.Children.Add(cancel);
 			buttons.Children.Add(add);
@@ -840,13 +1164,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private static void AddLabeledControl(Grid root, int row, string label, Control control)
 		{
-			StackPanel stack = new StackPanel { Orientation = Orientation.Vertical };
+			StackPanel stack = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 8) };
 			stack.Children.Add(new TextBlock {
 				Text = label,
-				Foreground = new SolidColorBrush(Color.FromRgb(142, 160, 181)),
-				FontSize = 11
+				Foreground = OrcaRulebookChrome.Brush(OrcaRulebookChrome.Muted),
+				FontFamily = OrcaRulebookChrome.UiFont,
+				FontSize = 11,
+				Margin = new Thickness(0, 0, 0, 4)
 			});
-			stack.Children.Add(control);
+			control.Margin = new Thickness(0);
+			stack.Children.Add(OrcaRulebookChrome.WrapField(control));
 			Grid.SetRow(stack, row);
 			root.Children.Add(stack);
 		}
@@ -868,7 +1195,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (choice == null)
 				return;
 			if (string.IsNullOrWhiteSpace(nameBox.Text)) {
-				MessageBox.Show(this, "Give the rule a name first.", "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Warning);
+				MessageBox.Show(this, "Give the rule a name first.", "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Warning);
 				return;
 			}
 
@@ -901,7 +1228,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				string part = rawPart == null ? string.Empty : rawPart.Trim();
 				int equalsIndex = part.IndexOf('=');
 				if (equalsIndex <= 0 || equalsIndex >= part.Length - 1) {
-					MessageBox.Show(this, "Use Key=Value pairs for parameters, separated by semicolons.", "Orca Discipline Guard", MessageBoxButton.OK, MessageBoxImage.Warning);
+					MessageBox.Show(this, "Use Key=Value pairs for parameters, separated by semicolons.", "Orca Rulebook", MessageBoxButton.OK, MessageBoxImage.Warning);
 					return null;
 				}
 				string key = part.Substring(0, equalsIndex).Trim();
@@ -937,14 +1264,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public static IEnumerable<OrcaDisciplineRuleTypeChoice> CreateDefaults()
 		{
-			yield return Choice("TradeCooldown", "Automated - Trade cooldown", "Minimum 5 minutes between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5"));
-			yield return Choice("MaxPositionSize", "Automated - Max position size", "Max position size: 2 minis / 20 micros", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols));
-			yield return Choice("MaxLossPerTrade", "Automated - Max loss per trade", "Max loss per trade: $300", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300"));
-			yield return Choice("MaxSessionLoss", "Automated - Max session loss", "Max session loss: $600", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600"));
-			yield return Choice("MaxTradesPerSession", "Automated - Max trades per session", "Max trades per session: 5", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5"));
-			yield return Choice("MaxConsecutiveLosses", "Automated - Max consecutive losses", "Max consecutive losses: 2", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2"));
-			yield return Choice("AllowedTradingWindow", "Automated - Allowed trading window", "Allowed trading window: 09:30 to 11:30", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30"));
-			yield return Choice("MaxRuleViolations", "Automated - Max rule violations", "Max rule violations: 3", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3"));
+			yield return Choice("TradeCooldown", "Automated - Trade cooldown", "Minimum time between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5"));
+			yield return Choice("MaxPositionSize", "Automated - Max position size", "Max position size", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols));
+			yield return Choice("MaxLossPerTrade", "Automated - Max loss per trade", "Max loss per trade", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300"));
+			yield return Choice("MaxSessionLoss", "Automated - Max session loss", "Max session loss", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600"));
+			yield return Choice("MaxTradesPerSession", "Automated - Max trades per session", "Max trades per session", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5"));
+			yield return Choice("MaxConsecutiveLosses", "Automated - Max consecutive losses", "Max consecutive losses", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2"));
+			yield return Choice("AllowedTradingWindow", "Automated - Allowed trading window", "Allowed trading window", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30"));
+			yield return Choice("MaxRuleViolations", "Automated - Max rule violations", "Max rule violations", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3"));
 			yield return Choice("NoAddToLosingTrade", "Automated - No add to loser", "No adding to losing trades", "Flags scale-ins when the open trade is currently losing.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict());
 			yield return Choice("NoImmediateLossReversal", "Automated - No immediate loss reversal", "No immediate reversal after loss", "Flags opposite-direction trades started too soon after a losing trade.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5"));
 			yield return Choice("ManualChecklist", "Manual - Checklist item", "New manual checklist rule", "Manual rule that you mark Followed, Broken, or N/A during the session.", OrcaDisciplineRuleMode.Manual, OrcaDisciplineSeverity.Warning, Dict());
@@ -1187,6 +1514,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public string Grade { get { return engine.Session == null ? "-" : engine.Session.Grade; } }
 		public string ScoreText { get { return engine.Session == null ? "0" : engine.Session.Score.ToString("0", CultureInfo.InvariantCulture); } }
+		public string ScoreBreakdown { get { return engine.Session == null ? string.Empty : engine.Session.ScoreBreakdown; } }
+		public string EnabledWeightText { get { return engine.Session == null ? "Weight 0" : engine.Session.EnabledWeightText; } }
 		public string SessionPnlText { get { return engine.Session == null ? "$0" : engine.Session.SessionRealizedPnl.ToString("C0", CultureInfo.CurrentCulture); } }
 		public string TradeCountText { get { return engine.Session == null ? "0" : engine.Session.CompletedTradeCount.ToString(CultureInfo.InvariantCulture); } }
 		public string ViolationCountText { get { return engine.Session == null ? "0" : engine.Session.TotalViolations.ToString(CultureInfo.InvariantCulture); } }
@@ -1242,7 +1571,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				RaiseDashboard();
 				RaiseRuleCommandStates();
 			} catch (Exception ex) {
-				AlertText = "Orca Discipline Guard could not start: " + ex.Message;
+				AlertText = "Orca Rulebook could not start: " + ex.Message;
 			}
 		}
 
@@ -1303,7 +1632,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (engine.Session == null)
 					return;
 				string path = OrcaDisciplineStore.SaveSessionReport(engine.Session.CreateReport());
-				AlertText = "Session JSON saved: " + path;
+				AlertText = "Session JSON saved: " + path + SaveRulebookLedgerNote(engine.Session);
 			} catch (Exception ex) {
 				AlertText = "Session export failed: " + ex.Message;
 			}
@@ -1364,7 +1693,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (!CanDeleteSelectedRule())
 					return;
 				string ruleName = SelectedRule.Name;
-				MessageBoxResult result = MessageBox.Show("Delete rule '" + ruleName + "' from the current template draft?", "Orca Discipline Guard", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+				MessageBoxResult result = MessageBox.Show("Delete rule '" + ruleName + "' from the current template draft?", "Orca Rulebook", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 				if (result != MessageBoxResult.Yes)
 					return;
 				if (engine.Session.RemoveRule(SelectedRule)) {
@@ -1489,6 +1818,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Raise("MonitoringEventCountText");
 			Raise("Grade");
 			Raise("ScoreText");
+			Raise("ScoreBreakdown");
+			Raise("EnabledWeightText");
 			Raise("SessionPnlText");
 			Raise("TradeCountText");
 			Raise("ViolationCountText");
@@ -1496,6 +1827,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Raise("CurrentPositionSizeText");
 			Raise("ConsecutiveLossesText");
 			Raise("SessionSummary");
+		}
+
+		private static string SaveRulebookLedgerNote(OrcaDisciplineSession session)
+		{
+			try {
+				if (session == null || session.Ledger == null)
+					return string.Empty;
+				string ledgerPath = OrcaDisciplineStore.SaveRulebookLedger(session.Ledger);
+				return " Rulebook ledger: " + ledgerPath;
+			} catch (Exception ex) {
+				return " Rulebook ledger was not saved: " + ex.Message;
+			}
 		}
 
 		private string ResolveInitialTemplate(string savedTemplateName)
@@ -1518,7 +1861,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				return;
 			try {
 				string path = OrcaDisciplineStore.SaveSessionReport(engine.Session.CreateReport());
-				AlertText = "Archived active session before " + reason + ": " + path;
+				AlertText = "Archived active session before " + reason + ": " + path + SaveRulebookLedgerNote(engine.Session);
 			} catch (Exception ex) {
 				AlertText = "Could not archive active session before " + reason + ": " + ex.Message;
 			}
@@ -1600,7 +1943,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (action == null || disposed)
 				return;
 			if (!dispatcher.CheckAccess())
-				OrcaDisciplineDiagnostics.Write("Orca Discipline Guard window request marshaled to the runtime dispatcher.");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook window request marshaled to the runtime dispatcher.");
 			RunOnUi(action);
 		}
 
@@ -1800,6 +2143,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 	public sealed class OrcaDisciplineSession : OrcaDisciplineNotifyBase
 	{
 		private readonly OrcaRoundTripTracker tracker = new OrcaRoundTripTracker();
+		private readonly OrcaRulebookLedger ledger;
 		private readonly Dictionary<string, int> currentPositionsByInstrument = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 		private readonly HashSet<string> observedInstrumentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		private readonly OrcaDisciplineRuleTemplate template;
@@ -1822,6 +2166,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			this.template = template == null ? OrcaDisciplineRuleTemplate.CreatePropFirmDefault() : template.Clone();
 			TemplateName = this.template.Name;
 			this.instrumentFilter = string.IsNullOrWhiteSpace(instrumentFilter) ? OrcaDisciplineConstants.AllInstruments : instrumentFilter;
+			ledger = OrcaRulebookLedger.Open(AccountName, this.instrumentFilter);
 			Rules = new ObservableCollection<OrcaDisciplineRule>();
 			Violations = new ObservableCollection<OrcaDisciplineViolation>();
 			Status = OrcaDisciplineSessionStatus.NotStarted;
@@ -1833,6 +2178,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public string AccountName { get; private set; }
 		public string TemplateName { get; private set; }
+		public OrcaRulebookLedger Ledger { get { return ledger; } }
 		public ObservableCollection<OrcaDisciplineRule> Rules { get; private set; }
 		public ObservableCollection<OrcaDisciplineViolation> Violations { get; private set; }
 
@@ -1849,6 +2195,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 					value = OrcaDisciplineConstants.AllInstruments;
 				if (!Set(ref instrumentFilter, value, "InstrumentFilter"))
 					return;
+				if (ledger != null)
+					ledger.SetInstrumentScope(instrumentFilter);
 				currentPositionsByInstrument.Clear();
 				RefreshRulesCurrentValues();
 			}
@@ -1967,6 +2315,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			WinningTrades = 0;
 			LosingTrades = 0;
 			tracker.Reset();
+			if (ledger != null)
+				ledger.Begin(StartTime);
 			Violations.Clear();
 			currentPositionsByInstrument.Clear();
 			SyncOpenPositions(account, false);
@@ -1980,12 +2330,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (Status == OrcaDisciplineSessionStatus.Active)
 				Status = OrcaDisciplineSessionStatus.Paused;
+			if (ledger != null)
+				ledger.Pause();
 		}
 
 		public void Resume()
 		{
 			if (Status == OrcaDisciplineSessionStatus.Paused)
 				Status = OrcaDisciplineSessionStatus.Active;
+			if (ledger != null)
+				ledger.Resume();
 		}
 
 		public void End()
@@ -1994,6 +2348,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				return;
 			EndTime = DateTime.Now;
 			Status = OrcaDisciplineSessionStatus.Ended;
+			if (ledger != null)
+				ledger.End(EndTime);
 			RecalculateScore();
 			RaiseAll();
 		}
@@ -2013,19 +2369,29 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (execution.Instrument == null || !MatchesInstrumentFilter(execution.Instrument))
 				return;
 			ObserveInstrument(execution.Instrument);
-			OrcaTradeUpdate update = tracker.ProcessExecution(execution, e.Time);
-			if (update == null)
-				return;
-			if (update.NewTradeStarted != null)
-				ApplyNewTrade(update.NewTradeStarted);
-			if (update.IncreasedTrade != null)
-				ApplyTradeIncreased(update.IncreasedTrade);
-			foreach (OrcaRoundTripTrade trade in update.CompletedTrades)
-				ApplyCompletedTrade(trade);
-			SyncPositionFromTracker(update.InstrumentName, update.CurrentSignedPosition);
-			RefreshRulesCurrentValues();
-			RecalculateScore();
-			RaiseAll();
+			if (ledger != null)
+				ledger.BeginConsequenceWindow();
+			try {
+				OrcaRulebookIngestResult ingested = RecordLedgerExecution(e);
+				if (ingested == OrcaRulebookIngestResult.Duplicate || ingested == OrcaRulebookIngestResult.Conflict)
+					return;
+				OrcaTradeUpdate update = tracker.ProcessExecution(execution, e.Time);
+				if (update == null)
+					return;
+				if (update.NewTradeStarted != null)
+					ApplyNewTrade(update.NewTradeStarted);
+				if (update.IncreasedTrade != null)
+					ApplyTradeIncreased(update.IncreasedTrade);
+				foreach (OrcaRoundTripTrade trade in update.CompletedTrades)
+					ApplyCompletedTrade(trade);
+				SyncPositionFromTracker(update.InstrumentName, update.CurrentSignedPosition);
+				RefreshRulesCurrentValues();
+				RecalculateScore();
+				RaiseAll();
+			} finally {
+				if (ledger != null)
+					ledger.EndConsequenceWindow();
+			}
 		}
 
 		public void OnPositionUpdate(PositionEventArgs e)
@@ -2083,6 +2449,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				ValueObserved = observed ?? string.Empty,
 				LimitValue = limit ?? string.Empty
 			};
+			if (ledger != null)
+				violation.TradeId = ledger.LinkViolation(rule.Id, rule.Name, rule.Severity.ToString(), message, instrument ?? string.Empty, violation.Timestamp);
 			Violations.Insert(0, violation);
 			rule.RegisterViolation(violation);
 			foreach (OrcaDisciplineRule candidate in Rules) {
@@ -2151,8 +2519,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public string BuildSummary()
 		{
 			StringBuilder sb = new StringBuilder();
-			sb.AppendLine("Orca Discipline Guard Session");
+			sb.AppendLine("Orca Rulebook Session");
 			sb.AppendLine("Account: " + AccountName);
+			if (ledger != null)
+				sb.AppendLine("Ledger: " + ledger.EvidenceStatus + ". " + ledger.EvidenceReason);
 			sb.AppendLine("Template: " + TemplateName);
 			sb.AppendLine("Instrument Filter: " + InstrumentFilter);
 			sb.AppendLine("Status: " + StatusText);
@@ -2161,6 +2531,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (EndTime != DateTime.MinValue)
 				sb.AppendLine("End: " + EndTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
 			sb.AppendLine("Grade: " + Grade + " (" + Score.ToString("0", CultureInfo.InvariantCulture) + ")");
+			sb.AppendLine(ScoreBreakdown);
 			sb.AppendLine("Session P&L: " + SessionRealizedPnl.ToString("C2", CultureInfo.CurrentCulture));
 			sb.AppendLine("Completed Trades: " + CompletedTradeCount.ToString(CultureInfo.InvariantCulture));
 			sb.AppendLine("Wins / Losses: " + WinningTrades.ToString(CultureInfo.InvariantCulture) + " / " + LosingTrades.ToString(CultureInfo.InvariantCulture));
@@ -2209,16 +2580,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 				return;
 			if (string.Equals(rule.ManualAction, OrcaManualActionValues.Followed, StringComparison.OrdinalIgnoreCase)) {
 				rule.RegisterFollow();
+				RecordManualOpportunity(rule, "Followed");
 				rule.RefreshCurrentValue(this);
 				return;
 			}
 			if (string.Equals(rule.ManualAction, OrcaManualActionValues.Broken, StringComparison.OrdinalIgnoreCase) && !rule.HasManualBrokenViolation) {
 				rule.HasManualBrokenViolation = true;
 				AddViolation(rule, "Manual rule marked broken" + (string.IsNullOrWhiteSpace(rule.Notes) ? string.Empty : ": " + rule.Notes), string.Empty, "Broken", "Followed");
+				RecordManualOpportunity(rule, "Broken");
 				rule.RefreshCurrentValue(this);
 			}
 			if (string.Equals(rule.ManualAction, OrcaManualActionValues.NotApplicable, StringComparison.OrdinalIgnoreCase)) {
 				rule.Status = OrcaDisciplineRuleStatus.Disabled;
+				RecordManualOpportunity(rule, "NotApplicable");
 				rule.RefreshCurrentValue(this);
 			}
 		}
@@ -2248,6 +2622,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			}
 			foreach (OrcaDisciplineRule rule in Rules)
 				rule.OnTradeCompleted(this, trade);
+			RecordCompletedCycleOpportunities(trade);
 		}
 
 		private void SyncOpenPositions(Account account, bool notifyRules)
@@ -2267,8 +2642,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 						signed = 0;
 					if (signed != 0)
 						currentPositionsByInstrument[InstrumentName(position.Instrument)] = signed;
-					if (Status == OrcaDisciplineSessionStatus.Active)
+					if (Status == OrcaDisciplineSessionStatus.Active) {
 						tracker.SeedOpenPosition(position);
+						if (ledger != null)
+							ledger.SeedOpenPosition(InstrumentName(position.Instrument), signed, position.AveragePrice, DateTime.Now);
+					}
 				}
 			} catch { }
 			if (notifyRules) {
@@ -2301,11 +2679,22 @@ namespace NinjaTrader.NinjaScript.AddOns
 				rule.RefreshCurrentValue(this);
 		}
 
+		public string ScoreBreakdown
+		{
+			get { return OrcaDisciplineScoring.Breakdown(Rules); }
+		}
+
+		public string EnabledWeightText
+		{
+			get { return "Weight " + OrcaDisciplineScoring.EnabledWeight(Rules).ToString(CultureInfo.InvariantCulture); }
+		}
+
 		private void RecalculateScore()
 		{
-			int penalty = Violations.Sum(v => OrcaDisciplineScoring.Penalty(v.Severity));
-			Score = 100 - penalty;
+			Score = OrcaDisciplineScoring.WeightedScore(Rules);
 			Grade = OrcaDisciplineScoring.Grade(Score);
+			Raise("ScoreBreakdown");
+			Raise("EnabledWeightText");
 			Raise("TotalViolations");
 			Raise("CriticalViolations");
 			Raise("TotalRulesFollowed");
@@ -2331,6 +2720,84 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (string.IsNullOrWhiteSpace(InstrumentFilter) || string.Equals(InstrumentFilter, OrcaDisciplineConstants.AllInstruments, StringComparison.OrdinalIgnoreCase))
 				return true;
 			return string.Equals(InstrumentName(instrument), InstrumentFilter, StringComparison.OrdinalIgnoreCase);
+		}
+
+		private OrcaRulebookIngestResult RecordLedgerExecution(ExecutionEventArgs e)
+		{
+			if (ledger == null || e == null || e.Execution == null)
+				return OrcaRulebookIngestResult.Ignored;
+			try {
+				Execution execution = e.Execution;
+				string instrument = InstrumentName(execution.Instrument);
+				int signed = SignedExecutionQuantity(execution);
+				bool historical = e.IsSod || execution.Order == null;
+				if (!historical && signed == 0) {
+					ledger.MarkGap(instrument, "Execution quantity was not a buy or sell");
+					return OrcaRulebookIngestResult.Ignored;
+				}
+				int? positionAfter = null;
+				if (!historical) {
+					try { positionAfter = execution.Position; } catch { positionAfter = null; }
+				}
+				return ledger.Ingest(new OrcaRulebookFill {
+					Account = AccountName,
+					Instrument = instrument,
+					ExecutionId = execution.ExecutionId,
+					SignedQuantity = signed,
+					Price = execution.Price,
+					PointValue = ExecutionPointValue(execution),
+					Time = e.Time,
+					PositionAfter = positionAfter,
+					Historical = historical
+				});
+			} catch (Exception ex) {
+				ledger.MarkGap(string.Empty, "Execution could not be read");
+				OrcaDisciplineDiagnostics.Write("Orca Rulebook ledger skipped an execution: " + ex.Message);
+				return OrcaRulebookIngestResult.Ignored;
+			}
+		}
+
+		private static int SignedExecutionQuantity(Execution execution)
+		{
+			if (execution == null || execution.Order == null || execution.Quantity <= 0)
+				return 0;
+			switch (execution.Order.OrderAction) {
+				case OrderAction.Buy:
+				case OrderAction.BuyToCover:
+					return Math.Abs(execution.Quantity);
+				case OrderAction.Sell:
+				case OrderAction.SellShort:
+					return -Math.Abs(execution.Quantity);
+				default:
+					return 0;
+			}
+		}
+
+		private static double ExecutionPointValue(Execution execution)
+		{
+			try {
+				if (execution != null && execution.Instrument != null && execution.Instrument.MasterInstrument != null)
+					return execution.Instrument.MasterInstrument.PointValue;
+			} catch { }
+			return 0;
+		}
+
+		private void RecordManualOpportunity(OrcaDisciplineRule rule, string result)
+		{
+			if (ledger == null || rule == null)
+				return;
+			ledger.RecordOpportunity(rule.Id, rule.Name, "Manual", result, string.Empty, "Manual checklist is not a trade-opportunity denominator.", false);
+		}
+
+		private void RecordCompletedCycleOpportunities(OrcaRoundTripTrade trade)
+		{
+			if (ledger == null || trade == null)
+				return;
+			foreach (OrcaDisciplineRule rule in Rules) {
+				if (rule == null || !rule.Enabled || rule.Mode == OrcaDisciplineRuleMode.Manual)
+					continue;
+				ledger.RecordOpportunity(rule.Id, rule.Name, "CompletedCycle", "PendingDefinition", trade.InstrumentName, "Denominator is not approved; this is not a grade.", true);
+			}
 		}
 
 		private void ObserveInstrument(Instrument instrument)
@@ -2364,6 +2831,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 	public abstract class OrcaDisciplineRule : OrcaDisciplineNotifyBase
 	{
+		private string name;
+		private int weight;
 		private bool enabled;
 		private OrcaDisciplineRuleStatus status;
 		private int violationCount;
@@ -2380,11 +2849,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 				config = new OrcaDisciplineRuleConfig();
 			Id = config.Id;
 			Type = config.Type;
-			Name = config.Name;
+			name = config.Name ?? string.Empty;
 			Description = config.Description;
 			Enabled = config.Enabled;
 			Mode = config.Mode;
 			Severity = config.Severity;
+			weight = config.Weight >= 1 ? config.Weight : OrcaDisciplineScoring.StarterWeight(Id, Type, name, Mode);
 			Parameters = config.Parameters == null ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : new Dictionary<string, string>(config.Parameters, StringComparer.OrdinalIgnoreCase);
 			Status = Enabled ? OrcaDisciplineRuleStatus.NotStarted : OrcaDisciplineRuleStatus.Disabled;
 			ManualAction = string.Empty;
@@ -2393,8 +2863,58 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public string Id { get; private set; }
 		public string Type { get; private set; }
-		public string Name { get; private set; }
 		public string Description { get; private set; }
+
+		public string Name
+		{
+			get { return name; }
+			set {
+				if (!IsManual) {
+					Raise("Name");
+					return;
+				}
+				string next = value == null ? string.Empty : value.Trim();
+				if (next.Length == 0) {
+					Raise("Name");
+					return;
+				}
+				string previous = name;
+				if (!Set(ref name, next, "Name"))
+					return;
+				if (string.Equals(Description, previous, StringComparison.Ordinal))
+					Description = next;
+			}
+		}
+		public int Weight
+		{
+			get { return weight; }
+			set {
+				int next = value < 1 ? 1 : value;
+				if (!Set(ref weight, next, "Weight"))
+					return;
+				Raise("WeightText");
+			}
+		}
+
+		public string WeightText
+		{
+			get { return weight.ToString(CultureInfo.InvariantCulture); }
+			set {
+				int parsed;
+				string text = value == null ? string.Empty : value.Trim();
+				if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) || parsed < 1) {
+					Raise("WeightText");
+					return;
+				}
+				Weight = parsed;
+			}
+		}
+
+		public bool IsBroken
+		{
+			get { return Enabled && (Status == OrcaDisciplineRuleStatus.Violated || ViolationCount > 0); }
+		}
+
 		public OrcaDisciplineRuleMode Mode { get; private set; }
 		public OrcaDisciplineSeverity Severity { get; private set; }
 		public Dictionary<string, string> Parameters { get; private set; }
@@ -2474,6 +2994,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 			get { return Mode == OrcaDisciplineRuleMode.Manual || Mode == OrcaDisciplineRuleMode.Hybrid; }
 		}
 
+		public bool CanRename
+		{
+			get { return IsManual; }
+		}
+
 		public virtual string LimitText
 		{
 			get { return string.Empty; }
@@ -2545,6 +3070,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Enabled = Enabled,
 				Mode = Mode,
 				Severity = Severity,
+				Weight = Weight,
 				Parameters = Parameters == null ? new Dictionary<string, string>() : new Dictionary<string, string>(Parameters, StringComparer.OrdinalIgnoreCase)
 			};
 		}
@@ -3417,14 +3943,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public static OrcaDisciplineRuleTemplate CreatePropFirmDefault()
 		{
 			OrcaDisciplineRuleTemplate template = new OrcaDisciplineRuleTemplate { Name = "Prop Firm Discipline" };
-			template.Rules.Add(Config("cooldown", "TradeCooldown", "Minimum 5 minutes between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5")));
-			template.Rules.Add(Config("max-position", "MaxPositionSize", "Max position size: 2 minis / 20 micros", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols)));
-			template.Rules.Add(Config("max-trade-loss", "MaxLossPerTrade", "Max loss per trade: $300", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300")));
-			template.Rules.Add(Config("max-session-loss", "MaxSessionLoss", "Max session loss: $600", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600")));
-			template.Rules.Add(Config("max-trades", "MaxTradesPerSession", "Max trades per session: 5", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5")));
-			template.Rules.Add(Config("max-loss-streak", "MaxConsecutiveLosses", "Max consecutive losses: 2", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2")));
-			template.Rules.Add(Config("window", "AllowedTradingWindow", "Allowed trading window: 09:30 to 11:30", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30")));
-			template.Rules.Add(Config("max-violations", "MaxRuleViolations", "Max rule violations: 3", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3")));
+			template.Rules.Add(Config("cooldown", "TradeCooldown", "Minimum time between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5")));
+			template.Rules.Add(Config("max-position", "MaxPositionSize", "Max position size", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols)));
+			template.Rules.Add(Config("max-trade-loss", "MaxLossPerTrade", "Max loss per trade", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300")));
+			template.Rules.Add(Config("max-session-loss", "MaxSessionLoss", "Max session loss", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600")));
+			template.Rules.Add(Config("max-trades", "MaxTradesPerSession", "Max trades per session", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5")));
+			template.Rules.Add(Config("max-loss-streak", "MaxConsecutiveLosses", "Max consecutive losses", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2")));
+			template.Rules.Add(Config("window", "AllowedTradingWindow", "Allowed trading window", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30")));
+			template.Rules.Add(Config("max-violations", "MaxRuleViolations", "Max rule violations", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3")));
 			template.Rules.Add(Config("no-add-loser", "NoAddToLosingTrade", "No adding to losing trades", "Flags scale-ins when the open trade is currently losing.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict()));
 			template.Rules.Add(Config("loss-reversal", "NoImmediateLossReversal", "No immediate reversal after loss", "Flags opposite-direction trades started too soon after a losing trade.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5")));
 			template.Rules.Add(Manual("manual-setup", "Setup was valid."));
@@ -3474,6 +4000,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Enabled = true,
 				Mode = mode,
 				Severity = severity,
+				Weight = OrcaDisciplineScoring.StarterWeight(id, type, name, mode),
 				Parameters = parameters
 			};
 		}
@@ -3515,6 +4042,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public bool Enabled { get; set; }
 		public OrcaDisciplineRuleMode Mode { get; set; }
 		public OrcaDisciplineSeverity Severity { get; set; }
+		public int Weight { get; set; }
 		public Dictionary<string, string> Parameters { get; set; }
 
 		public OrcaDisciplineRuleConfig Clone()
@@ -3527,6 +4055,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Enabled = Enabled,
 				Mode = Mode,
 				Severity = Severity,
+				Weight = Weight,
 				Parameters = Parameters == null ? new Dictionary<string, string>() : new Dictionary<string, string>(Parameters, StringComparer.OrdinalIgnoreCase)
 			};
 		}
@@ -3597,6 +4126,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 			}
 		}
 
+		public static string SaveRulebookLedger(OrcaRulebookLedger ledger)
+		{
+			lock (Sync) {
+				EnsureSessions();
+				return OrcaRulebookLedger.WriteAtomic(ledger, SessionsDirectory);
+			}
+		}
+
 		public static string SaveSessionReport(OrcaDisciplineSessionReport report)
 		{
 			lock (Sync) {
@@ -3631,7 +4168,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (loaded == null)
 				return false;
-			bool changed = false;
+			bool changed = StripLegacyAutomatedNames(loaded);
+			if (AssignMissingWeights(loaded))
+				changed = true;
 			foreach (OrcaDisciplineRuleTemplate defaultTemplate in OrcaDisciplineRuleTemplate.CreateDefaults()) {
 				OrcaDisciplineRuleTemplate existing = loaded.FirstOrDefault(t => string.Equals(t.Name, defaultTemplate.Name, StringComparison.OrdinalIgnoreCase));
 				if (existing == null) {
@@ -3649,6 +4188,60 @@ namespace NinjaTrader.NinjaScript.AddOns
 					} else if (MergeMissingParameters(existingRule, defaultRule)) {
 						changed = true;
 					}
+				}
+			}
+			return changed;
+		}
+
+		private static readonly Dictionary<string, string> LegacyAutomatedNames = new Dictionary<string, string>(StringComparer.Ordinal) {
+			{ "Minimum 5 minutes between new trades", "Minimum time between new trades" },
+			{ "Max position size: 2 minis / 20 micros", "Max position size" },
+			{ "Max loss per trade: $300", "Max loss per trade" },
+			{ "Max session loss: $600", "Max session loss" },
+			{ "Max trades per session: 5", "Max trades per session" },
+			{ "Max consecutive losses: 2", "Max consecutive losses" },
+			{ "Allowed trading window: 09:30 to 11:30", "Allowed trading window" },
+			{ "Max rule violations: 3", "Max rule violations" }
+		};
+
+		private static bool StripLegacyAutomatedNames(List<OrcaDisciplineRuleTemplate> loaded)
+		{
+			if (loaded == null)
+				return false;
+			bool changed = false;
+			foreach (OrcaDisciplineRuleTemplate template in loaded) {
+				if (template == null || template.Rules == null)
+					continue;
+				foreach (OrcaDisciplineRuleConfig rule in template.Rules) {
+					if (rule == null || rule.Mode == OrcaDisciplineRuleMode.Manual)
+						continue;
+					if (string.Equals(rule.Type, "ManualChecklist", StringComparison.OrdinalIgnoreCase))
+						continue;
+					string next;
+					if (rule.Name == null || !LegacyAutomatedNames.TryGetValue(rule.Name, out next))
+						continue;
+					if (string.Equals(rule.Description, rule.Name, StringComparison.Ordinal))
+						rule.Description = next;
+					rule.Name = next;
+					changed = true;
+				}
+			}
+			return changed;
+		}
+
+		private static bool AssignMissingWeights(List<OrcaDisciplineRuleTemplate> loaded)
+		{
+			if (loaded == null)
+				return false;
+			bool changed = false;
+			foreach (OrcaDisciplineRuleTemplate template in loaded) {
+				if (template == null || template.Rules == null)
+					continue;
+				foreach (OrcaDisciplineRuleConfig rule in template.Rules) {
+					if (rule == null || rule.Weight >= 1)
+						continue;
+					rule.Weight = OrcaDisciplineScoring.StarterWeight(rule.Id, rule.Type, rule.Name, rule.Mode);
+					changed = true;
 				}
 			}
 			return changed;
@@ -3812,6 +4405,115 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 	public static class OrcaDisciplineScoring
 	{
+		public static int StarterWeight(string id, string type, string name, OrcaDisciplineRuleMode mode)
+		{
+			string idKey = id == null ? string.Empty : id.Trim();
+			string typeKey = type == null ? string.Empty : type.Trim();
+			string nameKey = name == null ? string.Empty : name.Trim();
+			if (IsId(idKey, "max-session-loss") || IsName(nameKey, "Max session loss") || IsType(typeKey, "MaxSessionLoss"))
+				return 12;
+			if (IsId(idKey, "max-trade-loss") || IsName(nameKey, "Max loss per trade") || IsType(typeKey, "MaxLossPerTrade"))
+				return 12;
+			if (IsId(idKey, "no-add-loser") || IsName(nameKey, "No adding to losing trades") || IsType(typeKey, "NoAddToLosingTrade"))
+				return 12;
+			if (IsId(idKey, "max-position") || IsName(nameKey, "Max position size") || IsType(typeKey, "MaxPositionSize"))
+				return 8;
+			if (IsId(idKey, "max-loss-streak") || IsName(nameKey, "Max consecutive losses") || IsType(typeKey, "MaxConsecutiveLosses"))
+				return 8;
+			if (nameKey.IndexOf("revenge", StringComparison.OrdinalIgnoreCase) >= 0)
+				return 8;
+			if (nameKey.IndexOf("major rule", StringComparison.OrdinalIgnoreCase) >= 0)
+				return 8;
+			if (IsId(idKey, "window") || IsName(nameKey, "Allowed trading window") || IsType(typeKey, "AllowedTradingWindow"))
+				return 5;
+			if (IsId(idKey, "max-trades") || IsName(nameKey, "Max trades per session") || IsType(typeKey, "MaxTradesPerSession"))
+				return 5;
+			if (IsId(idKey, "max-violations") || IsName(nameKey, "Max rule violations") || IsType(typeKey, "MaxRuleViolations"))
+				return 5;
+			if (IsId(idKey, "cooldown") || IsName(nameKey, "Minimum time between new trades") || IsType(typeKey, "TradeCooldown"))
+				return 4;
+			if (IsId(idKey, "loss-reversal") || IsName(nameKey, "No immediate reversal after loss") || IsType(typeKey, "NoImmediateLossReversal"))
+				return 4;
+			if (mode == OrcaDisciplineRuleMode.Manual || IsType(typeKey, "ManualChecklist"))
+				return 3;
+			return 5;
+		}
+
+		public static int EnabledWeight(IEnumerable<OrcaDisciplineRule> rules)
+		{
+			int total = 0;
+			if (rules == null)
+				return 0;
+			foreach (OrcaDisciplineRule rule in rules) {
+				if (rule == null || !rule.Enabled || rule.Weight < 1)
+					continue;
+				total += rule.Weight;
+			}
+			return total;
+		}
+
+		public static int WeightedScore(IEnumerable<OrcaDisciplineRule> rules)
+		{
+			int keptWeight = 0;
+			if (rules != null) {
+				foreach (OrcaDisciplineRule rule in rules) {
+					if (rule == null || !rule.Enabled || rule.Weight < 1 || rule.IsBroken)
+						continue;
+					keptWeight += rule.Weight;
+				}
+			}
+			return ShareOfHundred(keptWeight, EnabledWeight(rules));
+		}
+
+		public static string Breakdown(IEnumerable<OrcaDisciplineRule> rules)
+		{
+			int enabledWeight = EnabledWeight(rules);
+			List<OrcaDisciplineRule> broken = new List<OrcaDisciplineRule>();
+			if (rules != null) {
+				foreach (OrcaDisciplineRule rule in rules) {
+					if (rule == null || !rule.Enabled || rule.Weight < 1 || !rule.IsBroken)
+						continue;
+					broken.Add(rule);
+				}
+			}
+			if (enabledWeight <= 0)
+				return "Why this score: no rules are enabled.";
+			if (broken.Count == 0)
+				return "Why this score: every enabled rule held.";
+			StringBuilder text = new StringBuilder("Why this score:");
+			foreach (OrcaDisciplineRule rule in broken) {
+				int cost = ShareOfHundred(rule.Weight, enabledWeight);
+				text.Append(" ");
+				text.Append(string.IsNullOrWhiteSpace(rule.Name) ? rule.Id : rule.Name);
+				text.Append(" cost ");
+				text.Append(cost.ToString(CultureInfo.InvariantCulture));
+				text.Append(".");
+			}
+			return text.ToString();
+		}
+
+		public static int ShareOfHundred(int weight, int enabledWeight)
+		{
+			if (enabledWeight <= 0)
+				return 100;
+			return (int)Math.Round(100.0 * weight / enabledWeight, MidpointRounding.AwayFromZero);
+		}
+
+		private static bool IsId(string id, string expected)
+		{
+			return string.Equals(id, expected, StringComparison.OrdinalIgnoreCase);
+		}
+
+		private static bool IsName(string name, string expected)
+		{
+			return string.Equals(name, expected, StringComparison.OrdinalIgnoreCase);
+		}
+
+		private static bool IsType(string type, string expected)
+		{
+			return string.Equals(type, expected, StringComparison.OrdinalIgnoreCase);
+		}
+
 		public static int Penalty(OrcaDisciplineSeverity severity)
 		{
 			switch (severity) {
@@ -3931,13 +4633,29 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
 		{
 			string state = value as string ?? string.Empty;
-			switch (state) {
-				case "ARMED": return Brushes.MediumSeaGreen;
-				case "PAUSED": return Brushes.Goldenrod;
-				case "ENDED": return Brushes.CornflowerBlue;
-				case "READY": return Brushes.LightSlateGray;
-				default: return Brushes.IndianRed;
-			}
+			bool border = string.Equals(parameter as string, "border", StringComparison.OrdinalIgnoreCase);
+			if (border)
+				return OrcaRulebookChrome.Brush(state == "ARMED" ? OrcaRulebookChrome.Accent : OrcaRulebookChrome.Hairline);
+			if (state == "ARMED")
+				return OrcaRulebookChrome.Brush(OrcaRulebookChrome.Positive);
+			if (state == "PAUSED" || state == "ENDED" || state == "READY")
+				return OrcaRulebookChrome.Brush(OrcaRulebookChrome.Label);
+			return OrcaRulebookChrome.Brush(OrcaRulebookChrome.AlertText);
+		}
+
+		public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+		{
+			return Binding.DoNothing;
+		}
+	}
+
+	public sealed class OrcaRulebookGradeBrushConverter : IValueConverter
+	{
+		public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+		{
+			string grade = value as string ?? string.Empty;
+			bool positive = grade == "A" || grade == "B";
+			return OrcaRulebookChrome.Brush(positive ? OrcaRulebookChrome.Positive : OrcaRulebookChrome.Text);
 		}
 
 		public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

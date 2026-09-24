@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <RootNamespace>OrcaRulebook.Ledger.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <Compile Include="..\..\Orca Trades\Working_Suite\AddOns\OrcaTradeIdentity.cs" Link="OrcaTradeIdentity.cs" />
+    <Compile Include="..\..\Orca Trades\Working_Suite\AddOns\OrcaRulebookLedger.cs" Link="OrcaRulebookLedger.cs" />
+  </ItemGroup>
+</Project>
