@@ -1240,14 +1240,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public static IEnumerable<OrcaDisciplineRuleTypeChoice> CreateDefaults()
 		{
-			yield return Choice("TradeCooldown", "Automated - Trade cooldown", "Minimum 5 minutes between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5"));
-			yield return Choice("MaxPositionSize", "Automated - Max position size", "Max position size: 2 minis / 20 micros", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols));
-			yield return Choice("MaxLossPerTrade", "Automated - Max loss per trade", "Max loss per trade: $300", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300"));
-			yield return Choice("MaxSessionLoss", "Automated - Max session loss", "Max session loss: $600", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600"));
-			yield return Choice("MaxTradesPerSession", "Automated - Max trades per session", "Max trades per session: 5", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5"));
-			yield return Choice("MaxConsecutiveLosses", "Automated - Max consecutive losses", "Max consecutive losses: 2", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2"));
-			yield return Choice("AllowedTradingWindow", "Automated - Allowed trading window", "Allowed trading window: 09:30 to 11:30", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30"));
-			yield return Choice("MaxRuleViolations", "Automated - Max rule violations", "Max rule violations: 3", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3"));
+			yield return Choice("TradeCooldown", "Automated - Trade cooldown", "Minimum time between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5"));
+			yield return Choice("MaxPositionSize", "Automated - Max position size", "Max position size", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols));
+			yield return Choice("MaxLossPerTrade", "Automated - Max loss per trade", "Max loss per trade", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300"));
+			yield return Choice("MaxSessionLoss", "Automated - Max session loss", "Max session loss", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600"));
+			yield return Choice("MaxTradesPerSession", "Automated - Max trades per session", "Max trades per session", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5"));
+			yield return Choice("MaxConsecutiveLosses", "Automated - Max consecutive losses", "Max consecutive losses", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2"));
+			yield return Choice("AllowedTradingWindow", "Automated - Allowed trading window", "Allowed trading window", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30"));
+			yield return Choice("MaxRuleViolations", "Automated - Max rule violations", "Max rule violations", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3"));
 			yield return Choice("NoAddToLosingTrade", "Automated - No add to loser", "No adding to losing trades", "Flags scale-ins when the open trade is currently losing.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict());
 			yield return Choice("NoImmediateLossReversal", "Automated - No immediate loss reversal", "No immediate reversal after loss", "Flags opposite-direction trades started too soon after a losing trade.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5"));
 			yield return Choice("ManualChecklist", "Manual - Checklist item", "New manual checklist rule", "Manual rule that you mark Followed, Broken, or N/A during the session.", OrcaDisciplineRuleMode.Manual, OrcaDisciplineSeverity.Warning, Dict());
@@ -3870,14 +3870,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public static OrcaDisciplineRuleTemplate CreatePropFirmDefault()
 		{
 			OrcaDisciplineRuleTemplate template = new OrcaDisciplineRuleTemplate { Name = "Prop Firm Discipline" };
-			template.Rules.Add(Config("cooldown", "TradeCooldown", "Minimum 5 minutes between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5")));
-			template.Rules.Add(Config("max-position", "MaxPositionSize", "Max position size: 2 minis / 20 micros", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols)));
-			template.Rules.Add(Config("max-trade-loss", "MaxLossPerTrade", "Max loss per trade: $300", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300")));
-			template.Rules.Add(Config("max-session-loss", "MaxSessionLoss", "Max session loss: $600", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600")));
-			template.Rules.Add(Config("max-trades", "MaxTradesPerSession", "Max trades per session: 5", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5")));
-			template.Rules.Add(Config("max-loss-streak", "MaxConsecutiveLosses", "Max consecutive losses: 2", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2")));
-			template.Rules.Add(Config("window", "AllowedTradingWindow", "Allowed trading window: 09:30 to 11:30", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30")));
-			template.Rules.Add(Config("max-violations", "MaxRuleViolations", "Max rule violations: 3", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3")));
+			template.Rules.Add(Config("cooldown", "TradeCooldown", "Minimum time between new trades", "Minimum time between fresh flat-to-position trades.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5")));
+			template.Rules.Add(Config("max-position", "MaxPositionSize", "Max position size", "Flags any instrument whose account position exceeds the mini-equivalent contract limit.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxContracts", "2", "MicroMultiplier", OrcaDisciplineConstants.DefaultMicroMultiplier, "MicroSymbols", OrcaDisciplineConstants.DefaultMicroSymbols)));
+			template.Rules.Add(Config("max-trade-loss", "MaxLossPerTrade", "Max loss per trade", "Uses gross round-trip realized P&L after the trade closes.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLoss", "300")));
+			template.Rules.Add(Config("max-session-loss", "MaxSessionLoss", "Max session loss", "Uses selected account realized P&L from session start.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxLoss", "600")));
+			template.Rules.Add(Config("max-trades", "MaxTradesPerSession", "Max trades per session", "Counts completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxTrades", "5")));
+			template.Rules.Add(Config("max-loss-streak", "MaxConsecutiveLosses", "Max consecutive losses", "Flags losing streaks after completed round trips.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MaxLosses", "2")));
+			template.Rules.Add(Config("window", "AllowedTradingWindow", "Allowed trading window", "Flags fresh trades outside the configured local time window.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Warning, Dict("Start", "09:30", "End", "11:30")));
+			template.Rules.Add(Config("max-violations", "MaxRuleViolations", "Max rule violations", "Flags when the session breaks too many rules.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Critical, Dict("MaxViolations", "3")));
 			template.Rules.Add(Config("no-add-loser", "NoAddToLosingTrade", "No adding to losing trades", "Flags scale-ins when the open trade is currently losing.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict()));
 			template.Rules.Add(Config("loss-reversal", "NoImmediateLossReversal", "No immediate reversal after loss", "Flags opposite-direction trades started too soon after a losing trade.", OrcaDisciplineRuleMode.Automated, OrcaDisciplineSeverity.Major, Dict("MinimumMinutes", "5")));
 			template.Rules.Add(Manual("manual-setup", "Setup was valid."));
@@ -4092,7 +4092,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 		{
 			if (loaded == null)
 				return false;
-			bool changed = false;
+			bool changed = StripLegacyAutomatedNames(loaded);
 			foreach (OrcaDisciplineRuleTemplate defaultTemplate in OrcaDisciplineRuleTemplate.CreateDefaults()) {
 				OrcaDisciplineRuleTemplate existing = loaded.FirstOrDefault(t => string.Equals(t.Name, defaultTemplate.Name, StringComparison.OrdinalIgnoreCase));
 				if (existing == null) {
@@ -4110,6 +4110,42 @@ namespace NinjaTrader.NinjaScript.AddOns
 					} else if (MergeMissingParameters(existingRule, defaultRule)) {
 						changed = true;
 					}
+				}
+			}
+			return changed;
+		}
+
+		private static readonly Dictionary<string, string> LegacyAutomatedNames = new Dictionary<string, string>(StringComparer.Ordinal) {
+			{ "Minimum 5 minutes between new trades", "Minimum time between new trades" },
+			{ "Max position size: 2 minis / 20 micros", "Max position size" },
+			{ "Max loss per trade: $300", "Max loss per trade" },
+			{ "Max session loss: $600", "Max session loss" },
+			{ "Max trades per session: 5", "Max trades per session" },
+			{ "Max consecutive losses: 2", "Max consecutive losses" },
+			{ "Allowed trading window: 09:30 to 11:30", "Allowed trading window" },
+			{ "Max rule violations: 3", "Max rule violations" }
+		};
+
+		private static bool StripLegacyAutomatedNames(List<OrcaDisciplineRuleTemplate> loaded)
+		{
+			if (loaded == null)
+				return false;
+			bool changed = false;
+			foreach (OrcaDisciplineRuleTemplate template in loaded) {
+				if (template == null || template.Rules == null)
+					continue;
+				foreach (OrcaDisciplineRuleConfig rule in template.Rules) {
+					if (rule == null || rule.Mode == OrcaDisciplineRuleMode.Manual)
+						continue;
+					if (string.Equals(rule.Type, "ManualChecklist", StringComparison.OrdinalIgnoreCase))
+						continue;
+					string next;
+					if (rule.Name == null || !LegacyAutomatedNames.TryGetValue(rule.Name, out next))
+						continue;
+					if (string.Equals(rule.Description, rule.Name, StringComparison.Ordinal))
+						rule.Description = next;
+					rule.Name = next;
+					changed = true;
 				}
 			}
 			return changed;
