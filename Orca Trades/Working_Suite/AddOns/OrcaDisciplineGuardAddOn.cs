@@ -861,19 +861,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private DataGridTextColumn BuildRuleNameColumn()
 		{
-			Style cellStyle = new Style(typeof(DataGridCell), BuildCellStyle());
-			DataTrigger locked = new DataTrigger();
-			locked.Binding = new Binding("CanRename");
-			locked.Value = false;
-			locked.Setters.Add(new Setter(DataGridCell.IsReadOnlyProperty, true));
-			cellStyle.Triggers.Add(locked);
 			return new DataGridTextColumn {
 				Header = "Rule Name",
 				Binding = new Binding("Name"),
 				Width = new DataGridLength(190),
 				ElementStyle = BuildCellTextStyle(),
-				EditingElementStyle = BuildTextBoxStyle(),
-				CellStyle = cellStyle
+				EditingElementStyle = BuildTextBoxStyle()
 			};
 		}
 
