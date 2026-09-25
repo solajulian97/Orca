@@ -104,6 +104,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private const float OutsideProfileGapPx = 6f;
 		private const float StatisticsOutsideGapPx = 6f;
 		private const float TrackGapPx = 3f;
+		private const float AnchorHandleRadiusPx = 7f;
+		private const float AnchorHandleSelectedRadiusPx = 9f;
+		private const double AnchorHandleHitRadiusPx = 14.0;
 
 		private enum ResizeMode
 		{
@@ -112,7 +115,10 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			TopRight,
 			BottomLeft,
 			BottomRight,
-			MoveAll
+			MoveAll,
+			MoveStart,
+			MoveEnd,
+			MoveStatistics
 		}
 
 		private struct ProfileTrack
@@ -143,6 +149,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private long statisticsFinishDelta;
 		private bool statisticsHasRealDelta;
 		private bool statisticsFinishKnown;
+		private bool statisticsVolumeIsEstimate;
+		private Rect statisticsHitRect;
 		private double statisticsDeltaPercent;
 		private double statisticsPointRange;
 		private TimeSpan statisticsDuration;
@@ -208,6 +216,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private SharpDX.Direct2D1.SolidColorBrush statisticsTextBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush statisticsBackgroundBrushDx;
 		private SharpDX.Direct2D1.SolidColorBrush trendLineBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush anchorHandleFillBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush anchorHandleFillSelectedBrushDx;
+		private SharpDX.Direct2D1.SolidColorBrush anchorHandleEdgeBrushDx;
 		private StrokeStyle vaLineStrokeDx;
 		private StrokeStyle trendLineStrokeDx;
 		private SharpDX.Direct2D1.SolidColorBrush[] upGradientBrushes;
@@ -321,6 +332,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				return IsLocked ? Cursors.No : Cursors.SizeAll;
 			if (DrawingState == DrawingState.Editing && IsLocked)
 				return Cursors.No;
+			if (resizeMode == ResizeMode.None && HitStatistics(point))
+				return IsLocked ? Cursors.Arrow : Cursors.Hand;
 
 			ResizeMode mode = resizeMode != ResizeMode.None ? resizeMode : GetResizeModeForPoint(point, chartControl, chartScale, DrawingState == DrawingState.Normal);
 			switch (mode)
@@ -333,6 +346,10 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 					return IsLocked ? Cursors.Arrow : Cursors.SizeNESW;
 				case ResizeMode.MoveAll:
 					return IsLocked ? Cursors.Arrow : Cursors.SizeAll;
+				case ResizeMode.MoveStart:
+				case ResizeMode.MoveEnd:
+				case ResizeMode.MoveStatistics:
+					return IsLocked ? Cursors.Arrow : Cursors.Hand;
 				default:
 					return null;
 			}
@@ -352,8 +369,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			switch (DrawingState)
 			{
 				case DrawingState.Building:
-					dataPoint.CopyDataValues(StartAnchor);
-					dataPoint.CopyDataValues(EndAnchor);
+					PlaceAnchorOnBar(StartAnchor, chartControl, chartPanel, chartScale, dataPoint);
+					PlaceAnchorOnBar(EndAnchor, chartControl, chartPanel, chartScale, dataPoint);
 					StartAnchor.IsEditing = false;
 					EndAnchor.IsEditing = true;
 					lastBuildEndDataPoint = null;
@@ -361,6 +378,15 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 				case DrawingState.Normal:
 					Point point = dataPoint.GetPoint(chartControl, chartPanel, chartScale);
+					if (HitStatistics(point))
+					{
+						resizeMode = ResizeMode.MoveStatistics;
+						DrawingState = DrawingState.Editing;
+						if (lastMouseMoveDataPoint == null)
+							lastMouseMoveDataPoint = new ChartAnchor();
+						dataPoint.CopyDataValues(lastMouseMoveDataPoint);
+						break;
+					}
 					Point startPoint = StartAnchor.GetPoint(chartControl, chartPanel, chartScale);
 					Point endPoint = EndAnchor.GetPoint(chartControl, chartPanel, chartScale);
 					editingLeftAnchor = startPoint.X <= endPoint.X ? StartAnchor : EndAnchor;
@@ -398,10 +424,10 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			{
 				if (EndAnchor != null && EndAnchor.IsEditing)
 				{
-					dataPoint.CopyDataValues(EndAnchor);
+					PlaceAnchorOnBar(EndAnchor, chartControl, chartPanel, chartScale, dataPoint);
 					if (lastBuildEndDataPoint == null)
 						lastBuildEndDataPoint = new ChartAnchor();
-					dataPoint.CopyDataValues(lastBuildEndDataPoint);
+					EndAnchor.CopyDataValues(lastBuildEndDataPoint);
 					MarkProfileDirty();
 				}
 			}
@@ -410,6 +436,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				if (lastMouseMoveDataPoint == null)
 					lastMouseMoveDataPoint = new ChartAnchor();
 
+				bool anchorsChanged = resizeMode != ResizeMode.MoveStatistics;
 				switch (resizeMode)
 				{
 					case ResizeMode.TopLeft:
@@ -436,8 +463,20 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 						editingBottomAnchor.Price = lastMouseMoveDataPoint.Price;
 						dataPoint.CopyDataValues(lastMouseMoveDataPoint);
 						break;
+					case ResizeMode.MoveStart:
+						PlaceAnchorOnBar(StartAnchor, chartControl, chartPanel, chartScale, dataPoint);
+						break;
+					case ResizeMode.MoveEnd:
+						PlaceAnchorOnBar(EndAnchor, chartControl, chartPanel, chartScale, dataPoint);
+						break;
+					case ResizeMode.MoveStatistics:
+						MoveStatisticsByCursor(chartControl, chartPanel, chartScale, dataPoint);
+						break;
 				}
-				MarkProfileDirty();
+				if (anchorsChanged)
+					MarkProfileDirty();
+				else if (chartControl != null)
+					chartControl.InvalidateVisual();
 			}
 			else if (DrawingState == DrawingState.Moving)
 			{
@@ -454,7 +493,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				if (lastBuildEndDataPoint != null)
 					lastBuildEndDataPoint.CopyDataValues(EndAnchor);
 				else if (dataPoint != null)
-					dataPoint.CopyDataValues(EndAnchor);
+					PlaceAnchorOnBar(EndAnchor, chartControl, chartPanel, chartScale, dataPoint);
 				lastBuildEndDataPoint = null;
 				EndAnchor.IsEditing = false;
 				DrawingState = DrawingState.Normal;
@@ -465,6 +504,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 			if (DrawingState == DrawingState.Editing || DrawingState == DrawingState.Moving)
 			{
+				bool movedStatistics = resizeMode == ResizeMode.MoveStatistics;
 				lastMouseMoveDataPoint = null;
 				DrawingState = DrawingState.Normal;
 				editingLeftAnchor = null;
@@ -472,7 +512,13 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				editingRightAnchor = null;
 				editingBottomAnchor = null;
 				resizeMode = ResizeMode.None;
-				MarkProfileDirty();
+				if (movedStatistics)
+				{
+					if (chartControl != null)
+						chartControl.InvalidateVisual();
+				}
+				else
+					MarkProfileDirty();
 			}
 		}
 
@@ -505,8 +551,18 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			DrawSelectionBox(chartControl, boxRect);
 			DrawTrendLine(chartControl, chartScale);
 
-			if (IsInHitTest || DrawingState == DrawingState.Building)
+			if (IsInHitTest)
+			{
+				DrawAnchorHandles(chartControl, chartScale, true);
+				DrawStatisticsHitMask(chartControl);
 				return;
+			}
+
+			if (DrawingState == DrawingState.Building)
+			{
+				DrawAnchorHandles(chartControl, chartScale, false);
+				return;
+			}
 
 			EnsureProfiles(chartControl, chartScale, boxRect);
 
@@ -529,6 +585,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				DrawTotalVolumeLabel(boxRect, volumeTrack, deltaTrack);
 			DrawDataSourceLabel(boxRect, volumeTrack, deltaTrack);
 			DrawNoDataLabel(boxRect);
+			DrawAnchorHandles(chartControl, chartScale, false);
 		}
 
 		protected override void OnStateChange()
@@ -587,6 +644,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				ShowPointRange = true;
 				ShowDuration = true;
 				StatisticsPosition = OrcaFixedRangeStatisticsPosition.TopLeft;
+				StatisticsOffsetX = 0;
+				StatisticsOffsetY = 0;
 				StatisticsFontFamily = "Segoe UI";
 				StatisticsFontWeight = OrcaFixedRangeFontWeight.Bold;
 				StatisticsFontSize = 11f;
@@ -671,6 +730,10 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 		private ResizeMode GetResizeModeForPoint(Point point, ChartControl chartControl, ChartScale chartScale, bool useCursorSensitivity)
 		{
+			ResizeMode anchorMode = GetAnchorHandleMode(point, chartControl, chartScale);
+			if (anchorMode != ResizeMode.None)
+				return anchorMode;
+
 			Rect rect = GetAnchorsRect(chartControl, chartScale);
 			Point[] points = new Point[] { rect.TopLeft, rect.TopRight, rect.BottomRight, rect.BottomLeft };
 			Point? closest = GetClosestPoint(points, point, useCursorSensitivity);
@@ -721,6 +784,119 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				return null;
 
 			return closest;
+		}
+
+		private ResizeMode GetAnchorHandleMode(Point point, ChartControl chartControl, ChartScale chartScale)
+		{
+			if (StartAnchor == null || EndAnchor == null || chartControl == null || chartScale == null)
+				return ResizeMode.None;
+			if (chartControl.ChartPanels == null || PanelIndex < 0 || PanelIndex >= chartControl.ChartPanels.Count)
+				return ResizeMode.None;
+
+			ChartPanel chartPanel = chartControl.ChartPanels[PanelIndex];
+			Point startPoint = StartAnchor.GetPoint(chartControl, chartPanel, chartScale);
+			Point endPoint = EndAnchor.GetPoint(chartControl, chartPanel, chartScale);
+			double startDistance = (startPoint - point).Length;
+			double endDistance = (endPoint - point).Length;
+			if (startDistance <= AnchorHandleHitRadiusPx && startDistance <= endDistance)
+				return ResizeMode.MoveStart;
+			if (endDistance <= AnchorHandleHitRadiusPx)
+				return ResizeMode.MoveEnd;
+			return ResizeMode.None;
+		}
+
+		private void PlaceAnchorOnBar(ChartAnchor anchor, ChartControl chartControl, ChartPanel chartPanel, ChartScale chartScale, ChartAnchor cursor)
+		{
+			if (anchor == null || cursor == null)
+				return;
+
+			double price = cursor.Price;
+			cursor.CopyDataValues(anchor);
+			anchor.Price = price;
+			if (chartControl == null || chartPanel == null)
+				return;
+
+			ChartBars chartBars = GetAttachedToChartBars();
+			if (chartBars == null || chartBars.Bars == null || chartBars.Bars.Count <= 0)
+				return;
+
+			Point point = cursor.GetPoint(chartControl, chartPanel, chartScale);
+			int barIndex = chartBars.GetBarIdxByX(chartControl, (int)Math.Round(point.X));
+			if (barIndex < 0)
+				barIndex = 0;
+			if (barIndex >= chartBars.Bars.Count)
+				barIndex = chartBars.Bars.Count - 1;
+
+			DateTime barTime = chartBars.Bars.GetTime(barIndex);
+			anchor.Time = barTime;
+			anchor.Price = price;
+			anchor.SlotIndex = chartControl.GetSlotIndexByTime(barTime);
+		}
+
+		private bool HitStatistics(Point point)
+		{
+			return ShowProfileStatistics && statisticsHitRect.Width > 0 && statisticsHitRect.Height > 0 && statisticsHitRect.Contains(point);
+		}
+
+		private void DrawStatisticsHitMask(ChartControl chartControl)
+		{
+			if (!ShowProfileStatistics || statisticsHitRect.Width <= 0 || statisticsHitRect.Height <= 0 || RenderTarget == null)
+				return;
+			if (chartControl == null || chartControl.SelectionBrush == null)
+				return;
+
+			RenderTarget.FillRectangle(
+				new DxRectangleF((float)statisticsHitRect.X, (float)statisticsHitRect.Y, (float)statisticsHitRect.Width, (float)statisticsHitRect.Height),
+				chartControl.SelectionBrush);
+		}
+
+		private void MoveStatisticsByCursor(ChartControl chartControl, ChartPanel chartPanel, ChartScale chartScale, ChartAnchor dataPoint)
+		{
+			if (dataPoint == null || lastMouseMoveDataPoint == null || chartControl == null || chartPanel == null || chartScale == null)
+				return;
+
+			Point current = dataPoint.GetPoint(chartControl, chartPanel, chartScale);
+			Point previous = lastMouseMoveDataPoint.GetPoint(chartControl, chartPanel, chartScale);
+			StatisticsOffsetX += current.X - previous.X;
+			StatisticsOffsetY += current.Y - previous.Y;
+			if (double.IsNaN(StatisticsOffsetX) || double.IsInfinity(StatisticsOffsetX))
+				StatisticsOffsetX = 0;
+			if (double.IsNaN(StatisticsOffsetY) || double.IsInfinity(StatisticsOffsetY))
+				StatisticsOffsetY = 0;
+			dataPoint.CopyDataValues(lastMouseMoveDataPoint);
+		}
+
+		private void DrawAnchorHandles(ChartControl chartControl, ChartScale chartScale, bool forHitTest)
+		{
+			if (chartControl == null || chartScale == null || StartAnchor == null || EndAnchor == null || RenderTarget == null)
+				return;
+			if (chartControl.ChartPanels == null || PanelIndex < 0 || PanelIndex >= chartControl.ChartPanels.Count)
+				return;
+
+			ChartPanel chartPanel = chartControl.ChartPanels[PanelIndex];
+			float radius = IsSelected ? AnchorHandleSelectedRadiusPx : AnchorHandleRadiusPx;
+			if (forHitTest)
+				radius = (float)AnchorHandleHitRadiusPx;
+
+			DrawAnchorHandle(StartAnchor.GetPoint(chartControl, chartPanel, chartScale), radius, forHitTest, chartControl);
+			DrawAnchorHandle(EndAnchor.GetPoint(chartControl, chartPanel, chartScale), radius, forHitTest, chartControl);
+		}
+
+		private void DrawAnchorHandle(Point point, float radius, bool forHitTest, ChartControl chartControl)
+		{
+			Ellipse ellipse = new Ellipse(new DxVector2((float)point.X, (float)point.Y), radius, radius);
+			if (forHitTest)
+			{
+				if (chartControl != null && chartControl.SelectionBrush != null)
+					RenderTarget.FillEllipse(ellipse, chartControl.SelectionBrush);
+				return;
+			}
+
+			SharpDX.Direct2D1.SolidColorBrush fill = IsSelected ? anchorHandleFillSelectedBrushDx : anchorHandleFillBrushDx;
+			if (fill != null)
+				RenderTarget.FillEllipse(ellipse, fill);
+			if (anchorHandleEdgeBrushDx != null)
+				RenderTarget.DrawEllipse(ellipse, anchorHandleEdgeBrushDx, IsSelected ? 1.75f : 1.25f);
 		}
 
 		private void EnsureProfiles(ChartControl chartControl, ChartScale chartScale, DxRectangleF boxRect)
@@ -927,6 +1103,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 					dataSourceLabel = DescribeDeltaSource(deltaSnapshot);
 			}
 
+			statisticsVolumeIsEstimate = false;
 			bool allowGeometricVolume = !capturedTrueVolume && (ProfileDataMode == OrcaFixedRangeProfileDataMode.EstimatedFromBars || AllowEstimatedChartFallback);
 			if (!volumeOk && allowGeometricVolume)
 			{
@@ -935,7 +1112,10 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromBars(bars, firstBar, lastBar, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
 				// BuildFixedRangeFromBars stores the whole bar on the up or down side. That is not bid/ask delta.
 				if (volumeOk)
+				{
 					ClearDirectionalVolume(profileResult);
+					statisticsVolumeIsEstimate = true;
+				}
 			}
 
 			if (!deltaOk)
@@ -2226,6 +2406,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 		private void DrawStatisticsBox(ChartPanel chartPanel, DxRectangleF boxRect)
 		{
+			statisticsHitRect = Rect.Empty;
 			if (!ShowProfileStatistics || statisticsTextFormatDx == null || statisticsTextBrushDx == null)
 				return;
 
@@ -2276,6 +2457,12 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 					top = clampedTop;
 			}
 
+			if (!double.IsNaN(StatisticsOffsetX) && !double.IsInfinity(StatisticsOffsetX))
+				left += (float)StatisticsOffsetX;
+			if (!double.IsNaN(StatisticsOffsetY) && !double.IsInfinity(StatisticsOffsetY))
+				top += (float)StatisticsOffsetY;
+
+			statisticsHitRect = new Rect(left, top, boxWidth, boxHeight);
 			DxRectangleF rect = new DxRectangleF(left, top, boxWidth, boxHeight);
 			float radius = Math.Max(0f, StatisticsCornerRadius);
 			if (statisticsBackgroundBrushDx != null && StatisticsBackgroundOpacity > 0)
@@ -2304,6 +2491,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			statisticsFinishDelta = 0;
 			statisticsHasRealDelta = false;
 			statisticsFinishKnown = false;
+			statisticsVolumeIsEstimate = false;
 			statisticsDeltaPercent = 0;
 			statisticsPointRange = 0;
 			statisticsDuration = TimeSpan.Zero;
@@ -2503,6 +2691,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				text = AppendStatisticsToken(text, "Pts " + statisticsPointRange.ToString("0.##", CultureInfo.InvariantCulture));
 			if (ShowDuration)
 				text = AppendStatisticsToken(text, FormatDurationHms(statisticsDuration));
+			if (statisticsVolumeIsEstimate)
+				text = AppendStatisticsToken(text, "est");
 			return text;
 		}
 
@@ -2592,6 +2782,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (statisticsTextBrushDx == null) statisticsTextBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(StatisticsTextColor, 1f));
 			if (statisticsBackgroundBrushDx == null) statisticsBackgroundBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(StatisticsBackgroundColor, StatisticsBackgroundOpacity / 100f));
 			if (trendLineBrushDx == null) trendLineBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, ToDxColor(TrendLineColor, TrendLineOpacity / 100f));
+			if (anchorHandleFillBrushDx == null) anchorHandleFillBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new DxColor4(0.93f, 0.95f, 0.97f, 0.82f));
+			if (anchorHandleFillSelectedBrushDx == null) anchorHandleFillSelectedBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new DxColor4(1f, 1f, 1f, 1f));
+			if (anchorHandleEdgeBrushDx == null) anchorHandleEdgeBrushDx = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new DxColor4(0.08f, 0.08f, 0.10f, 1f));
 
 			if (vaLineStrokeDx == null || lastBuiltVALineStyle != VALineStyle)
 			{
@@ -2704,6 +2897,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (statisticsTextBrushDx != null) { statisticsTextBrushDx.Dispose(); statisticsTextBrushDx = null; }
 			if (statisticsBackgroundBrushDx != null) { statisticsBackgroundBrushDx.Dispose(); statisticsBackgroundBrushDx = null; }
 			if (trendLineBrushDx != null) { trendLineBrushDx.Dispose(); trendLineBrushDx = null; }
+			if (anchorHandleFillBrushDx != null) { anchorHandleFillBrushDx.Dispose(); anchorHandleFillBrushDx = null; }
+			if (anchorHandleFillSelectedBrushDx != null) { anchorHandleFillSelectedBrushDx.Dispose(); anchorHandleFillSelectedBrushDx = null; }
+			if (anchorHandleEdgeBrushDx != null) { anchorHandleEdgeBrushDx.Dispose(); anchorHandleEdgeBrushDx = null; }
 			if (vaLineStrokeDx != null) { vaLineStrokeDx.Dispose(); vaLineStrokeDx = null; }
 			if (trendLineStrokeDx != null) { trendLineStrokeDx.Dispose(); trendLineStrokeDx = null; }
 			DisposePalette(ref upGradientBrushes);
@@ -3070,6 +3266,14 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		[NinjaScriptProperty]
 		[Display(Name = "Statistics Position", Order = 21, GroupName = "2. Display")]
 		public OrcaFixedRangeStatisticsPosition StatisticsPosition { get; set; }
+
+		[Browsable(false)]
+		[NinjaScriptProperty]
+		public double StatisticsOffsetX { get; set; }
+
+		[Browsable(false)]
+		[NinjaScriptProperty]
+		public double StatisticsOffsetY { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Show Trend Line", Description = "Draws a line between the start and finish anchors so the range stays visible without the box border.", Order = 22, GroupName = "2. Display")]
