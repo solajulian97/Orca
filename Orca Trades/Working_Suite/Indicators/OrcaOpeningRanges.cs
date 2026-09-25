@@ -141,6 +141,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ConnectRanges = false;
 				BoxEndMode = OrcaOrBoxEnd.UntilNextOpeningRange;
 				DayEndTime = new TimeSpan(17, 0, 0);
+				StopAtDaySplit = false;
 				TimeZoneMode = OrcaOrTimeZoneMode.NewYork;
 				LineWidth = 1;
 				MidLineWidth = 2;
@@ -375,9 +376,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return range.AnchorTime + (dayEndNy - range.NyOpen);
 		}
 
-		/// <summary>True while the box is still drawn at barChartTime (always true in UntilNextOpeningRange mode).</summary>
+		/// <summary>
+		/// Next futures-day split after this range opens, in chart time. The split is the Globex
+		/// session open (Globex Open Time, default 18:00 New York). A range that opens on the split
+		/// runs until the following split, so the Globex box itself is not cut off at its own open.
+		/// </summary>
+		private DateTime GetDaySplitChartTime(OrRange range)
+		{
+			TimeSpan split = sessions[SessionGlobex].OpenTime;
+			DateTime splitNy = range.NyOpen.Date + split;
+			if (splitNy <= range.NyOpen)
+				splitNy = splitNy.AddDays(1);
+			return range.AnchorTime + (splitNy - range.NyOpen);
+		}
+
+		/// <summary>
+		/// True while this range is still the active box at barChartTime.
+		/// UntilDayEnd turns it off after Day End Time. StopAtDaySplit turns it off after the next Globex open.
+		/// </summary>
 		private bool IsBoxActive(OrRange range, DateTime barChartTime)
 		{
+			if (StopAtDaySplit && barChartTime > GetDaySplitChartTime(range))
+				return false;
 			if (BoxEndMode != OrcaOrBoxEnd.UntilDayEnd)
 				return true;
 			return barChartTime <= GetBoxDayEndChartTime(range);
@@ -391,6 +411,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (duration <= TimeSpan.Zero)
 				duration += TimeSpan.FromDays(1);
 			return rth.AnchorTime + duration;
+		}
+
+		/// <summary>
+		/// RTH extension end. The 16:00 close clip always applies. StopAtDaySplit also stops extensions
+		/// at the Globex open when that comes first, so they do not run into the next futures day.
+		/// </summary>
+		private DateTime GetRthExtensionEndChartTime(OrRange rth)
+		{
+			DateTime end = GetRthCloseChartTime(rth);
+			if (!StopAtDaySplit)
+				return end;
+			DateTime split = GetDaySplitChartTime(rth);
+			return split < end ? split : end;
 		}
 		#endregion
 
@@ -444,7 +477,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			OrRange rth = sessions[SessionRth].Latest;
 			double step = resolvedExtensionStep;
 			bool extActive = ShowPriceLabels && ExtensionsEnabled && RthEnabled && rth != null && rth.IsValid && step > 0
-				&& barChartTime > rth.AnchorTime && barChartTime <= GetRthCloseChartTime(rth);
+				&& barChartTime > rth.AnchorTime && barChartTime <= GetRthExtensionEndChartTime(rth);
 			for (int k = 0; k < MaxScaleMarkerLevels; k++)
 			{
 				if (extActive && k < rth.ExtUp) Values[ExtUpPlotBase + k][0] = rth.High + (k + 1) * step; else Values[ExtUpPlotBase + k].Reset();
@@ -507,8 +540,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			OrRange rth = sessions[SessionRth].Latest;
 			if (rth == null || !rth.IsValid || barChartTime <= rth.AnchorTime)
 				return;
-			// Touches after the RTH close (Globex) do not unlock levels; the extensions end at the close.
-			if (barChartTime > GetRthCloseChartTime(rth))
+			// Touches after the extension end do not unlock levels. That end is the RTH close, and also
+			// the Globex day split when Stop at Day Split is on and the split comes first.
+			if (barChartTime > GetRthExtensionEndChartTime(rth))
 				return;
 
 			double step = resolvedExtensionStep;
@@ -608,6 +642,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 							endX = Math.Min(endX, dayEndX);
 					}
 				}
+				if (StopAtDaySplit)
+				{
+					DateTime daySplit = GetDaySplitChartTime(range);
+					bool splitReached = lastPrimaryTime != DateTime.MinValue && daySplit <= lastPrimaryTime;
+					if (splitReached)
+					{
+						boxClosed = true;
+						float splitX = cc.GetXByTime(daySplit);
+						if (!float.IsNaN(splitX))
+							endX = Math.Min(endX, splitX);
+					}
+				}
 				if (float.IsNaN(startX) || float.IsNaN(endX)) { prev = null; continue; }
 
 				bool visible = endX >= panelLeft && startX <= panelRight;
@@ -641,7 +687,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 					// Stepline join between the prior range and this one (TradingView "Connect successive ranges").
 					// Only meaningful when boxes run into each other; day-ended boxes leave a gap instead.
-					if (ConnectRanges && BoxEndMode == OrcaOrBoxEnd.UntilNextOpeningRange && prev != null && prev.IsValid && startX >= panelLeft && startX <= panelRight)
+					// A day-split gap means the prior box already ended, so do not join it across the next futures day.
+					bool daySplitGap = StopAtDaySplit && prev != null && prev.IsValid && GetDaySplitChartTime(prev) < range.AnchorTime;
+					if (ConnectRanges && BoxEndMode == OrcaOrBoxEnd.UntilNextOpeningRange && !daySplitGap && prev != null && prev.IsValid && startX >= panelLeft && startX <= panelRight)
 					{
 						DrawVerticalJoin(startX, cs.GetYByValue(prev.High), yHigh, hlBrush, LineWidth, panelTop, panelBottom);
 						DrawVerticalJoin(startX, cs.GetYByValue(prev.Low), yLow, hlBrush, LineWidth, panelTop, panelBottom);
@@ -683,8 +731,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (!range.IsValid)
 					continue;
 
-				// Extensions live inside RTH only: end at the RTH close (or the next RTH range if that comes first).
-				DateTime closeTime = GetRthCloseChartTime(range);
+				// Extensions end at the RTH close, or at the Globex day split when that option is on and comes first.
+				DateTime closeTime = GetRthExtensionEndChartTime(range);
 				bool closed = lastPrimaryTime != DateTime.MinValue && closeTime <= lastPrimaryTime;
 				float startX = cc.GetXByTime(range.AnchorTime);
 				float endX = closed ? cc.GetXByTime(closeTime) : panelRight;
@@ -915,22 +963,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty][PropertyEditor("NinjaTrader.Gui.Tools.TimeSpanEditorKey")][Display(Name="Day End Time (New York)", Description="Used by the UntilDayEnd box end mode. Default 17:00 (Globex day boundary).", Order=8, GroupName="01. Display")]
 		public TimeSpan DayEndTime { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Session Time Zone", Description="NewYork converts bar times from the NinjaTrader time zone to America/New_York. ChartTime uses bar times as-is.", Order=9, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Stop at Day Split", Description="When on, previous-day opening-range boxes and their RTH extensions end at the next Globex open and do not draw into the next futures day. Uses Globex Open Time (default 18:00 New York), not Day End Time. Off keeps the current OR box end and the RTH close extension clip.", Order=9, GroupName="01. Display")]
+		public bool StopAtDaySplit { get; set; }
+
+		[NinjaScriptProperty][Display(Name="Session Time Zone", Description="NewYork converts bar times from the NinjaTrader time zone to America/New_York. ChartTime uses bar times as-is.", Order=10, GroupName="01. Display")]
 		public OrcaOrTimeZoneMode TimeZoneMode { get; set; }
 
-		[NinjaScriptProperty][Range(1, 6)][Display(Name="Line Width", Order=10, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(1, 6)][Display(Name="Line Width", Order=11, GroupName="01. Display")]
 		public int LineWidth { get; set; }
 
-		[NinjaScriptProperty][Range(1, 6)][Display(Name="Midpoint Line Width", Order=11, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(1, 6)][Display(Name="Midpoint Line Width", Order=12, GroupName="01. Display")]
 		public int MidLineWidth { get; set; }
 
-		[NinjaScriptProperty][Display(Name="Draw Behind Candles", Order=12, GroupName="01. Display")]
+		[NinjaScriptProperty][Display(Name="Draw Behind Candles", Order=13, GroupName="01. Display")]
 		public bool DrawBehindCandles { get; set; }
 
-		[NinjaScriptProperty][Range(6, 24)][Display(Name="Word Label Font Size", Order=13, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(6, 24)][Display(Name="Word Label Font Size", Order=14, GroupName="01. Display")]
 		public int LabelFontSize { get; set; }
 
-		[NinjaScriptProperty][Range(0, 200)][Display(Name="Word Label X Offset", Order=14, GroupName="01. Display")]
+		[NinjaScriptProperty][Range(0, 200)][Display(Name="Word Label X Offset", Order=15, GroupName="01. Display")]
 		public int LabelXOffset { get; set; }
 
 		// --- 02. RTH Open (default 09:30 NY) ---
@@ -1071,18 +1122,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private OrcaOpeningRanges[] cacheOrcaOpeningRanges;
-		public OrcaOpeningRanges OrcaOpeningRanges(OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
+		public OrcaOpeningRanges OrcaOpeningRanges(OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, bool stopAtDaySplit, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
 		{
-			return OrcaOpeningRanges(Input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
+			return OrcaOpeningRanges(Input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, stopAtDaySplit, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
 		}
 
-		public OrcaOpeningRanges OrcaOpeningRanges(ISeries<double> input, OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
+		public OrcaOpeningRanges OrcaOpeningRanges(ISeries<double> input, OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, bool stopAtDaySplit, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
 		{
 			if (cacheOrcaOpeningRanges != null)
 				for (int idx = 0; idx < cacheOrcaOpeningRanges.Length; idx++)
-					if (cacheOrcaOpeningRanges[idx] != null && cacheOrcaOpeningRanges[idx].DisplayStyle == displayStyle && cacheOrcaOpeningRanges[idx].FillOpacity == fillOpacity && cacheOrcaOpeningRanges[idx].ShowMidpoint == showMidpoint && cacheOrcaOpeningRanges[idx].ShowPriceLabels == showPriceLabels && cacheOrcaOpeningRanges[idx].ShowWordLabels == showWordLabels && cacheOrcaOpeningRanges[idx].ConnectRanges == connectRanges && cacheOrcaOpeningRanges[idx].BoxEndMode == boxEndMode && cacheOrcaOpeningRanges[idx].DayEndTime == dayEndTime && cacheOrcaOpeningRanges[idx].TimeZoneMode == timeZoneMode && cacheOrcaOpeningRanges[idx].LineWidth == lineWidth && cacheOrcaOpeningRanges[idx].MidLineWidth == midLineWidth && cacheOrcaOpeningRanges[idx].DrawBehindCandles == drawBehindCandles && cacheOrcaOpeningRanges[idx].LabelFontSize == labelFontSize && cacheOrcaOpeningRanges[idx].LabelXOffset == labelXOffset && cacheOrcaOpeningRanges[idx].RthEnabled == rthEnabled && cacheOrcaOpeningRanges[idx].RthOpenTime == rthOpenTime && cacheOrcaOpeningRanges[idx].RthCloseTime == rthCloseTime && cacheOrcaOpeningRanges[idx].PmEnabled == pmEnabled && cacheOrcaOpeningRanges[idx].PmOpenTime == pmOpenTime && cacheOrcaOpeningRanges[idx].GlobexEnabled == globexEnabled && cacheOrcaOpeningRanges[idx].GlobexOpenTime == globexOpenTime && cacheOrcaOpeningRanges[idx].TokyoEnabled == tokyoEnabled && cacheOrcaOpeningRanges[idx].TokyoOpenTime == tokyoOpenTime && cacheOrcaOpeningRanges[idx].MidnightEnabled == midnightEnabled && cacheOrcaOpeningRanges[idx].MidnightOpenTime == midnightOpenTime && cacheOrcaOpeningRanges[idx].LondonEnabled == londonEnabled && cacheOrcaOpeningRanges[idx].LondonOpenTime == londonOpenTime && cacheOrcaOpeningRanges[idx].GoldEnabled == goldEnabled && cacheOrcaOpeningRanges[idx].GoldOpenTime == goldOpenTime && cacheOrcaOpeningRanges[idx].ClEnabled == clEnabled && cacheOrcaOpeningRanges[idx].ClOpenTime == clOpenTime && cacheOrcaOpeningRanges[idx].ExtensionsEnabled == extensionsEnabled && cacheOrcaOpeningRanges[idx].ExtensionStepMode == extensionStepMode && cacheOrcaOpeningRanges[idx].CustomExtensionStep == customExtensionStep && cacheOrcaOpeningRanges[idx].ExpansionTrigger == expansionTrigger && cacheOrcaOpeningRanges[idx].InitialExtensionLevels == initialExtensionLevels && cacheOrcaOpeningRanges[idx].ExtensionLineStyle == extensionLineStyle && cacheOrcaOpeningRanges[idx].ExtensionLineWidth == extensionLineWidth && cacheOrcaOpeningRanges[idx].EqualsInput(input))
+					if (cacheOrcaOpeningRanges[idx] != null && cacheOrcaOpeningRanges[idx].DisplayStyle == displayStyle && cacheOrcaOpeningRanges[idx].FillOpacity == fillOpacity && cacheOrcaOpeningRanges[idx].ShowMidpoint == showMidpoint && cacheOrcaOpeningRanges[idx].ShowPriceLabels == showPriceLabels && cacheOrcaOpeningRanges[idx].ShowWordLabels == showWordLabels && cacheOrcaOpeningRanges[idx].ConnectRanges == connectRanges && cacheOrcaOpeningRanges[idx].BoxEndMode == boxEndMode && cacheOrcaOpeningRanges[idx].DayEndTime == dayEndTime && cacheOrcaOpeningRanges[idx].StopAtDaySplit == stopAtDaySplit && cacheOrcaOpeningRanges[idx].TimeZoneMode == timeZoneMode && cacheOrcaOpeningRanges[idx].LineWidth == lineWidth && cacheOrcaOpeningRanges[idx].MidLineWidth == midLineWidth && cacheOrcaOpeningRanges[idx].DrawBehindCandles == drawBehindCandles && cacheOrcaOpeningRanges[idx].LabelFontSize == labelFontSize && cacheOrcaOpeningRanges[idx].LabelXOffset == labelXOffset && cacheOrcaOpeningRanges[idx].RthEnabled == rthEnabled && cacheOrcaOpeningRanges[idx].RthOpenTime == rthOpenTime && cacheOrcaOpeningRanges[idx].RthCloseTime == rthCloseTime && cacheOrcaOpeningRanges[idx].PmEnabled == pmEnabled && cacheOrcaOpeningRanges[idx].PmOpenTime == pmOpenTime && cacheOrcaOpeningRanges[idx].GlobexEnabled == globexEnabled && cacheOrcaOpeningRanges[idx].GlobexOpenTime == globexOpenTime && cacheOrcaOpeningRanges[idx].TokyoEnabled == tokyoEnabled && cacheOrcaOpeningRanges[idx].TokyoOpenTime == tokyoOpenTime && cacheOrcaOpeningRanges[idx].MidnightEnabled == midnightEnabled && cacheOrcaOpeningRanges[idx].MidnightOpenTime == midnightOpenTime && cacheOrcaOpeningRanges[idx].LondonEnabled == londonEnabled && cacheOrcaOpeningRanges[idx].LondonOpenTime == londonOpenTime && cacheOrcaOpeningRanges[idx].GoldEnabled == goldEnabled && cacheOrcaOpeningRanges[idx].GoldOpenTime == goldOpenTime && cacheOrcaOpeningRanges[idx].ClEnabled == clEnabled && cacheOrcaOpeningRanges[idx].ClOpenTime == clOpenTime && cacheOrcaOpeningRanges[idx].ExtensionsEnabled == extensionsEnabled && cacheOrcaOpeningRanges[idx].ExtensionStepMode == extensionStepMode && cacheOrcaOpeningRanges[idx].CustomExtensionStep == customExtensionStep && cacheOrcaOpeningRanges[idx].ExpansionTrigger == expansionTrigger && cacheOrcaOpeningRanges[idx].InitialExtensionLevels == initialExtensionLevels && cacheOrcaOpeningRanges[idx].ExtensionLineStyle == extensionLineStyle && cacheOrcaOpeningRanges[idx].ExtensionLineWidth == extensionLineWidth && cacheOrcaOpeningRanges[idx].EqualsInput(input))
 						return cacheOrcaOpeningRanges[idx];
-			return CacheIndicator<OrcaOpeningRanges>(new OrcaOpeningRanges(){ DisplayStyle = displayStyle, FillOpacity = fillOpacity, ShowMidpoint = showMidpoint, ShowPriceLabels = showPriceLabels, ShowWordLabels = showWordLabels, ConnectRanges = connectRanges, BoxEndMode = boxEndMode, DayEndTime = dayEndTime, TimeZoneMode = timeZoneMode, LineWidth = lineWidth, MidLineWidth = midLineWidth, DrawBehindCandles = drawBehindCandles, LabelFontSize = labelFontSize, LabelXOffset = labelXOffset, RthEnabled = rthEnabled, RthOpenTime = rthOpenTime, RthCloseTime = rthCloseTime, PmEnabled = pmEnabled, PmOpenTime = pmOpenTime, GlobexEnabled = globexEnabled, GlobexOpenTime = globexOpenTime, TokyoEnabled = tokyoEnabled, TokyoOpenTime = tokyoOpenTime, MidnightEnabled = midnightEnabled, MidnightOpenTime = midnightOpenTime, LondonEnabled = londonEnabled, LondonOpenTime = londonOpenTime, GoldEnabled = goldEnabled, GoldOpenTime = goldOpenTime, ClEnabled = clEnabled, ClOpenTime = clOpenTime, ExtensionsEnabled = extensionsEnabled, ExtensionStepMode = extensionStepMode, CustomExtensionStep = customExtensionStep, ExpansionTrigger = expansionTrigger, InitialExtensionLevels = initialExtensionLevels, ExtensionLineStyle = extensionLineStyle, ExtensionLineWidth = extensionLineWidth }, input, ref cacheOrcaOpeningRanges);
+			return CacheIndicator<OrcaOpeningRanges>(new OrcaOpeningRanges(){ DisplayStyle = displayStyle, FillOpacity = fillOpacity, ShowMidpoint = showMidpoint, ShowPriceLabels = showPriceLabels, ShowWordLabels = showWordLabels, ConnectRanges = connectRanges, BoxEndMode = boxEndMode, DayEndTime = dayEndTime, StopAtDaySplit = stopAtDaySplit, TimeZoneMode = timeZoneMode, LineWidth = lineWidth, MidLineWidth = midLineWidth, DrawBehindCandles = drawBehindCandles, LabelFontSize = labelFontSize, LabelXOffset = labelXOffset, RthEnabled = rthEnabled, RthOpenTime = rthOpenTime, RthCloseTime = rthCloseTime, PmEnabled = pmEnabled, PmOpenTime = pmOpenTime, GlobexEnabled = globexEnabled, GlobexOpenTime = globexOpenTime, TokyoEnabled = tokyoEnabled, TokyoOpenTime = tokyoOpenTime, MidnightEnabled = midnightEnabled, MidnightOpenTime = midnightOpenTime, LondonEnabled = londonEnabled, LondonOpenTime = londonOpenTime, GoldEnabled = goldEnabled, GoldOpenTime = goldOpenTime, ClEnabled = clEnabled, ClOpenTime = clOpenTime, ExtensionsEnabled = extensionsEnabled, ExtensionStepMode = extensionStepMode, CustomExtensionStep = customExtensionStep, ExpansionTrigger = expansionTrigger, InitialExtensionLevels = initialExtensionLevels, ExtensionLineStyle = extensionLineStyle, ExtensionLineWidth = extensionLineWidth }, input, ref cacheOrcaOpeningRanges);
 		}
 	}
 }
@@ -1091,14 +1142,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
+		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, bool stopAtDaySplit, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
 		{
-			return indicator.OrcaOpeningRanges(Input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
+			return indicator.OrcaOpeningRanges(Input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, stopAtDaySplit, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
 		}
 
-		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(ISeries<double> input , OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
+		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(ISeries<double> input , OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, bool stopAtDaySplit, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
 		{
-			return indicator.OrcaOpeningRanges(input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
+			return indicator.OrcaOpeningRanges(input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, stopAtDaySplit, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
 		}
 	}
 }
@@ -1107,14 +1158,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
+		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, bool stopAtDaySplit, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
 		{
-			return indicator.OrcaOpeningRanges(Input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
+			return indicator.OrcaOpeningRanges(Input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, stopAtDaySplit, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
 		}
 
-		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(ISeries<double> input , OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
+		public Indicators.OrcaOpeningRanges OrcaOpeningRanges(ISeries<double> input , OrcaOrDisplayStyle displayStyle, int fillOpacity, bool showMidpoint, bool showPriceLabels, bool showWordLabels, bool connectRanges, OrcaOrBoxEnd boxEndMode, TimeSpan dayEndTime, bool stopAtDaySplit, OrcaOrTimeZoneMode timeZoneMode, int lineWidth, int midLineWidth, bool drawBehindCandles, int labelFontSize, int labelXOffset, bool rthEnabled, TimeSpan rthOpenTime, TimeSpan rthCloseTime, bool pmEnabled, TimeSpan pmOpenTime, bool globexEnabled, TimeSpan globexOpenTime, bool tokyoEnabled, TimeSpan tokyoOpenTime, bool midnightEnabled, TimeSpan midnightOpenTime, bool londonEnabled, TimeSpan londonOpenTime, bool goldEnabled, TimeSpan goldOpenTime, bool clEnabled, TimeSpan clOpenTime, bool extensionsEnabled, OrcaOrExtensionStep extensionStepMode, double customExtensionStep, OrcaOrExpansionTrigger expansionTrigger, int initialExtensionLevels, OrcaOrLineStyle extensionLineStyle, int extensionLineWidth)
 		{
-			return indicator.OrcaOpeningRanges(input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
+			return indicator.OrcaOpeningRanges(input, displayStyle, fillOpacity, showMidpoint, showPriceLabels, showWordLabels, connectRanges, boxEndMode, dayEndTime, stopAtDaySplit, timeZoneMode, lineWidth, midLineWidth, drawBehindCandles, labelFontSize, labelXOffset, rthEnabled, rthOpenTime, rthCloseTime, pmEnabled, pmOpenTime, globexEnabled, globexOpenTime, tokyoEnabled, tokyoOpenTime, midnightEnabled, midnightOpenTime, londonEnabled, londonOpenTime, goldEnabled, goldOpenTime, clEnabled, clOpenTime, extensionsEnabled, extensionStepMode, customExtensionStep, expansionTrigger, initialExtensionLevels, extensionLineStyle, extensionLineWidth);
 		}
 	}
 }
