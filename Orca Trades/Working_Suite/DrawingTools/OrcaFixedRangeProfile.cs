@@ -2098,7 +2098,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			statisticsTotalVolume = volumeOk && profileResult != null ? (long)Math.Round(profileResult.TotalVolume) : 0;
 			statisticsHasRealDelta = hasRealDelta;
 			statisticsTotalDelta = hasRealDelta ? SumProfileDelta(deltaResult) : 0;
-			long finishDelta;
+			long finishDelta = 0;
 			statisticsFinishKnown = hasRealDelta && TryComputeFinishDelta(snapshot, volumetricSnapshot, lowPrice, highPrice, startTime, endTime, instrumentKey, out finishDelta);
 			statisticsFinishDelta = statisticsFinishKnown ? finishDelta : 0;
 			statisticsDeltaPercent = hasRealDelta && statisticsTotalVolume > 0 ? statisticsTotalDelta / (double)statisticsTotalVolume * 100.0 : 0.0;

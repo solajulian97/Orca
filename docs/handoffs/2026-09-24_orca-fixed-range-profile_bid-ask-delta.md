@@ -67,7 +67,8 @@ None. This workspace cannot see Julian's live NinjaTrader folder, and the self-h
 ## Compile status
 
 - `git diff --check` passed for the edited source.
-- NinjaTrader F5 compile: not run.
+- NinjaTrader F5 on the first push failed with CS0165: `finishDelta` was unassigned when `hasRealDelta` skipped `TryComputeFinishDelta`. It is now initialized to `0` before that call. A real finish delta still replaces `0` only when the bid/ask path returns one. Bar-direction delta was not restored.
+- NinjaTrader F5 after that initialization: not run here.
 
 ## Manual-validation status
 
