@@ -2,7 +2,7 @@
 
 ## Objective
 
-Restore real ask−bid delta on a Chart Local Only fixed-range profile after the bid/ask gate cleared the delta histogram and the `D` / `FD` / percent tokens.
+Keep chart-local true volume at price, and fill ask−bid delta from Tick Replay, live prints, or a secondary tick series without replacing that volume with a bar-range estimate.
 
 ## Files changed
 
@@ -12,7 +12,11 @@ Restore real ask−bid delta on a Chart Local Only fixed-range profile after the
 
 ## Behavior added, changed, or removed
 
-- Chart Local Only was drawing volume and then clearing the delta profile. `TrySnapshot` follows `GetBestSource`, which ranks publishers by volume-map coverage and recency. The delta build required that same snapshot to contain in-range ask or bid. A volume-only winner blanked the histogram and hid `D`, `FD`, and delta percent for every bar.
+- `572e1cf` could paint `BuildFixedRangeFromBars` (even bar-range slices, the choppy flat histogram) and then keep it. `TrySnapshot` / `GetBestSource` ranks publishers by map coverage, so a source that is empty in the selected bars wins over the Tick Replay, live, or secondary-tick map that has them. The fallback cache key was `estimated-bars` at revision `-1`, so a later cache fill did not rebuild. Missing ask/bid also left `volumeOk` false and took the same fallback.
+- Chart-local volume now comes from `TrySnapshotBestInRange`: the publisher with the most volume inside the selected bars. That profile is kept when some prices have no bid/ask split.
+- Delta is ask minus bid only for prices that have a split. Those prices fill the histogram, `D`, `FD`, and the percent. A price with true volume and no split stays in the volume profile and adds nothing to delta.
+- The bar-range estimate runs only when no chart-local true volume was captured. Its revision follows the publisher, so data that arrives after the first paint replaces the estimate.
+- Bar-direction delta (`close >= open ? volume : -volume`) stays removed.
 - Delta is now ask minus bid from the first source that has that split inside the selected price range:
   1. The chart-local volume snapshot, with bars that have no ask and no bid left empty.
   2. `OrcaProfileDataCache.TrySnapshotPreferDelta` on the chart key, then the instrument-and-period key. This picks the same-chart publisher with the most ask+bid in the selected bars (Tick Replay cache, candle VAP, or prints).
@@ -45,7 +49,8 @@ None. The drawing tool still adds no series. Volumetric bid/ask is read from the
 ## Cache implications
 
 - `OrcaProfileDataCache.TrySnapshot` and `GetBestSource` are unchanged, so other indicators still take the coverage-ranked volume source.
-- New `TrySnapshotPreferDelta` copies the source list under the cache lock, releases that lock, then measures ask+bid under each source lock and copies the winner. It does not register a new source.
+- `TrySnapshotBestInRange` and `TryGetMaxRevision` are new reads. They copy the source list under the cache lock, release it, then measure under each source lock. They do not register a source.
+- `TrySnapshotPreferDelta` is still the ask/bid read when the volume winner has no split.
 
 ## Rendering implications
 

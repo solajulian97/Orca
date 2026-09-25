@@ -833,7 +833,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 					else if (AllowEstimatedChartFallback)
 					{
 						effectiveDataKey = dataKey + "|estimated-bars";
-						trueDataRevision = -1;
+						trueDataRevision = ReadChartPublisherRevision(chartDataKey, dataKey);
 						dataSourceLabel = BuildEstimatedFallbackLabel(sharedBucketSeconds, instrumentKey, chartDataKey, dataKey);
 					}
 					else
@@ -869,16 +869,33 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			bool volumeOk = false;
 			bool deltaOk = false;
 			bool deltaFromVolumeSnapshot = false;
+			bool capturedTrueVolume = false;
 			OrcaProfileDataSnapshot deltaSnapshot = null;
 			OrcaProfileDataSnapshot volumetricSnapshot = null;
-			if (useTrueProfileData && trueDataSnapshot != null)
+			if (useTrueProfileData && trueDataSnapshot != null && trueDataSnapshot.HasAnyVolume)
 			{
+				// Missing ask/bid on part of the range must not discard this snapshot. Volume stays. Delta is filtered separately.
+				capturedTrueVolume = true;
 				volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(trueDataSnapshot.VolumeByBar, trueDataSnapshot.UpVolumeByBar, trueDataSnapshot.DownVolumeByBar, 0, trueDataSnapshot.ToIndex, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
 				deltaSnapshot = FilterToBidAskSnapshot(trueDataSnapshot, lowPrice, highPrice);
 				deltaFromVolumeSnapshot = deltaSnapshot != null;
 			}
 
 			// The volume source can be a chart-local map with no ask/bid. Delta may live on another same-chart publisher. A bar with no bid/ask is omitted; it does not clear the bars that have it.
+			if (!capturedTrueVolume)
+			{
+				OrcaProfileDataSnapshot classifiedSnapshot = TrySnapshotRicherPreferDelta(chartDataKey, dataKey, firstBar, lastBar);
+				if (classifiedSnapshot != null && classifiedSnapshot.HasAnyVolume)
+				{
+					capturedTrueVolume = true;
+					volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(classifiedSnapshot.VolumeByBar, classifiedSnapshot.UpVolumeByBar, classifiedSnapshot.DownVolumeByBar, 0, classifiedSnapshot.ToIndex, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
+					deltaSnapshot = FilterToBidAskSnapshot(classifiedSnapshot, lowPrice, highPrice);
+					deltaFromVolumeSnapshot = deltaSnapshot != null;
+					if (volumeOk && (IsEstimatedSourceLabel(dataSourceLabel) || string.IsNullOrEmpty(dataSourceLabel)))
+						dataSourceLabel = BuildChartTrueDataLabel(classifiedSnapshot);
+				}
+			}
+
 			if (deltaSnapshot == null)
 				deltaSnapshot = TryResolveChartDeltaSnapshot(chartDataKey, dataKey, firstBar, lastBar, lowPrice, highPrice);
 
@@ -890,8 +907,9 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 				if (volumetricSnapshot != null)
 				{
 					deltaSnapshot = FilterToBidAskSnapshot(volumetricSnapshot, lowPrice, highPrice);
-					if (!volumeOk && volumetricSnapshot.HasAnyVolume)
+					if (!capturedTrueVolume && !volumeOk && volumetricSnapshot.HasAnyVolume)
 					{
+						capturedTrueVolume = true;
 						volumeOk = OrcaVolumeProfileCore.BuildFixedRangeFromPriceMaps(volumetricSnapshot.VolumeByBar, volumetricSnapshot.UpVolumeByBar, volumetricSnapshot.DownVolumeByBar, 0, volumetricSnapshot.ToIndex, lowPrice, highPrice, RowCount, resolvedTicksPerRow, useVolumeTicksPerRow, ValueAreaPercent, tickSize, profileResult);
 						if (volumeOk && (IsEstimatedSourceLabel(dataSourceLabel) || string.IsNullOrEmpty(dataSourceLabel)))
 							dataSourceLabel = deltaSnapshot != null ? "Source: volumetric bid/ask" : "Source: volumetric bars";
@@ -909,7 +927,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 					dataSourceLabel = DescribeDeltaSource(deltaSnapshot);
 			}
 
-			bool allowGeometricVolume = ProfileDataMode == OrcaFixedRangeProfileDataMode.EstimatedFromBars || AllowEstimatedChartFallback;
+			bool allowGeometricVolume = !capturedTrueVolume && (ProfileDataMode == OrcaFixedRangeProfileDataMode.EstimatedFromBars || AllowEstimatedChartFallback);
 			if (!volumeOk && allowGeometricVolume)
 			{
 				if (dataSourceLabel == "Source: volumetric bars" || dataSourceLabel == "Source: volumetric bid/ask")
@@ -967,19 +985,106 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			snapshot = null;
 			matchedDataKey = string.Empty;
 
-			if (!string.IsNullOrEmpty(chartDataKey) && OrcaProfileDataCache.TrySnapshot(chartDataKey, firstBar, lastBar, out snapshot))
+			OrcaProfileDataSnapshot chartSnapshot = null;
+			OrcaProfileDataSnapshot seriesSnapshot = null;
+			bool gotChart = !string.IsNullOrEmpty(chartDataKey) && OrcaProfileDataCache.TrySnapshotBestInRange(chartDataKey, firstBar, lastBar, out chartSnapshot);
+			bool gotSeries = !string.IsNullOrEmpty(dataKey) && dataKey != chartDataKey && OrcaProfileDataCache.TrySnapshotBestInRange(dataKey, firstBar, lastBar, out seriesSnapshot);
+			if (!gotChart && !gotSeries)
+				return false;
+
+			if (gotChart && (!gotSeries || SnapshotVolume(chartSnapshot) >= SnapshotVolume(seriesSnapshot)))
 			{
+				snapshot = chartSnapshot;
 				matchedDataKey = chartDataKey;
-				return true;
+				return snapshot != null;
 			}
 
-			if (!string.IsNullOrEmpty(dataKey) && dataKey != chartDataKey && OrcaProfileDataCache.TrySnapshot(dataKey, firstBar, lastBar, out snapshot))
+			snapshot = seriesSnapshot;
+			matchedDataKey = dataKey;
+			return snapshot != null;
+		}
+
+		private static int ReadChartPublisherRevision(string chartDataKey, string dataKey)
+		{
+			int chartRevision = 0;
+			int seriesRevision = 0;
+			bool gotChart = OrcaProfileDataCache.TryGetMaxRevision(chartDataKey, out chartRevision);
+			bool gotSeries = !string.IsNullOrEmpty(dataKey) && dataKey != chartDataKey && OrcaProfileDataCache.TryGetMaxRevision(dataKey, out seriesRevision);
+			if (!gotChart && !gotSeries)
+				return -1;
+			if (!gotChart)
+				return seriesRevision;
+			if (!gotSeries)
+				return chartRevision;
+			return Math.Max(chartRevision, seriesRevision);
+		}
+
+		private static OrcaProfileDataSnapshot TrySnapshotRicherPreferDelta(string chartDataKey, string dataKey, int firstBar, int lastBar)
+		{
+			OrcaProfileDataSnapshot chartSnapshot = null;
+			OrcaProfileDataSnapshot seriesSnapshot = null;
+			bool gotChart = !string.IsNullOrEmpty(chartDataKey) && OrcaProfileDataCache.TrySnapshotPreferDelta(chartDataKey, firstBar, lastBar, out chartSnapshot);
+			bool gotSeries = !string.IsNullOrEmpty(dataKey) && dataKey != chartDataKey && OrcaProfileDataCache.TrySnapshotPreferDelta(dataKey, firstBar, lastBar, out seriesSnapshot);
+			OrcaProfileDataSnapshot chosen = null;
+			if (gotChart && (!gotSeries || SnapshotVolume(chartSnapshot) >= SnapshotVolume(seriesSnapshot)))
+				chosen = chartSnapshot;
+			else if (gotSeries)
+				chosen = seriesSnapshot;
+			return EnsureVolumeFromSplit(chosen);
+		}
+
+		private static OrcaProfileDataSnapshot EnsureVolumeFromSplit(OrcaProfileDataSnapshot snapshot)
+		{
+			if (snapshot == null)
+				return null;
+
+			int count = snapshot.UpVolumeByBar != null ? snapshot.UpVolumeByBar.Count : 0;
+			if (snapshot.DownVolumeByBar != null && snapshot.DownVolumeByBar.Count > count)
+				count = snapshot.DownVolumeByBar.Count;
+			if (snapshot.VolumeByBar == null)
+				snapshot.VolumeByBar = new List<Dictionary<double, long>>(count);
+			while (snapshot.VolumeByBar.Count < count)
+				snapshot.VolumeByBar.Add(null);
+
+			for (int index = 0; index < count; index++)
 			{
-				matchedDataKey = dataKey;
-				return true;
+				Dictionary<double, long> volume = index < snapshot.VolumeByBar.Count ? snapshot.VolumeByBar[index] : null;
+				if (volume != null && volume.Count > 0)
+				{
+					snapshot.HasAnyVolume = true;
+					continue;
+				}
+
+				Dictionary<double, long> combined = new Dictionary<double, long>();
+				AddIntoMap(combined, GetMap(snapshot.UpVolumeByBar, index));
+				AddIntoMap(combined, GetMap(snapshot.DownVolumeByBar, index));
+				if (combined.Count == 0)
+					continue;
+				snapshot.VolumeByBar[index] = combined;
+				snapshot.HasAnyVolume = true;
 			}
 
-			return false;
+			return snapshot.HasAnyVolume ? snapshot : null;
+		}
+
+		private static long SnapshotVolume(OrcaProfileDataSnapshot snapshot)
+		{
+			if (snapshot == null || snapshot.VolumeByBar == null)
+				return 0;
+
+			long total = 0;
+			for (int index = 0; index < snapshot.VolumeByBar.Count; index++)
+			{
+				Dictionary<double, long> map = snapshot.VolumeByBar[index];
+				if (map == null)
+					continue;
+				foreach (KeyValuePair<double, long> kvp in map)
+				{
+					if (kvp.Value > 0)
+						total += kvp.Value;
+				}
+			}
+			return total;
 		}
 
 		private bool HasChartProfileSource(string chartDataKey, string dataKey)

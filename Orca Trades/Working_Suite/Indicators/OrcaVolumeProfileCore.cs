@@ -564,6 +564,36 @@ namespace NinjaTrader.NinjaScript
 			return GetBestSource(key) != null;
 		}
 
+		public static bool TryGetMaxRevision(string key, out int revision)
+		{
+			revision = 0;
+			if (string.IsNullOrEmpty(key))
+				return false;
+
+			List<OrcaProfileDataSource> sources;
+			lock (CacheSync)
+			{
+				List<OrcaProfileDataSource> stored;
+				if (!SourcesByKey.TryGetValue(key, out stored) || stored == null || stored.Count == 0)
+					return false;
+				sources = new List<OrcaProfileDataSource>(stored);
+			}
+
+			bool any = false;
+			for (int index = 0; index < sources.Count; index++)
+			{
+				OrcaProfileDataSource source = sources[index];
+				if (source == null)
+					continue;
+				int sourceRevision = GetRevision(source);
+				if (!any || sourceRevision > revision)
+					revision = sourceRevision;
+				any = true;
+			}
+
+			return any;
+		}
+
 		public static string DescribeProfileSources()
 		{
 			lock (CacheSync)
@@ -1041,6 +1071,127 @@ namespace NinjaTrader.NinjaScript
 
 				snapshot = working;
 				return working.HasAnyVolume || bestClassified > 0;
+			}
+		}
+
+		// Picks the publisher with the most volume inside the requested bars. Global coverage can crown a source that is empty in this range and hide the Tick Replay, live, or secondary-tick map that actually has it.
+		public static bool TrySnapshotBestInRange(string key, int fromIndex, int toIndex, out OrcaProfileDataSnapshot snapshot)
+		{
+			snapshot = null;
+			if (string.IsNullOrEmpty(key))
+				return false;
+
+			List<OrcaProfileDataSource> sources;
+			lock (CacheSync)
+			{
+				List<OrcaProfileDataSource> stored;
+				if (!SourcesByKey.TryGetValue(key, out stored) || stored == null || stored.Count == 0)
+					return false;
+				sources = new List<OrcaProfileDataSource>(stored);
+			}
+
+			OrcaProfileDataSource best = null;
+			long bestVolume = 0;
+			long bestClassified = 0;
+			for (int index = 0; index < sources.Count; index++)
+			{
+				OrcaProfileDataSource source = sources[index];
+				if (source == null || (source.VolumeByBar == null && source.UpVolumeByBar == null && source.DownVolumeByBar == null))
+					continue;
+
+				long volume = MeasureMappedVolume(source, fromIndex, toIndex);
+				long classified = MeasureClassifiedVolume(source, fromIndex, toIndex);
+				if (volume <= 0 && classified <= 0)
+					continue;
+				if (best == null || volume > bestVolume || (volume == bestVolume && classified > bestClassified))
+				{
+					best = source;
+					bestVolume = volume;
+					bestClassified = classified;
+				}
+			}
+
+			if (best == null)
+				return false;
+
+			object syncRoot = best.SyncRoot ?? best;
+			lock (syncRoot)
+			{
+				int firstBar = Math.Max(0, fromIndex);
+				int lastBar = Math.Max(firstBar, toIndex);
+				int count = Math.Max(0, lastBar - firstBar + 1);
+				OrcaProfileDataSnapshot working = new OrcaProfileDataSnapshot
+				{
+					FromIndex = firstBar,
+					ToIndex = count - 1,
+					Revision = GetRevision(best),
+					SourceName = best.SourceName,
+					VolumeByBar = new List<Dictionary<double, long>>(count),
+					UpVolumeByBar = new List<Dictionary<double, long>>(count),
+					DownVolumeByBar = new List<Dictionary<double, long>>(count)
+				};
+
+				for (int barIndex = firstBar; barIndex <= lastBar; barIndex++)
+				{
+					Dictionary<double, long> upMap = CopyMapAt(best.UpVolumeByBar, barIndex);
+					Dictionary<double, long> downMap = CopyMapAt(best.DownVolumeByBar, barIndex);
+					Dictionary<double, long> volumeMap = CopyMapAt(best.VolumeByBar, barIndex);
+					if (volumeMap == null || volumeMap.Count == 0)
+						volumeMap = CombineMaps(upMap, downMap);
+					if (volumeMap != null && volumeMap.Count > 0)
+						working.HasAnyVolume = true;
+					working.VolumeByBar.Add(volumeMap);
+					working.UpVolumeByBar.Add(upMap);
+					working.DownVolumeByBar.Add(downMap);
+				}
+
+				snapshot = working;
+				return working.HasAnyVolume;
+			}
+		}
+
+		private static Dictionary<double, long> CombineMaps(Dictionary<double, long> left, Dictionary<double, long> right)
+		{
+			if ((left == null || left.Count == 0) && (right == null || right.Count == 0))
+				return null;
+
+			Dictionary<double, long> combined = new Dictionary<double, long>();
+			AddMapInto(combined, left);
+			AddMapInto(combined, right);
+			return combined.Count > 0 ? combined : null;
+		}
+
+		private static void AddMapInto(Dictionary<double, long> target, Dictionary<double, long> source)
+		{
+			if (target == null || source == null)
+				return;
+
+			foreach (KeyValuePair<double, long> kvp in source)
+			{
+				if (kvp.Value <= 0)
+					continue;
+				long existing;
+				if (target.TryGetValue(kvp.Key, out existing))
+					target[kvp.Key] = existing + kvp.Value;
+				else
+					target[kvp.Key] = kvp.Value;
+			}
+		}
+
+		private static long MeasureMappedVolume(OrcaProfileDataSource source, int fromIndex, int toIndex)
+		{
+			if (source == null)
+				return 0;
+
+			object syncRoot = source.SyncRoot ?? source;
+			lock (syncRoot)
+			{
+				long total = SumMapListVolume(source.VolumeByBar, fromIndex, toIndex);
+				if (total > 0)
+					return total;
+				total += SumMapListVolume(source.UpVolumeByBar, fromIndex, toIndex);
+				total += SumMapListVolume(source.DownVolumeByBar, fromIndex, toIndex);
+				return total;
 			}
 		}
 
