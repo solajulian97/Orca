@@ -22,6 +22,7 @@ using WpfBrushes = System.Windows.Media.Brushes;
 using WpfSolidColorBrush = System.Windows.Media.SolidColorBrush;
 using WpfColors = System.Windows.Media.Colors;
 using DxColor4 = SharpDX.Color4;
+using DxEllipse = SharpDX.Direct2D1.Ellipse;
 using DxRectangleF = SharpDX.RectangleF;
 using DxVector2 = SharpDX.Vector2;
 #endregion
@@ -884,7 +885,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 
 		private void DrawAnchorHandle(Point point, float radius, bool forHitTest, ChartControl chartControl)
 		{
-			Ellipse ellipse = new Ellipse(new DxVector2((float)point.X, (float)point.Y), radius, radius);
+			DxEllipse ellipse = new DxEllipse(new DxVector2((float)point.X, (float)point.Y), radius, radius);
 			if (forHitTest)
 			{
 				if (chartControl != null && chartControl.SelectionBrush != null)

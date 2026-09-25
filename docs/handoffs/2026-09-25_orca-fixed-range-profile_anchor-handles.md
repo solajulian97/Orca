@@ -61,7 +61,7 @@ None. This workspace cannot see Julian's live NinjaTrader folder. Not deployed.
 
 ## Compile status
 
-Not compiled in NinjaTrader here. `git diff --check` was run on the edited source. Brace depth of the drawing tool is balanced.
+Julian's F5 of `58f7cb5` failed. `Ellipse` inside `NinjaTrader.NinjaScript.DrawingTools` is the drawing-tool class, so `new Ellipse(...)` did not bind to `SharpDX.Direct2D1.Ellipse`. The handle now uses a `DxEllipse` alias. Not recompiled in NinjaTrader here. `git diff --check` was run on the edited source.
 
 ## Manual-validation status
 
