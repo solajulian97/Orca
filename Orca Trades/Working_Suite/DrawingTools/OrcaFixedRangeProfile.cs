@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using System.Xml.Serialization;
 using NinjaTrader.Core;
 using NinjaTrader.Data;
@@ -152,6 +153,13 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 		private bool statisticsFinishKnown;
 		private bool statisticsVolumeIsEstimate;
 		private Rect statisticsHitRect;
+		private DispatcherTimer trueVolumeUpgradeTimer;
+		private ChartControl trueVolumeUpgradeChart;
+		private DateTime trueVolumeUpgradeStartedUtc = DateTime.MinValue;
+		private int trueVolumeUpgradeQuietPasses;
+		private int trueVolumeUpgradeRevision = int.MinValue;
+		private int trueVolumeUpgradeBarsCount = -1;
+		private bool trueVolumeUpgradeSettled;
 		private double statisticsDeltaPercent;
 		private double statisticsPointRange;
 		private TimeSpan statisticsDuration;
@@ -693,12 +701,14 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			}
 			else if (State == State.Terminated)
 			{
+				StopTrueVolumeUpgrade();
 				DisposeDxResources();
 			}
 		}
 
 		protected override void Dispose(bool disposing)
 		{
+			StopTrueVolumeUpgrade();
 			DisposeDxResources();
 			base.Dispose(disposing);
 		}
@@ -1041,7 +1051,12 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			}
 
 			if (!NeedsProfileRebuild(startTime, endTime, lowPrice, highPrice, firstBar, lastBar, bars.Count, lastRangeBarTime, lastRangeBarVolume, effectiveDataKey, trueDataRevision, tickSize, resolvedTicksPerRow, resolvedDeltaTicksPerRow))
+			{
+				// The probe above already ran. A chart that is not repainting still has to come back
+				// after tick replay fills the cache, or this estimated-bars result stays on screen.
+				NoteTrueVolumeResolution(chartControl, bars.Count, chartDataKey, dataKey, false);
 				return;
+			}
 
 			bool volumeOk = false;
 			bool deltaOk = false;
@@ -1128,6 +1143,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			if (!volumeOk && !deltaOk)
 				noDataLabel = "No volume in range";
 
+			bool rangeChanged = cachedStartTime != startTime || cachedEndTime != endTime || cachedFirstBar != firstBar || cachedLastBar != lastBar;
 			cachedStartTime = startTime;
 			cachedEndTime = endTime;
 			cachedLowPrice = lowPrice;
@@ -1159,6 +1175,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			cachedDataSourcePreference = DataSourcePreference;
 			cachedAllowEstimatedChartFallback = AllowEstimatedChartFallback;
 			profileDirty = false;
+			NoteTrueVolumeResolution(chartControl, bars.Count, chartDataKey, dataKey, rangeChanged);
 		}
 
 		private bool TrySnapshotChartProfile(string chartDataKey, string dataKey, int firstBar, int lastBar, out OrcaProfileDataSnapshot snapshot, out string matchedDataKey)
@@ -1183,6 +1200,105 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			snapshot = seriesSnapshot;
 			matchedDataKey = dataKey;
 			return snapshot != null;
+		}
+
+		private void NoteTrueVolumeResolution(ChartControl chartControl, int barsCount, string chartDataKey, string dataKey, bool rangeChanged)
+		{
+			if (ProfileDataMode != OrcaFixedRangeProfileDataMode.TrueVolumeAtPrice || !statisticsVolumeIsEstimate)
+			{
+				trueVolumeUpgradeSettled = false;
+				StopTrueVolumeUpgrade();
+				return;
+			}
+
+			if (rangeChanged)
+				trueVolumeUpgradeSettled = false;
+			if (trueVolumeUpgradeSettled)
+				return;
+
+			if (rangeChanged || trueVolumeUpgradeStartedUtc == DateTime.MinValue)
+			{
+				trueVolumeUpgradeStartedUtc = DateTime.UtcNow;
+				trueVolumeUpgradeQuietPasses = 0;
+				trueVolumeUpgradeRevision = int.MinValue;
+				trueVolumeUpgradeBarsCount = -1;
+			}
+
+			int revision = ReadChartPublisherRevision(chartDataKey, dataKey);
+			bool revisionMoved = trueVolumeUpgradeRevision != int.MinValue && revision != trueVolumeUpgradeRevision;
+			bool barsGrew = trueVolumeUpgradeBarsCount >= 0 && barsCount != trueVolumeUpgradeBarsCount;
+			trueVolumeUpgradeRevision = revision;
+			trueVolumeUpgradeBarsCount = barsCount;
+
+			bool withinWarmup = (DateTime.UtcNow - trueVolumeUpgradeStartedUtc).TotalSeconds < 300.0;
+			// Live trades keep moving the publisher revision after the chart is already loaded.
+			// That must not keep an empty estimate awake for the whole session. A replay that is
+			// still filling bars, or a publisher that is not registered yet, does.
+			if (State != State.Realtime || barsGrew || (withinWarmup && (revision < 0 || revisionMoved)))
+				trueVolumeUpgradeQuietPasses = 0;
+			else
+				trueVolumeUpgradeQuietPasses++;
+
+			if (trueVolumeUpgradeQuietPasses >= 4)
+			{
+				trueVolumeUpgradeSettled = true;
+				StopTrueVolumeUpgrade();
+				return;
+			}
+
+			StartTrueVolumeUpgrade(chartControl);
+		}
+
+		private void StartTrueVolumeUpgrade(ChartControl chartControl)
+		{
+			if (chartControl == null)
+				return;
+			trueVolumeUpgradeChart = chartControl;
+			if (trueVolumeUpgradeTimer != null)
+				return;
+
+			trueVolumeUpgradeTimer = new DispatcherTimer(DispatcherPriority.Background, chartControl.Dispatcher);
+			trueVolumeUpgradeTimer.Interval = TimeSpan.FromMilliseconds(500);
+			trueVolumeUpgradeTimer.Tick += OnTrueVolumeUpgradeTick;
+			trueVolumeUpgradeTimer.Start();
+		}
+
+		private void OnTrueVolumeUpgradeTick(object sender, EventArgs e)
+		{
+			ChartControl chart = trueVolumeUpgradeChart;
+			if (chart == null)
+			{
+				StopTrueVolumeUpgrade();
+				return;
+			}
+
+			try
+			{
+				chart.InvalidateVisual();
+			}
+			catch
+			{
+				StopTrueVolumeUpgrade();
+			}
+		}
+
+		private void StopTrueVolumeUpgrade()
+		{
+			if (trueVolumeUpgradeTimer != null)
+			{
+				trueVolumeUpgradeTimer.Stop();
+				trueVolumeUpgradeTimer.Tick -= OnTrueVolumeUpgradeTick;
+				trueVolumeUpgradeTimer = null;
+			}
+
+			trueVolumeUpgradeChart = null;
+			if (!trueVolumeUpgradeSettled)
+			{
+				trueVolumeUpgradeStartedUtc = DateTime.MinValue;
+				trueVolumeUpgradeQuietPasses = 0;
+				trueVolumeUpgradeRevision = int.MinValue;
+				trueVolumeUpgradeBarsCount = -1;
+			}
 		}
 
 		private static int ReadChartPublisherRevision(string chartDataKey, string dataKey)
@@ -2493,6 +2609,8 @@ namespace NinjaTrader.NinjaScript.DrawingTools
 			statisticsHasRealDelta = false;
 			statisticsFinishKnown = false;
 			statisticsVolumeIsEstimate = false;
+			trueVolumeUpgradeSettled = false;
+			StopTrueVolumeUpgrade();
 			statisticsDeltaPercent = 0;
 			statisticsPointRange = 0;
 			statisticsDuration = TimeSpan.Zero;
