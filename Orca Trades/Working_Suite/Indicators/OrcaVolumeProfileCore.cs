@@ -977,6 +977,110 @@ namespace NinjaTrader.NinjaScript
 			Dictionary<double, long> source = maps[index];
 			return source != null && source.Count > 0 ? new Dictionary<double, long>(source) : null;
 		}
+
+		public static bool TrySnapshotPreferDelta(string key, int fromIndex, int toIndex, out OrcaProfileDataSnapshot snapshot)
+		{
+			snapshot = null;
+			if (string.IsNullOrEmpty(key))
+				return false;
+
+			List<OrcaProfileDataSource> sources;
+			lock (CacheSync)
+			{
+				List<OrcaProfileDataSource> stored;
+				if (!SourcesByKey.TryGetValue(key, out stored) || stored == null || stored.Count == 0)
+					return false;
+				sources = new List<OrcaProfileDataSource>(stored);
+			}
+
+			OrcaProfileDataSource best = null;
+			long bestClassified = 0;
+			for (int index = 0; index < sources.Count; index++)
+			{
+				OrcaProfileDataSource source = sources[index];
+				if (source == null || (source.UpVolumeByBar == null && source.DownVolumeByBar == null))
+					continue;
+
+				long classified = MeasureClassifiedVolume(source, fromIndex, toIndex);
+				if (classified > bestClassified)
+				{
+					bestClassified = classified;
+					best = source;
+				}
+			}
+
+			if (best == null || bestClassified <= 0)
+				return false;
+
+			object syncRoot = best.SyncRoot ?? best;
+			lock (syncRoot)
+			{
+				int firstBar = Math.Max(0, fromIndex);
+				int lastBar = Math.Max(firstBar, toIndex);
+				int count = Math.Max(0, lastBar - firstBar + 1);
+				OrcaProfileDataSnapshot working = new OrcaProfileDataSnapshot
+				{
+					FromIndex = firstBar,
+					ToIndex = count - 1,
+					Revision = GetRevision(best),
+					SourceName = best.SourceName,
+					VolumeByBar = new List<Dictionary<double, long>>(count),
+					UpVolumeByBar = new List<Dictionary<double, long>>(count),
+					DownVolumeByBar = new List<Dictionary<double, long>>(count)
+				};
+
+				for (int barIndex = firstBar; barIndex <= lastBar; barIndex++)
+				{
+					Dictionary<double, long> volumeMap = CopyMapAt(best.VolumeByBar, barIndex);
+					if (volumeMap != null && volumeMap.Count > 0)
+						working.HasAnyVolume = true;
+					working.VolumeByBar.Add(volumeMap);
+					working.UpVolumeByBar.Add(CopyMapAt(best.UpVolumeByBar, barIndex));
+					working.DownVolumeByBar.Add(CopyMapAt(best.DownVolumeByBar, barIndex));
+				}
+
+				snapshot = working;
+				return working.HasAnyVolume || bestClassified > 0;
+			}
+		}
+
+		private static long MeasureClassifiedVolume(OrcaProfileDataSource source, int fromIndex, int toIndex)
+		{
+			if (source == null)
+				return 0;
+
+			object syncRoot = source.SyncRoot ?? source;
+			lock (syncRoot)
+			{
+				long total = 0;
+				total += SumMapListVolume(source.UpVolumeByBar, fromIndex, toIndex);
+				total += SumMapListVolume(source.DownVolumeByBar, fromIndex, toIndex);
+				return total;
+			}
+		}
+
+		private static long SumMapListVolume(IList<Dictionary<double, long>> maps, int fromIndex, int toIndex)
+		{
+			if (maps == null || maps.Count <= 0)
+				return 0;
+
+			int firstBar = Math.Max(0, fromIndex);
+			int lastBar = Math.Min(Math.Max(firstBar, toIndex), maps.Count - 1);
+			long total = 0;
+			for (int barIndex = firstBar; barIndex <= lastBar; barIndex++)
+			{
+				Dictionary<double, long> map = maps[barIndex];
+				if (map == null || map.Count == 0)
+					continue;
+				foreach (KeyValuePair<double, long> kvp in map)
+				{
+					if (kvp.Value > 0)
+						total += kvp.Value;
+				}
+			}
+
+			return total;
+		}
 	}
 
 	public static class OrcaVolumeProfileCore
